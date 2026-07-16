@@ -1,0 +1,92 @@
+name: Nightly Package Tests
+on:
+  schedule:
+    - cron: '30 10 * * *' # run at 10:30 AM UTC
+  workflow_dispatch:  # to trigger manually
+
+permissions:
+  contents: read
+
+jobs:
+  get-versions:
+    uses: ./.github/workflows/get-versions.yaml
+
+  stable:
+    uses: ./.github/workflows/test-package.yaml
+    with:
+      install-cmd: 'uv pip install persista'
+
+  stable-all:
+    uses: ./.github/workflows/test-package.yaml
+    with:
+      install-cmd: 'uv pip install "persista[all]"'
+
+  stable-extras:
+    uses: ./.github/workflows/test-package-extras.yaml
+
+  latest:
+    uses: ./.github/workflows/test-package.yaml
+    with:
+      install-cmd: 'uv pip install --pre persista'
+
+  latest-all:
+    uses: ./.github/workflows/test-package.yaml
+    with:
+      install-cmd: 'uv pip install --pre "persista[all]"'
+
+  latest-extras:
+    uses: ./.github/workflows/test-package-extras.yaml
+    with:
+      install-args: '--pre'
+
+
+  ########################
+  #     Dependencies     #
+  ########################
+
+  coola:
+    needs: get-versions
+    uses: ./.github/workflows/test-package-dep.yaml
+    with:
+      package-name: coola
+      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).coola) }}
+
+
+  #################################
+  #     Optional dependencies     #
+  #################################
+
+  duckdb:
+    needs: get-versions
+    uses: ./.github/workflows/test-package-dep.yaml
+    with:
+      package-name: duckdb
+      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).duckdb) }}
+
+  faker:
+    needs: get-versions
+    uses: ./.github/workflows/test-package-dep.yaml
+    with:
+      package-name: faker
+      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).faker) }}
+
+  polars:
+    needs: get-versions
+    uses: ./.github/workflows/test-package-dep.yaml
+    with:
+      package-name: polars
+      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).polars) }}
+
+  psycopg:
+    needs: get-versions
+    uses: ./.github/workflows/test-package-dep.yaml
+    with:
+      package-name: psycopg
+      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).psycopg) }}
+
+  rich:
+    needs: get-versions
+    uses: ./.github/workflows/test-package-dep.yaml
+    with:
+      package-name: rich
+      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).rich) }}
