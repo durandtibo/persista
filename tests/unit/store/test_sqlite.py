@@ -32,9 +32,8 @@ def store_read_only(
     store_path: Path, items: dict[str, dict[str, Any]]
 ) -> Generator[SQLiteStore, None, None]:
     path = store_path / "data.sqlite"
-    store = SQLiteStore.from_path(path)
-    store.set_many(items)
-    store._conn.close()
+    with SQLiteStore.from_path(path) as store:
+        store.set_many(items)
     with SQLiteStore.from_path(path, read_only=True) as store:
         yield store
 
