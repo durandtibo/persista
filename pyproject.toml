@@ -13,7 +13,7 @@ only-include = ["src"]
 [project]
 name = "persista"
 version = "0.0.1a0"
-description = "Utilities for LangChain"
+description = "persist data"
 readme = "README.md"
 authors = [
     { name = "Thibaut Durand", email = "durand.tibo+gh@gmail.com" },
