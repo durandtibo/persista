@@ -1,0 +1,62 @@
+default_language_version:
+  python: python3
+
+default_stages: [ pre-commit ]
+
+repos:
+  - repo: local
+    hooks:
+      - id: docformatter
+        name: docformatter
+        entry: python -Im docformatter
+        additional_dependencies:
+          - docformatter >= 1.7.5
+          - tomli >= 2.0.0
+        args: [ "--in-place", "--config", "./pyproject.toml" ]
+        language: python
+        types:
+          - python
+  - repo: https://github.com/pycqa/isort
+    rev: 9.0.0b1
+    hooks:
+      - id: isort
+        name: isort (python)
+      - id: isort
+        name: isort (cython)
+        types: [ cython ]
+      - id: isort
+        name: isort (pyi)
+        types: [ pyi ]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-toml
+      - id: sort-simple-yaml
+      - id: check-yaml
+        args: [ --unsafe ]
+  - repo: https://github.com/pre-commit/pygrep-hooks
+    rev: v1.10.0  # Use the ref you want to point at
+    hooks:
+      - id: python-check-blanket-noqa
+      - id: python-use-type-annotations
+  - repo: https://github.com/psf/black
+    rev: 26.5.1
+    hooks:
+      - id: black
+        language_version: python3.13
+  - repo: https://github.com/adamchainz/blacken-docs
+    rev: "1.20.0"
+    hooks:
+      - id: blacken-docs
+        additional_dependencies:
+          - black>=26.5
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.21
+    hooks:
+      - id: ruff-check
+        types_or: [ python, pyi, jupyter ]
+        args: [ --fix, --unsafe-fixes ]
+      - id: ruff-format
+        types_or: [ python, pyi, jupyter ]
