@@ -929,7 +929,7 @@ docs = [
     { name = "mike", specifier = ">=2.2,<3.0" },
     { name = "mkdocs-include-markdown-plugin", specifier = ">=7.3,<8.0" },
     { name = "mkdocs-material", specifier = ">=9.7,<10.0" },
-    { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.4,<2.0" },
+    { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.6,<2.0" },
 ]
 
 [[package]]
