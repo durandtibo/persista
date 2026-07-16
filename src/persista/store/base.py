@@ -2,10 +2,10 @@ r"""Provide the abstract base class for key-value stores."""
 
 from __future__ import annotations
 
-__all__ = ["BaseStore", "OnConflict"]
+__all__ = ["BaseStore"]
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from coola.utils.batching import batchify
 
@@ -13,14 +13,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Iterable, Iterator, Mapping
     from typing import Self
 
-
-OnConflict = Literal["raise", "skip", "overwrite", "merge"]
-"""Strategy for handling keys that already exist in the store.
-
-Used by :meth:`BaseStore.set`, :meth:`BaseStore.set_many`, and
-:meth:`BaseStore.set_batches` to control what happens when a key
-being written already has a value in the store.
-"""
+    from persista.store.types import OnConflict
 
 
 class BaseStore(ABC):
