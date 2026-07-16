@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 from coola.utils.batching import batchify
 
+from persista.store.validation import validate_batch_size
+
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterable, Iterator, Mapping
     from typing import Self
@@ -128,6 +130,7 @@ class BaseStore(ABC):
             KeyError: If ``on_conflict`` is ``"raise"`` and any key
                 already exists.
         """
+        validate_batch_size(batch_size)
         for batch in batchify(items, size=batch_size):
             self.set_many(dict(batch), on_conflict=on_conflict)
 
