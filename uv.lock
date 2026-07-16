@@ -866,7 +866,7 @@ duckdb = [
 faker = [
     { name = "faker" },
 ]
-postgres = [
+psycopg = [
     { name = "psycopg", extra = ["binary"] },
 ]
 
@@ -898,10 +898,10 @@ requires-dist = [
     { name = "coola", specifier = ">=1.1.9a3,<2.0" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.5,<2.0" },
     { name = "faker", marker = "extra == 'faker'", specifier = ">=40.0,<41.0" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2,<4.0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'psycopg'", specifier = ">=3.2,<4.0" },
     { name = "rich", specifier = ">=15.0,<16.0" },
 ]
-provides-extras = ["duckdb", "faker", "postgres"]
+provides-extras = ["duckdb", "faker", "psycopg"]
 
 [package.metadata.requires-dev]
 dev = [
