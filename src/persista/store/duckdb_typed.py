@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+_KEY_COLUMN = "_KEY_"
+
 
 class TypedDuckDBStore(BaseDuckDBStore):
     """A DuckDB-backed key-value store with an optional typed value
@@ -75,7 +77,11 @@ class TypedDuckDBStore(BaseDuckDBStore):
         **kwargs: Any,
     ) -> None:
         super().__init__(path, **kwargs)
-        self._schema: dict[str, str] = value_schema or {}
+        value_schema = value_schema or {}
+        if _KEY_COLUMN in value_schema:
+            msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
+            raise ValueError(msg)
+        self._schema: dict[str, str] = value_schema
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
@@ -83,7 +89,10 @@ class TypedDuckDBStore(BaseDuckDBStore):
             self._conn.execute(self._build_create_table())
 
     def get(self, key: str) -> dict[str, Any] | None:
-        row = self._conn.execute("SELECT * FROM store WHERE key = ?", [key]).fetchone()
+        row = self._conn.execute(
+            f"SELECT * FROM store WHERE {_KEY_COLUMN} = ?",  # noqa: S608
+            [key],
+        ).fetchone()
         return self._row_to_value(row) if row else None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
@@ -91,7 +100,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
             return []
         placeholders = ", ".join("?" * len(keys))
         rows = self._conn.execute(
-            f"SELECT * FROM store WHERE key IN ({placeholders})",  # noqa: S608
+            f"SELECT * FROM store WHERE {_KEY_COLUMN} IN ({placeholders})",  # noqa: S608
             keys,
         ).fetchall()
         by_key = {row[0]: self._row_to_value(row) for row in rows}
@@ -150,6 +159,18 @@ class TypedDuckDBStore(BaseDuckDBStore):
         ).fetchall()
         return [self._row_to_value(row) for row in rows]
 
+    def delete(self, key: str) -> None:
+        self._conn.execute(f"DELETE FROM store WHERE {_KEY_COLUMN} = ?", [key])  # noqa: S608
+
+    def delete_many(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        placeholders = ", ".join("?" * len(keys))
+        self._conn.execute(
+            f"DELETE FROM store WHERE {_KEY_COLUMN} IN ({placeholders})",  # noqa: S608
+            keys,
+        )
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []
@@ -157,7 +178,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
         existing = {
             row[0]
             for row in self._conn.execute(
-                f"SELECT key FROM store WHERE key IN ({placeholders})",  # noqa: S608
+                f"SELECT {_KEY_COLUMN} FROM store WHERE {_KEY_COLUMN} IN ({placeholders})",  # noqa: S608
                 keys,
             ).fetchall()
         }
@@ -166,7 +187,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
         return found, missing
 
     def keys(self) -> Iterator[str]:
-        rows = self._conn.execute("SELECT key FROM store").fetchall()
+        rows = self._conn.execute(f"SELECT {_KEY_COLUMN} FROM store").fetchall()  # noqa: S608
         for (key,) in rows:
             yield key
 
@@ -185,11 +206,14 @@ class TypedDuckDBStore(BaseDuckDBStore):
     def _build_create_table(self) -> str:
         """Build the CREATE TABLE statement from the schema."""
         typed_cols = "".join(f", {name} {dtype}" for name, dtype in self._schema.items())
-        return f"CREATE TABLE IF NOT EXISTS store (key VARCHAR PRIMARY KEY{typed_cols}, extra JSON)"
+        return (
+            f"CREATE TABLE IF NOT EXISTS store "
+            f"({_KEY_COLUMN} VARCHAR PRIMARY KEY{typed_cols}, extra JSON)"
+        )
 
     def _build_insert(self) -> str:
         """Build the INSERT OR REPLACE statement from the schema."""
-        col_names = ["key", *self._schema.keys(), "extra"]
+        col_names = [_KEY_COLUMN, *self._schema.keys(), "extra"]
         placeholders = ", ".join("?" * len(col_names))
         return f"INSERT OR REPLACE INTO store ({', '.join(col_names)}) VALUES ({placeholders})"  # noqa: S608
 

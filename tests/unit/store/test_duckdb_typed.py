@@ -96,13 +96,31 @@ def test_init_accepts_duckdb_connect_kwargs() -> None:
 @duckdb_available
 def test_init_no_schema_stores_everything_in_extra(store: TypedDuckDBStore) -> None:
     store.set("1", {"author": "Alice"})
-    assert set(store.get_columns_info().keys()) == {"key", "extra"}
+    assert set(store.get_columns_info().keys()) == {"_KEY_", "extra"}
 
 
 @duckdb_available
 def test_init_with_schema_creates_typed_columns(typed_store: TypedDuckDBStore) -> None:
     columns = typed_store.get_columns_info()
-    assert set(columns.keys()) == {"key", "author", "year", "category", "extra"}
+    assert set(columns.keys()) == {"_KEY_", "author", "year", "category", "extra"}
+
+
+@duckdb_available
+def test_init_schema_with_reserved_key_column_raises() -> None:
+    with pytest.raises(ValueError, match="reserved key column name"):
+        TypedDuckDBStore(":memory:", value_schema={"_KEY_": "VARCHAR"})
+
+
+@duckdb_available
+def test_value_field_named_key_does_not_collide_with_primary_key(
+    store: TypedDuckDBStore,
+) -> None:
+    """A value field literally named 'key' must not collide with the
+    store's primary key column, and should be stored/retrieved via the
+    extra JSON overflow column."""
+    store.set("1", {"key": "not-the-primary-key"})
+    assert store.get("1") == {"key": "not-the-primary-key"}
+    assert store.filter(key="not-the-primary-key") == [{"key": "not-the-primary-key"}]
 
 
 @duckdb_available
