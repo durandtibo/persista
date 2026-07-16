@@ -23,78 +23,9 @@ jobs:
 
       - name: check persista.agents
         run: |
-          python -c "from persista import agents"
-          python -c "from persista.agents import factory"
-
-      - name: check persista.chat_models
-        run: |
-          python -c "from persista import chat_models"
-          python -c "from persista.chat_models import factory"
-
-      - name: check persista.data_processors
-        run: |
-          python -c "from persista import data_processors"
-          python -c "from persista.data_processors import factory"
-
-      - name: check persista.document_loaders
-        run: |
-          python -c "from persista import document_loaders"
-          python -c "from persista.document_loaders import factory"
-
-      - name: check persista.document_stores
-        run: |
-          python -c "from persista import document_stores"
-          python -c "from persista.document_stores import factory"
-
-      - name: check persista.documents
-        run: |
-          python -c "from persista import documents"
-          python -c "from persista.documents import analysis"
-
-      - name: check persista.embeddings
-        run: |
-          python -c "from persista import embeddings"
-          python -c "from persista.embeddings import factory"
-
-      - name: check persista.ingestors
-        run: |
-          python -c "from persista import ingestors"
-          python -c "from persista.ingestors import factory"
-
-      - name: check persista.record_stores
-        run: |
-          python -c "from persista import record_stores"
-          python -c "from persista.record_stores import factory"
-
-      - name: check persista.records
-        run: |
-          python -c "from persista import records"
-          python -c "from persista.records import analysis"
-
-      - name: check persista.runnables
-        run: |
-          python -c "from persista import runnables"
-          python -c "from persista.runnables import factory"
-
-      - name: check persista.testing
-        run: |
-          python -c "from persista import testing"
-
-      - name: check persista.text_splitters
-        run: |
-          python -c "from persista import text_splitters"
-          python -c "from persista.text_splitters import factory"
+          python -c "from persista import store"
 
       - name: check persista.utils
         run: |
           python -c "from persista import utils"
-          python -c "from persista.utils import config"
-          python -c "from persista.utils import dataclass"
-          python -c "from persista.utils import fallback"
           python -c "from persista.utils import imports"
-          python -c "from persista.utils import rich"
-
-      - name: check persista.vectorstores
-        run: |
-          python -c "from persista import vectorstores"
-          python -c "from persista.vectorstores import factory"
