@@ -3,7 +3,12 @@ r"""Provide validation helpers for the ``on_conflict`` parameter used by
 
 from __future__ import annotations
 
-__all__ = ["ON_CONFLICT_VALUES", "normalize_on_conflict", "validate_on_conflict"]
+__all__ = [
+    "ON_CONFLICT_VALUES",
+    "normalize_on_conflict",
+    "validate_batch_size",
+    "validate_on_conflict",
+]
 
 from typing import cast, get_args
 
@@ -44,4 +49,18 @@ def validate_on_conflict(on_conflict: str) -> None:
     """
     if on_conflict not in ON_CONFLICT_VALUES:
         msg = f"Invalid on_conflict value: {on_conflict!r}. Valid values are: {ON_CONFLICT_VALUES}"
+        raise ValueError(msg)
+
+
+def validate_batch_size(batch_size: int) -> None:
+    """Validate that a value is a valid ``batch_size`` strategy.
+
+    Args:
+        batch_size: The value to validate.
+
+    Raises:
+        ValueError: If ``batch_size`` is invalid.
+    """
+    if batch_size < 1:
+        msg = f"batch_size must be a positive integer, got {batch_size}"
         raise ValueError(msg)

@@ -4,18 +4,19 @@ import logging
 
 import pytest
 
-from persista.store.validation import (
-    ON_CONFLICT_VALUES,
+from persista.store import (
     normalize_on_conflict,
+    validate_batch_size,
     validate_on_conflict,
 )
+from persista.store.validation import ON_CONFLICT_VALUES
 
 logger = logging.getLogger(__name__)
 
 
-##############################
+################################
 #     normalize_on_conflict    #
-##############################
+################################
 
 
 @pytest.mark.parametrize("on_conflict", ["raise", "skip", "overwrite", "merge"])
@@ -46,9 +47,9 @@ def test_normalize_on_conflict_empty_string() -> None:
         normalize_on_conflict("")
 
 
-############################
-#     validate_on_conflict    #
-############################
+################################
+#     validate_on_conflict     #
+################################
 
 
 @pytest.mark.parametrize("on_conflict", ["raise", "skip", "overwrite", "merge"])
@@ -78,3 +79,30 @@ def test_validate_on_conflict_error_message_lists_valid_values() -> None:
 
 def test_on_conflict_values() -> None:
     assert ON_CONFLICT_VALUES == ["merge", "overwrite", "raise", "skip"]
+
+
+###############################
+#     validate_batch_size     #
+###############################
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 32, 1000])
+def test_validate_batch_size_valid(batch_size: int) -> None:
+    validate_batch_size(batch_size)
+
+
+def test_validate_batch_size_zero() -> None:
+    with pytest.raises(ValueError, match=r"batch_size must be a positive integer, got 0"):
+        validate_batch_size(0)
+
+
+@pytest.mark.parametrize("batch_size", [-1, -10])
+def test_validate_batch_size_negative(batch_size: int) -> None:
+    with pytest.raises(
+        ValueError, match=rf"batch_size must be a positive integer, got {batch_size}"
+    ):
+        validate_batch_size(batch_size)
+
+
+def test_validate_batch_size_returns_none() -> None:
+    assert validate_batch_size(1) is None
