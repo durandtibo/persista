@@ -76,11 +76,11 @@ class TypedDuckDBStore(BaseDuckDBStore):
         value_schema: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(path, **kwargs)
         value_schema = value_schema or {}
         if _KEY_COLUMN in value_schema:
             msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
             raise ValueError(msg)
+        super().__init__(path, **kwargs)
         self._schema: dict[str, str] = value_schema
         self._ensure_schema()
 
