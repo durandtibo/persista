@@ -1,0 +1,210 @@
+r"""Provide a DuckDB-backed ``BaseStore`` implementation with an
+optional typed value schema."""
+
+from __future__ import annotations
+
+__all__ = ["TypedDuckDBStore"]
+
+import json
+import logging
+from typing import TYPE_CHECKING, Any
+
+from coola.utils.batching import batchify
+
+from persista.store.duckdb import BaseDuckDBStore
+from persista.store.validation import normalize_on_conflict, validate_batch_size
+
+if TYPE_CHECKING:
+    from collections.abc import Generator, Iterator, Mapping
+    from pathlib import Path
+
+    from persista.store.types import OnConflict
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+
+class TypedDuckDBStore(BaseDuckDBStore):
+    """A DuckDB-backed key-value store with an optional typed value
+    schema.
+
+    Persists values to a DuckDB database and supports adding,
+    retrieving, and filtering by value fields.  An optional
+    ``value_schema`` maps known value field names to DuckDB types.
+    Known fields are stored as typed columns for fast, index-friendly
+    queries.  Any value fields not in the schema are stored in an
+    ``extra`` JSON overflow column, so nothing is lost.
+
+    Args:
+        path: Path to the DuckDB file, or ``":memory:"`` for an
+            in-memory database (useful for testing).
+        value_schema: Optional mapping of value field names to DuckDB
+            type strings (e.g. ``{"author": "VARCHAR", "year":
+            "INTEGER"}``).  Fields in the schema get native typed
+            columns; all other value fields go into the ``extra``
+            JSON overflow column.  Defaults to ``None``, which stores
+            every value field as JSON only.
+        **kwargs: Additional keyword arguments to pass to
+            ``duckdb.connect``.
+
+    Example:
+        ```pycon
+        >>> from persista.store import TypedDuckDBStore
+        >>> schema = {"author": "VARCHAR", "year": "INTEGER", "category": "VARCHAR"}
+        >>> store = TypedDuckDBStore(":memory:", value_schema=schema)
+        >>> store.set_many(
+        ...     {
+        ...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
+        ...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
+        ...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        ...     }
+        ... )
+        >>> len(store.filter(author="Alice"))
+        2
+        >>> len(store.filter(author="Alice", category="Programming"))
+        2
+        >>> len(store.filter(category="History"))
+        1
+
+        ```
+    """
+
+    def __init__(
+        self,
+        path: Path | str = ":memory:",
+        value_schema: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(path, **kwargs)
+        self._schema: dict[str, str] = value_schema or {}
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        if not self._kwargs.get("read_only", False):
+            self._conn.execute(self._build_create_table())
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT * FROM store WHERE key = ?", [key]).fetchone()
+        return self._row_to_value(row) if row else None
+
+    def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        if not keys:
+            return []
+        placeholders = ", ".join("?" * len(keys))
+        rows = self._conn.execute(
+            f"SELECT * FROM store WHERE key IN ({placeholders})",  # noqa: S608
+            keys,
+        ).fetchall()
+        by_key = {row[0]: self._row_to_value(row) for row in rows}
+        return [by_key.get(key) for key in keys]
+
+    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
+        self.set_many({key: value}, on_conflict=on_conflict)
+
+    def set_many(
+        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+    ) -> None:
+        if not items:
+            return
+        on_conflict = normalize_on_conflict(on_conflict)
+
+        conflicts = set(self.contains_many(list(items))[0])
+        if conflicts and on_conflict == "raise":
+            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
+            raise KeyError(msg)
+
+        to_write: dict[str, dict[str, Any]] = {}
+        for key, value in items.items():
+            if key in conflicts:
+                if on_conflict == "skip":
+                    continue
+                if on_conflict == "merge":
+                    to_write[key] = {**(self.get(key) or {}), **value}
+                    continue
+            to_write[key] = value
+
+        if to_write:
+            self._conn.executemany(
+                self._build_insert(),
+                [self._value_to_row(key, value) for key, value in to_write.items()],
+            )
+
+        logger.debug("Added/replaced %d key-value pair(s)", len(to_write))
+
+    def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        if not field_filters:
+            rows = self._conn.execute("SELECT * FROM store").fetchall()
+            return [self._row_to_value(row) for row in rows]
+
+        conditions, values = [], []
+        for key, value in field_filters.items():
+            if key in self._schema:
+                conditions.append(f"{key} = ?")
+            else:
+                conditions.append(f"json_extract_string(extra, '$.{key}') = ?")
+            values.append(value)
+
+        where = " AND ".join(conditions)
+        rows = self._conn.execute(
+            f"SELECT * FROM store WHERE {where}",  # noqa: S608
+            values,
+        ).fetchall()
+        return [self._row_to_value(row) for row in rows]
+
+    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+        if not keys:
+            return [], []
+        placeholders = ", ".join("?" * len(keys))
+        existing = {
+            row[0]
+            for row in self._conn.execute(
+                f"SELECT key FROM store WHERE key IN ({placeholders})",  # noqa: S608
+                keys,
+            ).fetchall()
+        }
+        found = [key for key in keys if key in existing]
+        missing = [key for key in keys if key not in existing]
+        return found, missing
+
+    def keys(self) -> Iterator[str]:
+        rows = self._conn.execute("SELECT key FROM store").fetchall()
+        for (key,) in rows:
+            yield key
+
+    def iter_batches(
+        self, batch_size: int = 32
+    ) -> Generator[dict[str, dict[str, Any]], None, None]:
+        validate_batch_size(batch_size)
+        rows = self._conn.execute("SELECT * FROM store").fetchall()
+        for batch in batchify(rows, size=batch_size):
+            yield {row[0]: self._row_to_value(row) for row in batch}
+
+    # ---------------------------------------------------------------------------
+    # Private helpers
+    # ---------------------------------------------------------------------------
+
+    def _build_create_table(self) -> str:
+        """Build the CREATE TABLE statement from the schema."""
+        typed_cols = "".join(f", {name} {dtype}" for name, dtype in self._schema.items())
+        return f"CREATE TABLE IF NOT EXISTS store (key VARCHAR PRIMARY KEY{typed_cols}, extra JSON)"
+
+    def _build_insert(self) -> str:
+        """Build the INSERT OR REPLACE statement from the schema."""
+        col_names = ["key", *self._schema.keys(), "extra"]
+        placeholders = ", ".join("?" * len(col_names))
+        return f"INSERT OR REPLACE INTO store ({', '.join(col_names)}) VALUES ({placeholders})"  # noqa: S608
+
+    def _value_to_row(self, key: str, value: dict[str, Any]) -> tuple:
+        """Convert a key-value pair to an INSERT row tuple."""
+        known = [value.get(k) for k in self._schema]
+        extra = {k: v for k, v in value.items() if k not in self._schema}
+        return (key, *known, json.dumps(extra) if extra else None)
+
+    def _row_to_value(self, row: tuple) -> dict[str, Any]:
+        """Convert a raw database row back to a value dict."""
+        # row layout: key, [schema cols...], extra
+        schema_vals = dict(zip(self._schema.keys(), row[1 : 1 + len(self._schema)]))
+        extra_json = row[1 + len(self._schema)]
+        value = {k: v for k, v in schema_vals.items() if v is not None}
+        if extra_json:
+            value.update(json.loads(extra_json))
+        return value
