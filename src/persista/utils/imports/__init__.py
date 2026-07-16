@@ -5,12 +5,16 @@ from __future__ import annotations
 __all__ = [
     "check_duckdb",
     "check_faker",
+    "check_psycopg",
     "duckdb_available",
     "faker_available",
     "is_duckdb_available",
     "is_faker_available",
+    "is_psycopg_available",
+    "psycopg_available",
     "raise_duckdb_missing_error",
     "raise_faker_missing_error",
+    "raise_psycopg_missing_error",
 ]
 
 from persista.utils.imports.duckdb import (
@@ -24,4 +28,10 @@ from persista.utils.imports.faker import (
     faker_available,
     is_faker_available,
     raise_faker_missing_error,
+)
+from persista.utils.imports.psycopg import (
+    check_psycopg,
+    is_psycopg_available,
+    psycopg_available,
+    raise_psycopg_missing_error,
 )
