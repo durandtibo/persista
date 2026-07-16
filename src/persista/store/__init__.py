@@ -17,7 +17,7 @@ __all__ = [
 from persista.store.base import BaseStore
 from persista.store.in_memory import InMemoryStore
 from persista.store.sqlite import BaseSQLiteStore, SQLiteStore
-from persista.store.typed_sqlite import TypedSQLiteStore
+from persista.store.sqlite_typed import TypedSQLiteStore
 from persista.store.types import OnConflict
 from persista.store.validation import (
     normalize_on_conflict,
