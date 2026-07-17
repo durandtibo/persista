@@ -13,7 +13,11 @@ from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
-from persista.store.validation import normalize_on_conflict, validate_batch_size
+from persista.store.validation import (
+    normalize_on_conflict,
+    validate_batch_size,
+    validate_field_name,
+)
 from persista.utils.duckdb import prepare_duckdb_path
 from persista.utils.imports import check_duckdb, is_duckdb_available
 
@@ -221,6 +225,8 @@ class DuckDBStore(BaseDuckDBStore):
             rows = self._conn.execute("SELECT value FROM store").fetchall()
             return [json.loads(value) for (value,) in rows]
 
+        for key in field_filters:
+            validate_field_name(key)
         conditions = [f"json_extract_string(value, '$.{key}') = ?" for key in field_filters]
         where = " AND ".join(conditions)
         rows = self._conn.execute(

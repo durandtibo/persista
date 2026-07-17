@@ -455,6 +455,18 @@ def test_filter_no_match_returns_empty(
 
 
 @duckdb_available
+def test_filter_rejects_malicious_field_name(
+    typed_store: TypedDuckDBStore, items: dict[str, dict[str, Any]]
+) -> None:
+    """A non-schema field name is interpolated into the SQL (only the
+    value is bound), so anything but a plain identifier must be rejected
+    to prevent SQL injection."""
+    typed_store.set_many(items)
+    with pytest.raises(ValueError, match="Invalid filter field name"):
+        typed_store.filter(**{"x') OR 1=1 OR ('": "nonmatching"})
+
+
+@duckdb_available
 def test_filter_extra_field(typed_store: TypedDuckDBStore) -> None:
     typed_store.set_many(
         {
