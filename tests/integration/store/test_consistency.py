@@ -42,6 +42,7 @@ if is_redis_available():
     import redis
 
 if is_psycopg_available():
+    import psycopg
     from testcontainers.postgres import PostgresContainer
 
 try:
@@ -51,16 +52,35 @@ except ImportError:  # pragma: no cover
 
 REDIS_URL = os.environ.get("PERSISTA_TEST_REDIS_URL", "redis://localhost:6379/0")
 
+# PERSISTA_TEST_POSTGRES_URL lets a manually-managed server (e.g. one
+# started via `dev/start_postgres.sh`) be reused instead of paying the cost
+# of a fresh testcontainers/Docker container every session. Mirrors
+# tests/integration/store/test_postgres.py.
+POSTGRES_URL = os.environ.get("PERSISTA_TEST_POSTGRES_URL")
+
 _postgres_conninfo: str | None = None
 _postgres_conninfo_resolved = False
 
 
-def _get_postgres_conninfo() -> str | None:
-    r"""Lazily start a shared Postgres container and return its conninfo.
+def _postgres_url_reachable(url: str) -> bool:
+    if not is_psycopg_available():
+        return False
+    try:
+        with psycopg.connect(url, connect_timeout=1):
+            return True
+    except psycopg.OperationalError:
+        return False
 
-    ``None`` is returned (and cached) if psycopg is not installed or Docker
-    is unavailable, so this only pays the container-startup cost once per
-    test session, and only when Postgres tests can actually run.
+
+def _get_postgres_conninfo() -> str | None:
+    r"""Return a Postgres conninfo, preferring
+    ``PERSISTA_TEST_POSTGRES_URL`` and otherwise lazily starting a
+    shared container.
+
+    ``None`` is returned (and cached) if psycopg is not installed, the
+    configured server is unreachable, or Docker is unavailable, so this
+    only pays the container-startup cost once per test session, and only
+    when Postgres tests can actually run.
     """
     global _postgres_conninfo, _postgres_conninfo_resolved
     if _postgres_conninfo_resolved:
@@ -68,6 +88,9 @@ def _get_postgres_conninfo() -> str | None:
     _postgres_conninfo_resolved = True
     if not is_psycopg_available():
         return None
+    if POSTGRES_URL:
+        _postgres_conninfo = POSTGRES_URL if _postgres_url_reachable(POSTGRES_URL) else None
+        return _postgres_conninfo
     try:
         container = PostgresContainer("postgres:16-alpine")
         container.start()

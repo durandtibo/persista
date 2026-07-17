@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
@@ -22,6 +23,26 @@ try:
 except ImportError:  # pragma: no cover
     DockerException = Exception
 
+# PERSISTA_TEST_POSTGRES_URL lets a manually-managed server (e.g. one
+# started via `dev/start_postgres.sh`) be reused across test runs instead
+# of paying the cost of a fresh testcontainers/Docker container every
+# session. Falls back to spinning up a disposable Docker container, mirroring
+# how tests/integration/store/test_redis.py falls back to a reachable
+# PERSISTA_TEST_REDIS_URL server.
+POSTGRES_URL = os.environ.get(
+    "PERSISTA_TEST_POSTGRES_URL", "postgresql://postgres@localhost:5433/postgres"
+)
+
+
+def _postgres_url_reachable(url: str) -> bool:
+    if not is_psycopg_available():
+        return False
+    try:
+        with psycopg.connect(url, connect_timeout=1):
+            return True
+    except psycopg.OperationalError:
+        return False
+
 
 def _docker_available() -> bool:
     if not is_psycopg_available():
@@ -35,9 +56,15 @@ def _docker_available() -> bool:
     return True
 
 
-docker_available = pytest.mark.skipif(not _docker_available(), reason="Requires Docker")
+if POSTGRES_URL:
+    postgres_available = pytest.mark.skipif(
+        not _postgres_url_reachable(POSTGRES_URL),
+        reason=f"Requires a reachable Postgres server at {POSTGRES_URL!r}",
+    )
+else:
+    postgres_available = pytest.mark.skipif(not _docker_available(), reason="Requires Docker")
 
-pytestmark = [psycopg_available, docker_available]
+pytestmark = [psycopg_available, postgres_available]
 
 
 # ---------------------------------------------------------------------------
@@ -46,19 +73,17 @@ pytestmark = [psycopg_available, docker_available]
 
 
 @pytest.fixture(scope="session")
-def postgres_container() -> Generator[PostgresContainer, None, None]:
+def conninfo() -> Generator[str, None, None]:
+    if POSTGRES_URL:
+        yield POSTGRES_URL
+        return
     with PostgresContainer("postgres:16-alpine") as container:
-        yield container
-
-
-@pytest.fixture(scope="session")
-def conninfo(postgres_container: PostgresContainer) -> str:
-    return (
-        f"postgresql://{postgres_container.username}:{postgres_container.password}"
-        f"@{postgres_container.get_container_host_ip()}"
-        f":{postgres_container.get_exposed_port(5432)}"
-        f"/{postgres_container.dbname}"
-    )
+        yield (
+            f"postgresql://{container.username}:{container.password}"
+            f"@{container.get_container_host_ip()}"
+            f":{container.get_exposed_port(5432)}"
+            f"/{container.dbname}"
+        )
 
 
 @pytest.fixture
@@ -734,9 +759,9 @@ def test_context_manager_usable_for_reads_and_writes(
         assert store.count() == 1
 
 
-##############################################################
-#     TypedPostgresStore-specific schema behavior             #
-##############################################################
+#######################################################
+#     TypedPostgresStore-specific schema behavior     #
+#######################################################
 
 # PostgresStore and TypedPostgresStore share the exact same behavior when
 # no schema is involved (covered by every test above, run against both
