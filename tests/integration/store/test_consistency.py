@@ -14,8 +14,6 @@ pass -- identically for every implementation.
 
 from __future__ import annotations
 
-import atexit
-import os
 import uuid
 from collections.abc import Generator, Iterator
 from typing import Any
@@ -36,70 +34,9 @@ from persista.store import (
     TypedSQLiteStore,
 )
 from persista.testing.fixtures import duckdb_available
-from persista.utils.imports import is_psycopg_available, is_redis_available
+from persista.utils.imports import is_redis_available
+from tests.integration.store.postgres_helpers import get_postgres_conninfo
 from tests.integration.store.redis_helpers import REDIS_URL, redis_server_reachable
-
-if is_psycopg_available():
-    import psycopg
-    from testcontainers.postgres import PostgresContainer
-
-try:
-    from docker.errors import DockerException
-except ImportError:  # pragma: no cover
-    DockerException = Exception
-
-# PERSISTA_TEST_POSTGRES_URL lets a manually-managed server (e.g. one
-# started via `dev/start_postgres.sh`) be reused instead of paying the cost
-# of a fresh testcontainers/Docker container every session. Mirrors
-# tests/integration/store/test_postgres.py.
-POSTGRES_URL = os.environ.get("PERSISTA_TEST_POSTGRES_URL")
-
-_postgres_conninfo: str | None = None
-_postgres_conninfo_resolved = False
-
-
-def _postgres_url_reachable(url: str) -> bool:
-    if not is_psycopg_available():
-        return False
-    try:
-        with psycopg.connect(url, connect_timeout=1):
-            return True
-    except psycopg.OperationalError:
-        return False
-
-
-def _get_postgres_conninfo() -> str | None:
-    r"""Return a Postgres conninfo, preferring
-    ``PERSISTA_TEST_POSTGRES_URL`` and otherwise lazily starting a
-    shared container.
-
-    ``None`` is returned (and cached) if psycopg is not installed, the
-    configured server is unreachable, or Docker is unavailable, so this
-    only pays the container-startup cost once per test session, and only
-    when Postgres tests can actually run.
-    """
-    global _postgres_conninfo, _postgres_conninfo_resolved
-    if _postgres_conninfo_resolved:
-        return _postgres_conninfo
-    _postgres_conninfo_resolved = True
-    if not is_psycopg_available():
-        return None
-    if POSTGRES_URL:
-        _postgres_conninfo = POSTGRES_URL if _postgres_url_reachable(POSTGRES_URL) else None
-        return _postgres_conninfo
-    try:
-        container = PostgresContainer("postgres:16-alpine")
-        container.start()
-    except DockerException:
-        return None
-    atexit.register(container.stop)
-    _postgres_conninfo = (
-        f"postgresql://{container.username}:{container.password}"
-        f"@{container.get_container_host_ip()}"
-        f":{container.get_exposed_port(5432)}"
-        f"/{container.dbname}"
-    )
-    return _postgres_conninfo
 
 
 def _is_redis_store(store: BaseStore) -> bool:
@@ -119,7 +56,7 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
     redis_skip = pytest.mark.skipif(
         not redis_server_reachable(), reason="Requires a reachable Redis server"
     )
-    postgres_conninfo = _get_postgres_conninfo()
+    postgres_conninfo = get_postgres_conninfo()
     postgres_skip = pytest.mark.skipif(
         postgres_conninfo is None, reason="Requires Docker and psycopg"
     )
