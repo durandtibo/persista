@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -8,31 +7,13 @@ import pytest
 
 from persista.testing.fixtures import redis_available
 from persista.utils.imports import is_redis_available
+from tests.integration.store.redis_helpers import REDIS_URL, redis_server_available
 
 if TYPE_CHECKING:
     from persista.store.redis import BaseRedisStore
 
 if is_redis_available():
-    import redis
-
     from persista.store import PickleRedisStore, RedisStore
-
-REDIS_URL = os.environ.get("PERSISTA_TEST_REDIS_URL", "redis://localhost:6379/0")
-
-
-def _redis_server_reachable() -> bool:
-    if not is_redis_available():
-        return False
-    try:
-        redis.Redis.from_url(REDIS_URL, socket_connect_timeout=1).ping()
-    except redis.exceptions.RedisError:
-        return False
-    return True
-
-
-redis_server_available = pytest.mark.skipif(
-    not _redis_server_reachable(), reason="Requires a reachable Redis server"
-)
 
 # ---------------------------------------------------------------------------
 # Fixtures
