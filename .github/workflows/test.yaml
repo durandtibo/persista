@@ -98,8 +98,19 @@ jobs:
   # Test RedisStore against a live Redis server (only supported on Linux-hosted
   # runners, hence the separate job instead of a service on the OS matrix above)
   redis:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 5
+    strategy:
+      max-parallel: 8
+      fail-fast: false
+      matrix:
+        os: [
+          ubuntu-latest,
+          ubuntu-24.04,
+          ubuntu-22.04,
+        ]
+        python-version: [ '3.14', '3.13', '3.12', '3.11', '3.10' ]
+
     services:
       redis:
         image: redis:7
@@ -118,11 +129,10 @@ jobs:
       - name: Setup python environment
         uses: durandtibo/setup-venv-uv-action@v0.0.3
         with:
-          python-version: '3.13'
+          python-version: ${{ matrix.python-version }}
 
       - name: Run RedisStore integration tests
         env:
           PERSISTA_TEST_REDIS_URL: redis://localhost:6379/0
         run: |
-          python -m pytest --xdoctest --timeout 60 tests/integration/store/test_redis.py
-          python -m pytest --xdoctest --timeout 60 tests/integration/store/test_consistency.py
+          inv integration-test

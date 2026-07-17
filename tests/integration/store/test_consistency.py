@@ -2,10 +2,11 @@ r"""Consistency tests across every ``BaseStore`` implementation.
 
 Each concrete store (:class:`~persista.store.InMemoryStore`,
 :class:`~persista.store.SQLiteStore`, :class:`~persista.store.DuckDBStore`,
-:class:`~persista.store.RedisStore`) is expected to implement the exact
-same behavior for the :class:`~persista.store.BaseStore` contract. The
-tests below are parametrized over every available backend (stores whose
-optional dependency is missing, or whose server is unreachable, are
+:class:`~persista.store.RedisStore`,
+:class:`~persista.store.PickleRedisStore`) is expected to implement the
+exact same behavior for the :class:`~persista.store.BaseStore` contract.
+The tests below are parametrized over every available backend (stores
+whose optional dependency is missing, or whose server is unreachable, are
 skipped rather than omitted) so that a single test body runs -- and must
 pass -- identically for every implementation.
 """
@@ -18,13 +19,19 @@ from typing import Any
 
 import pytest
 
-from persista.store import BaseStore, DuckDBStore, InMemoryStore, SQLiteStore
+from persista.store import (
+    BaseRedisStore,
+    BaseStore,
+    DuckDBStore,
+    InMemoryStore,
+    PickleRedisStore,
+    RedisStore,
+    SQLiteStore,
+)
 from persista.utils.imports import is_duckdb_available, is_redis_available
 
 if is_redis_available():
     import redis
-
-    from persista.store import RedisStore
 
 REDIS_URL = os.environ.get("PERSISTA_TEST_REDIS_URL", "redis://localhost:6379/0")
 
@@ -40,7 +47,7 @@ def _redis_server_reachable() -> bool:
 
 
 def _is_redis_store(store: BaseStore) -> bool:
-    return is_redis_available() and isinstance(store, RedisStore)
+    return is_redis_available() and isinstance(store, BaseRedisStore)
 
 
 def _store_factories() -> list[pytest.mark.ParameterSet]:
@@ -52,6 +59,9 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
     as skipped rather than omitted, so they are still visible (as skips)
     in `pytest -k`/reports.
     """
+    redis_skip = pytest.mark.skipif(
+        not _redis_server_reachable(), reason="Requires a reachable Redis server"
+    )
     return [
         pytest.param(InMemoryStore, id="in_memory"),
         pytest.param(lambda: SQLiteStore(":memory:"), id="sqlite"),
@@ -60,13 +70,8 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
             id="duckdb",
             marks=pytest.mark.skipif(not is_duckdb_available(), reason="Requires duckdb"),
         ),
-        pytest.param(
-            lambda: RedisStore(REDIS_URL),
-            id="redis",
-            marks=pytest.mark.skipif(
-                not _redis_server_reachable(), reason="Requires a reachable Redis server"
-            ),
-        ),
+        pytest.param(lambda: RedisStore(REDIS_URL), id="redis", marks=redis_skip),
+        pytest.param(lambda: PickleRedisStore(REDIS_URL), id="pickle_redis", marks=redis_skip),
     ]
 
 
