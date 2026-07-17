@@ -1,18 +1,17 @@
-r"""Provide a SQLite-backed ``BaseStore`` implementation with an
+r"""Provide a DuckDB-backed ``BaseStore`` implementation with an
 optional typed value schema."""
 
 from __future__ import annotations
 
-__all__ = ["TypedSQLiteStore"]
+__all__ = ["TypedDuckDBStore"]
 
 import json
 import logging
-import sqlite3
 from typing import TYPE_CHECKING, Any
 
 from coola.utils.batching import batchify
 
-from persista.store.sqlite import BaseSQLiteStore
+from persista.store.duckdb import BaseDuckDBStore
 from persista.store.validation import (
     normalize_on_conflict,
     validate_batch_size,
@@ -30,38 +29,34 @@ logger: logging.Logger = logging.getLogger(__name__)
 _KEY_COLUMN = "_KEY_"
 
 
-class TypedSQLiteStore(BaseSQLiteStore):
-    """A SQLite-backed key-value store with an optional typed value
+class TypedDuckDBStore(BaseDuckDBStore):
+    """A DuckDB-backed key-value store with an optional typed value
     schema.
 
-    Persists values to a SQLite database and supports adding,
+    Persists values to a DuckDB database and supports adding,
     retrieving, and filtering by value fields.  An optional
-    ``value_schema`` maps known value field names to SQLite types.
+    ``value_schema`` maps known value field names to DuckDB types.
     Known fields are stored as typed columns for fast, index-friendly
     queries.  Any value fields not in the schema are stored in an
     ``extra`` JSON overflow column, so nothing is lost.
 
-    The constructor mirrors :func:`sqlite3.connect` directly (plus the
-    ``value_schema`` argument). For the common case of opening a file
-    by path (optionally read-only), use :meth:`from_path` instead.
-
     Args:
-        database: The ``database`` argument passed to
-            ``sqlite3.connect`` (path, ``":memory:"``, or ``file:`` URI).
-        value_schema: Optional mapping of value field names to SQLite
-            type strings (e.g. ``{"author": "TEXT", "year":
+        path: Path to the DuckDB file, or ``":memory:"`` for an
+            in-memory database (useful for testing).
+        value_schema: Optional mapping of value field names to DuckDB
+            type strings (e.g. ``{"author": "VARCHAR", "year":
             "INTEGER"}``).  Fields in the schema get native typed
             columns; all other value fields go into the ``extra``
             JSON overflow column.  Defaults to ``None``, which stores
             every value field as JSON only.
         **kwargs: Additional keyword arguments to pass to
-            ``sqlite3.connect``.
+            ``duckdb.connect``.
 
     Example:
         ```pycon
-        >>> from persista.store import TypedSQLiteStore
-        >>> schema = {"author": "TEXT", "year": "INTEGER", "category": "TEXT"}
-        >>> store = TypedSQLiteStore(":memory:", value_schema=schema)
+        >>> from persista.store import TypedDuckDBStore
+        >>> schema = {"author": "VARCHAR", "year": "INTEGER", "category": "VARCHAR"}
+        >>> store = TypedDuckDBStore(":memory:", value_schema=schema)
         >>> store.set_many(
         ...     {
         ...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
@@ -81,7 +76,7 @@ class TypedSQLiteStore(BaseSQLiteStore):
 
     def __init__(
         self,
-        database: Path | str = ":memory:",
+        path: Path | str = ":memory:",
         value_schema: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -89,59 +84,18 @@ class TypedSQLiteStore(BaseSQLiteStore):
         if _KEY_COLUMN in value_schema:
             msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
             raise ValueError(msg)
-        super().__init__(database, **kwargs)
+        super().__init__(path, **kwargs)
         self._schema: dict[str, str] = value_schema
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
-        try:
+        if not self._kwargs.get("read_only", False):
             self._conn.execute(self._build_create_table())
-            self._conn.commit()
-        except sqlite3.OperationalError:
-            # Connection is read-only (e.g. opened via a `mode=ro` URI);
-            # assume the table already exists.
-            pass
-
-    @classmethod
-    def from_path(
-        cls,
-        path: Path | str,
-        *,
-        value_schema: dict[str, str] | None = None,
-        read_only: bool = False,
-        **kwargs: Any,
-    ) -> TypedSQLiteStore:
-        """Construct a :class:`TypedSQLiteStore` from a file path.
-
-        Builds the appropriate ``file:`` URI for ``sqlite3.connect``,
-        including read-only access, so callers don't need to
-        construct SQLite URIs themselves.
-
-        Args:
-            path: Path to the SQLite file, or ``":memory:"`` for an
-                in-memory database (useful for testing).
-            value_schema: Optional mapping of value field names to
-                SQLite type strings. See the class docstring.
-            read_only: If ``True``, open the database in read-only
-                mode. The database file must already exist.
-            **kwargs: Additional keyword arguments to pass to
-                ``sqlite3.connect``.
-
-        Returns:
-            A new :class:`TypedSQLiteStore` connected to ``path``.
-        """
-        if str(path) == ":memory:":
-            uri = "file::memory:?cache=shared"
-        elif read_only:
-            uri = f"file:{path}?mode=ro"
-        else:
-            uri = f"file:{path}?mode=rwc"
-        return cls(uri, value_schema=value_schema, uri=True, **kwargs)
 
     def get(self, key: str) -> dict[str, Any] | None:
         row = self._conn.execute(
             f"SELECT * FROM store WHERE {_KEY_COLUMN} = ?",  # noqa: S608
-            (key,),
+            [key],
         ).fetchone()
         return self._row_to_value(row) if row else None
 
@@ -186,7 +140,6 @@ class TypedSQLiteStore(BaseSQLiteStore):
                 self._build_insert(),
                 [self._value_to_row(key, value) for key, value in to_write.items()],
             )
-            self._conn.commit()
 
         logger.debug("Added/replaced %d key-value pair(s)", len(to_write))
 
@@ -201,7 +154,7 @@ class TypedSQLiteStore(BaseSQLiteStore):
                 conditions.append(f"{key} = ?")
             else:
                 validate_field_name(key)
-                conditions.append(f"json_extract(extra, '$.{key}') = ?")
+                conditions.append(f"json_extract_string(extra, '$.{key}') = ?")
             values.append(value)
 
         where = " AND ".join(conditions)
@@ -212,8 +165,7 @@ class TypedSQLiteStore(BaseSQLiteStore):
         return [self._row_to_value(row) for row in rows]
 
     def delete(self, key: str) -> None:
-        self._conn.execute(f"DELETE FROM store WHERE {_KEY_COLUMN} = ?", (key,))  # noqa: S608
-        self._conn.commit()
+        self._conn.execute(f"DELETE FROM store WHERE {_KEY_COLUMN} = ?", [key])  # noqa: S608
 
     def delete_many(self, keys: list[str]) -> None:
         if not keys:
@@ -223,7 +175,6 @@ class TypedSQLiteStore(BaseSQLiteStore):
             f"DELETE FROM store WHERE {_KEY_COLUMN} IN ({placeholders})",  # noqa: S608
             keys,
         )
-        self._conn.commit()
 
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
@@ -241,16 +192,16 @@ class TypedSQLiteStore(BaseSQLiteStore):
         return found, missing
 
     def keys(self) -> Iterator[str]:
-        cursor = self._conn.execute(f"SELECT {_KEY_COLUMN} FROM store")  # noqa: S608
-        for (key,) in cursor:
+        rows = self._conn.execute(f"SELECT {_KEY_COLUMN} FROM store").fetchall()  # noqa: S608
+        for (key,) in rows:
             yield key
 
     def iter_batches(
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
-        cursor = self._conn.execute("SELECT * FROM store")
-        for batch in batchify(cursor, size=batch_size):
+        rows = self._conn.execute("SELECT * FROM store").fetchall()
+        for batch in batchify(rows, size=batch_size):
             yield {row[0]: self._row_to_value(row) for row in batch}
 
     # ---------------------------------------------------------------------------
@@ -262,7 +213,7 @@ class TypedSQLiteStore(BaseSQLiteStore):
         typed_cols = "".join(f", {name} {dtype}" for name, dtype in self._schema.items())
         return (
             f"CREATE TABLE IF NOT EXISTS store "
-            f"({_KEY_COLUMN} TEXT PRIMARY KEY{typed_cols}, extra JSON)"
+            f"({_KEY_COLUMN} VARCHAR PRIMARY KEY{typed_cols}, extra JSON)"
         )
 
     def _build_insert(self) -> str:

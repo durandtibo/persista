@@ -44,12 +44,12 @@ jobs:
       package-name: faker
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).faker) }}
 
-  polars:
-    needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
-    with:
-      package-name: polars
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).polars) }}
+#  polars:
+#    needs: get-versions
+#    uses: ./.github/workflows/test-code-dep.yaml
+#    with:
+#      package-name: polars
+#      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).polars) }}
 
   psycopg:
     needs: get-versions
@@ -57,6 +57,13 @@ jobs:
     with:
       package-name: psycopg
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).psycopg) }}
+
+  redis:
+    needs: get-versions
+    uses: ./.github/workflows/test-code-dep.yaml
+    with:
+      package-name: redis
+      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).redis) }}
 
   rich:
     needs: get-versions

@@ -14,7 +14,11 @@ from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
-from persista.store.validation import normalize_on_conflict, validate_batch_size
+from persista.store.validation import (
+    normalize_on_conflict,
+    validate_batch_size,
+    validate_field_name,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator, Mapping
@@ -267,6 +271,8 @@ class SQLiteStore(BaseSQLiteStore):
             rows = self._conn.execute("SELECT value FROM store").fetchall()
             return [json.loads(value) for (value,) in rows]
 
+        for key in field_filters:
+            validate_field_name(key)
         conditions = [f"json_extract(value, '$.{key}') = ?" for key in field_filters]
         where = " AND ".join(conditions)
         rows = self._conn.execute(

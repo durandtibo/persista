@@ -7,6 +7,7 @@ import pytest
 from persista.store import (
     normalize_on_conflict,
     validate_batch_size,
+    validate_field_name,
     validate_on_conflict,
 )
 from persista.store.validation import ON_CONFLICT_VALUES
@@ -106,3 +107,30 @@ def test_validate_batch_size_negative(batch_size: int) -> None:
 
 def test_validate_batch_size_returns_none() -> None:
     assert validate_batch_size(1) is None
+
+
+###############################
+#     validate_field_name     #
+###############################
+
+
+@pytest.mark.parametrize("name", ["author", "_author", "Author2", "a", "_", "field_name_2"])
+def test_validate_field_name_valid(name: str) -> None:
+    assert validate_field_name(name) is None
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "x') OR 1=1 OR ('",
+        "author; DROP TABLE store;",
+        "author'",
+        "2author",
+        "author name",
+        "author-name",
+        "",
+    ],
+)
+def test_validate_field_name_invalid(name: str) -> None:
+    with pytest.raises(ValueError, match="Invalid filter field name"):
+        validate_field_name(name)

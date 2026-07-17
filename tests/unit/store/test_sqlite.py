@@ -370,6 +370,17 @@ def test_filter_no_match_returns_empty(
     assert store.filter(author="Charlie") == []
 
 
+def test_filter_rejects_malicious_field_name(
+    store: SQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    """A field name is interpolated into the SQL (only the value is
+    bound), so anything but a plain identifier must be rejected to
+    prevent SQL injection."""
+    store.set_many(items)
+    with pytest.raises(ValueError, match="Invalid filter field name"):
+        store.filter(**{"x') OR 1=1 OR ('": "nonmatching"})
+
+
 def test_filter_preserves_full_value(store: SQLiteStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     result = store.filter(author="Bob", category="History")
