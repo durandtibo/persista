@@ -25,9 +25,9 @@ jobs:
           'all',
           'duckdb',
           'faker',
-          'polars',
           'psycopg',
           'rich',
+          'redis',
         ]
 
     steps:
