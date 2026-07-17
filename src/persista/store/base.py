@@ -259,6 +259,16 @@ class BaseStore(ABC):
         before using it as a context manager.
         """
 
+    @property
+    @abstractmethod
+    def closed(self) -> bool:
+        r"""Indicate whether the store is closed.
+
+        Returns:
+            ``True`` if the store has been closed, ``False`` if it is
+            open and ready to use.
+        """
+
     def __enter__(self) -> Self:
         return self
 
@@ -497,6 +507,16 @@ class AsyncBaseStore(ABC):
         (i.e. idempotent), since :meth:`__aexit__` calls it
         unconditionally and callers may also close a store manually
         before using it as a context manager.
+        """
+
+    @property
+    @abstractmethod
+    def closed(self) -> bool:
+        r"""Indicate whether the store is closed.
+
+        Returns:
+            ``True`` if the store has been closed, ``False`` if it is
+            open and ready to use.
         """
 
     async def __aenter__(self) -> Self:

@@ -149,6 +149,10 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         self._conn.close()
         self._closed = True
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def get(self, key: str) -> dict[str, Any] | None:
         row = self._conn.execute(
             f"SELECT * FROM store WHERE {self._key_column} = ?",  # noqa: S608

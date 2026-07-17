@@ -573,6 +573,18 @@ def test_close_returns_none(store: BaseRedisStore) -> None:
     assert store.close() is None
 
 
+# --- closed ---
+
+
+def test_closed_false_before_close(store: BaseRedisStore) -> None:
+    assert not store.closed
+
+
+def test_closed_true_after_close(store: BaseRedisStore) -> None:
+    store.close()
+    assert store.closed
+
+
 # --- context manager ---
 
 
@@ -589,7 +601,7 @@ def test_context_manager_closes_on_normal_exit(
     with store_cls() as store:
         store.set("1", {"text": "hello"})
         assert store.count() == 1
-    assert store._closed is True
+    assert store._closed
 
 
 def test_context_manager_closes_on_exception(
@@ -599,7 +611,7 @@ def test_context_manager_closes_on_exception(
     msg = "boom"
     with pytest.raises(ValueError, match="boom"), store_cls() as store:
         raise ValueError(msg)
-    assert store._closed is True
+    assert store._closed
 
 
 def test_context_manager_usable_for_reads_and_writes(store: BaseRedisStore) -> None:

@@ -728,6 +728,18 @@ def test_close_returns_none(store: BaseSQLiteStore) -> None:
     assert store.close() is None
 
 
+# --- closed ---
+
+
+def test_closed_false_before_close(store: BaseSQLiteStore) -> None:
+    assert not store.closed
+
+
+def test_closed_true_after_close(store: BaseSQLiteStore) -> None:
+    store.close()
+    assert store.closed
+
+
 # --- context manager ---
 
 

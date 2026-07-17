@@ -613,6 +613,18 @@ def test_close_returns_none(store: InMemoryStore) -> None:
     assert store.close() is None
 
 
+# --- closed ---
+
+
+def test_closed_false_before_close(store: InMemoryStore) -> None:
+    assert not store.closed
+
+
+def test_closed_true_after_close(store: InMemoryStore) -> None:
+    store.close()
+    assert store.closed
+
+
 # --- context manager ---
 
 
