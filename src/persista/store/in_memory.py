@@ -52,6 +52,7 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
 
     def __init__(self) -> None:
         self._data: dict[str, dict[str, Any]] = {}
+        self._closed = False
 
     @property
     def data(self) -> dict[str, dict[str, Any]]:
@@ -63,6 +64,11 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
         # manager) it is equivalent to starting over with a fresh,
         # empty store.
         self._data.clear()
+        self._closed = True
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     def get(self, key: str) -> dict[str, Any] | None:
         value = self._data.get(key)

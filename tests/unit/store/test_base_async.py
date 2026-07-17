@@ -21,10 +21,14 @@ class AsyncInMemoryStore(AsyncBaseStore):
 
     def __init__(self) -> None:
         self._data: dict[str, dict[str, Any]] = {}
-        self.closed = False
+        self._closed = False
 
     async def close(self) -> None:
-        self.closed = True
+        self._closed = True
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     async def get(self, key: str) -> dict[str, Any] | None:
         value = self._data.get(key)

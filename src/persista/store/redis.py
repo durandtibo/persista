@@ -88,6 +88,10 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         self._client.close()
         self._closed = True
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def get(self, key: str) -> dict[str, Any] | None:
         value = self._client.get(key)
         return self._decode(value) if value is not None else None

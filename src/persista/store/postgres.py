@@ -110,6 +110,10 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         self._conn.close()
         self._closed = True
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def get(self, key: str) -> dict[str, Any] | None:
         query = sql.SQL("SELECT * FROM {table} WHERE {key_col} = %s").format(
             table=self._table_ident, key_col=sql.Identifier(self._key_column)

@@ -105,6 +105,10 @@ class BaseDuckDBStore(BaseStore, MultilineDisplayMixin):
         self._conn.close()
         self._closed = True
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def get(self, key: str) -> dict[str, Any] | None:
         row = self._conn.execute(self._select_sql(f"{self._key_column} = ?"), [key]).fetchone()
         return self._row_to_kv(row)[1] if row else None
