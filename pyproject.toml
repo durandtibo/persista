@@ -61,6 +61,7 @@ rich = [ "rich >=15.0,<16.0" ]
 
 [dependency-groups]
 dev = [
+    "anyio >=4.0,<5.0",
     "black>=26.5.1",
     "coverage[toml]>=7.15.2,<8.0",
     "docformatter[tomli]>=1.7.8,<2.0",
@@ -117,6 +118,7 @@ testpaths = ["tests/"]
 log_format = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 log_level = "DEBUG"
 addopts = ["--color", "yes", "--durations", "10", "-rf"]
+anyio_mode = "auto"
 # Configuration of the short test summary info
 # https://docs.pytest.org/en/stable/usage.html#detailed-summary-report
 
