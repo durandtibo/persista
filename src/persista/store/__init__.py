@@ -3,13 +3,16 @@ r"""Contain stores."""
 from __future__ import annotations
 
 __all__ = [
+    "AsyncBasePostgresStore",
     "AsyncBaseRedisStore",
     "AsyncBaseSQLiteStore",
     "AsyncBaseStore",
     "AsyncInMemoryStore",
     "AsyncPickleRedisStore",
+    "AsyncPostgresStore",
     "AsyncRedisStore",
     "AsyncSQLiteStore",
+    "AsyncTypedPostgresStore",
     "AsyncTypedSQLiteStore",
     "BaseDuckDBStore",
     "BasePostgresStore",
@@ -33,6 +36,11 @@ __all__ = [
 ]
 
 from persista.store.async_in_memory import AsyncInMemoryStore
+from persista.store.async_postgres import (
+    AsyncBasePostgresStore,
+    AsyncPostgresStore,
+    AsyncTypedPostgresStore,
+)
 from persista.store.async_redis import (
     AsyncBaseRedisStore,
     AsyncPickleRedisStore,
