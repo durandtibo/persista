@@ -3,6 +3,7 @@ r"""Contain stores."""
 from __future__ import annotations
 
 __all__ = [
+    "AsyncBaseStore",
     "BaseDuckDBStore",
     "BasePostgresStore",
     "BaseRedisStore",
@@ -24,7 +25,7 @@ __all__ = [
     "validate_on_conflict",
 ]
 
-from persista.store.base import BaseStore
+from persista.store.base import AsyncBaseStore, BaseStore
 from persista.store.duckdb import BaseDuckDBStore, DuckDBStore, TypedDuckDBStore
 from persista.store.in_memory import InMemoryStore
 from persista.store.postgres import BasePostgresStore, PostgresStore, TypedPostgresStore
