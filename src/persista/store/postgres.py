@@ -280,12 +280,11 @@ class PostgresStore(BasePostgresStore):
     """
 
     def _create_table_sql(self) -> sql.Composed:
-        return sql.SQL("""
-            CREATE TABLE IF NOT EXISTS {table} (
-                key   TEXT PRIMARY KEY,
-                value JSONB NOT NULL
-            )
-            """).format(table=self._table_ident)
+        return sql.SQL("""CREATE TABLE IF NOT EXISTS {table} ( key
+                       TEXT PRIMARY KEY,
+
+                       value JSONB NOT NULL )
+                       """).format(table=self._table_ident)
 
     def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
         return row[1]
