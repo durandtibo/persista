@@ -10,7 +10,7 @@ from persista.utils.imports import is_redis_available
 from tests.integration.store.redis_helpers import REDIS_URL, redis_server_available
 
 if TYPE_CHECKING:
-    from persista.store.redis import BaseRedisStore
+    from persista.store import BaseRedisStore
 
 if is_redis_available():
     from persista.store import PickleRedisStore, RedisStore

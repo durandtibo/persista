@@ -12,7 +12,7 @@ from persista.utils.imports import is_duckdb_available
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from persista.store.duckdb import BaseDuckDBStore
+    from persista.store import BaseDuckDBStore
 
 if is_duckdb_available():
     import duckdb

@@ -5,13 +5,12 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.store.base import AsyncBaseStore
-from persista.store.validation import normalize_on_conflict, validate_batch_size
+from persista.store import AsyncBaseStore, normalize_on_conflict, validate_batch_size
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 
-    from persista.store.types import OnConflict
+    from persista.store import OnConflict
 
 
 class AsyncInMemoryStore(AsyncBaseStore):
