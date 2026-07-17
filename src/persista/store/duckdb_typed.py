@@ -9,20 +9,12 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from coola.utils.batching import batchify
-
 from persista.store.duckdb import BaseDuckDBStore
-from persista.store.validation import (
-    normalize_on_conflict,
-    validate_batch_size,
-    validate_field_name,
-)
+from persista.store.validation import validate_field_name
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator, Mapping
+    from collections.abc import Mapping
     from pathlib import Path
-
-    from persista.store.types import OnConflict
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -74,6 +66,8 @@ class TypedDuckDBStore(BaseDuckDBStore):
         ```
     """
 
+    _key_column = _KEY_COLUMN
+
     def __init__(
         self,
         path: Path | str = ":memory:",
@@ -92,52 +86,11 @@ class TypedDuckDBStore(BaseDuckDBStore):
         if not self._kwargs.get("read_only", False):
             self._conn.execute(self._build_create_table())
 
-    def get(self, key: str) -> dict[str, Any] | None:
-        row = self._conn.execute(
-            f"SELECT * FROM store WHERE {_KEY_COLUMN} = ?",  # noqa: S608
-            [key],
-        ).fetchone()
-        return self._row_to_value(row) if row else None
+    def _select_columns(self) -> list[str]:
+        return [_KEY_COLUMN, *self._schema.keys(), "extra"]
 
-    def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
-        if not keys:
-            return []
-        placeholders = ", ".join("?" * len(keys))
-        rows = self._conn.execute(
-            f"SELECT * FROM store WHERE {_KEY_COLUMN} IN ({placeholders})",  # noqa: S608
-            keys,
-        ).fetchall()
-        by_key = {row[0]: self._row_to_value(row) for row in rows}
-        return [by_key.get(key) for key in keys]
-
-    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
-        self.set_many({key: value}, on_conflict=on_conflict)
-
-    def set_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
-    ) -> None:
-        if not items:
-            return
-        on_conflict = normalize_on_conflict(on_conflict)
-        if on_conflict == "overwrite":
-            self._set_many(items)
-            return
-
-        conflicts = set(self.contains_many(list(items))[0])
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
-            raise KeyError(msg)
-
-        to_write: dict[str, dict[str, Any]] = {}
-        for key, value in items.items():
-            if key in conflicts:
-                if on_conflict == "skip":
-                    continue
-                to_write[key] = {**(self.get(key) or {}), **value}
-                continue
-            to_write[key] = value
-
-        self._set_many(to_write)
+    def _row_to_kv(self, row: tuple) -> tuple[str, dict[str, Any]]:
+        return row[0], self._row_to_value(row)
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
@@ -168,46 +121,6 @@ class TypedDuckDBStore(BaseDuckDBStore):
             values,
         ).fetchall()
         return [self._row_to_value(row) for row in rows]
-
-    def delete(self, key: str) -> None:
-        self._conn.execute(f"DELETE FROM store WHERE {_KEY_COLUMN} = ?", [key])  # noqa: S608
-
-    def delete_many(self, keys: list[str]) -> None:
-        if not keys:
-            return
-        placeholders = ", ".join("?" * len(keys))
-        self._conn.execute(
-            f"DELETE FROM store WHERE {_KEY_COLUMN} IN ({placeholders})",  # noqa: S608
-            keys,
-        )
-
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
-        if not keys:
-            return [], []
-        placeholders = ", ".join("?" * len(keys))
-        existing = {
-            row[0]
-            for row in self._conn.execute(
-                f"SELECT {_KEY_COLUMN} FROM store WHERE {_KEY_COLUMN} IN ({placeholders})",  # noqa: S608
-                keys,
-            ).fetchall()
-        }
-        found = [key for key in keys if key in existing]
-        missing = [key for key in keys if key not in existing]
-        return found, missing
-
-    def keys(self) -> Iterator[str]:
-        rows = self._conn.execute(f"SELECT {_KEY_COLUMN} FROM store").fetchall()  # noqa: S608
-        for (key,) in rows:
-            yield key
-
-    def iter_batches(
-        self, batch_size: int = 32
-    ) -> Generator[dict[str, dict[str, Any]], None, None]:
-        validate_batch_size(batch_size)
-        rows = self._conn.execute("SELECT * FROM store").fetchall()
-        for batch in batchify(rows, size=batch_size):
-            yield {row[0]: self._row_to_value(row) for row in batch}
 
     # ---------------------------------------------------------------------------
     # Private helpers
