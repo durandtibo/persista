@@ -228,7 +228,8 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         query = sql.SQL("SELECT COUNT(*) FROM {table}").format(table=self._table_ident)
         with self._conn.cursor() as cur:
             cur.execute(query)
-            return cur.fetchone()[0]
+            row = cur.fetchone()
+            return row[0] if row else 0
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"table": self._table, "closed": self._closed}
@@ -367,7 +368,10 @@ class TypedPostgresStore(BasePostgresStore):
 
     def _create_table_sql(self) -> sql.Composed:
         typed_cols = sql.SQL("").join(
-            sql.SQL(", {col} {dtype}").format(col=sql.Identifier(name), dtype=sql.SQL(dtype))
+            sql.SQL(", {col} {dtype}").format(
+                col=sql.Identifier(name),
+                dtype=sql.SQL(dtype),  # pyright: ignore[reportArgumentType]
+            )
             for name, dtype in self._schema.items()
         )
         return sql.SQL(
