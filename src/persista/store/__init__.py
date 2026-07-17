@@ -7,6 +7,7 @@ __all__ = [
     "AsyncBaseStore",
     "AsyncInMemoryStore",
     "AsyncSQLiteStore",
+    "AsyncTypedSQLiteStore",
     "BaseDuckDBStore",
     "BasePostgresStore",
     "BaseRedisStore",
@@ -29,7 +30,11 @@ __all__ = [
 ]
 
 from persista.store.async_in_memory import AsyncInMemoryStore
-from persista.store.async_sqlite import AsyncBaseSQLiteStore, AsyncSQLiteStore
+from persista.store.async_sqlite import (
+    AsyncBaseSQLiteStore,
+    AsyncSQLiteStore,
+    AsyncTypedSQLiteStore,
+)
 from persista.store.base import AsyncBaseStore, BaseStore
 from persista.store.duckdb import BaseDuckDBStore, DuckDBStore, TypedDuckDBStore
 from persista.store.in_memory import InMemoryStore
