@@ -8,6 +8,7 @@ import pytest
 from persista.store import PostgresStore, TypedPostgresStore
 
 psycopg = pytest.importorskip("psycopg")
+from psycopg.types.json import Jsonb  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -173,8 +174,14 @@ def test_typed_postgres_store_round_trip_split_schema_and_extra() -> None:
     store = _make_typed_postgres_store()
     value = {"author": "Alice", "title": "Intro to Python"}
     row = store._value_to_row("1", value)
-    assert row == ("1", "Alice", None, {"title": "Intro to Python"})
-    assert store._row_to_value(row) == value
+    # The overflow column is wrapped in Jsonb for outbound adaptation; a
+    # real SELECT decodes it back to a plain dict, which is what
+    # _row_to_value expects (it is never fed a Jsonb-wrapped row directly).
+    assert row[:3] == ("1", "Alice", None)
+    assert isinstance(row[3], Jsonb)
+    assert row[3].obj == {"title": "Intro to Python"}
+    decoded_row = (*row[:3], row[3].obj)
+    assert store._row_to_value(decoded_row) == value
 
 
 def test_typed_postgres_store_round_trip_empty_value() -> None:

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 if is_psycopg_available():  # pragma: no cover
     import psycopg
     from psycopg import sql
+    from psycopg.types.json import Jsonb
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -218,7 +219,12 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
         query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
-        with self._conn.cursor(name=f"iter_batches_{id(self)}") as cur:
+        # A named (server-side) cursor requires an explicit transaction
+        # block even on an autocommit connection.
+        with (
+            self._conn.transaction(),
+            self._conn.cursor(name=f"iter_batches_{id(self)}") as cur,
+        ):
             cur.itersize = batch_size
             cur.execute(query)
             for batch in batchify(cur, size=batch_size):
@@ -286,7 +292,9 @@ class PostgresStore(BasePostgresStore):
 
     def _build_filter_condition(self, key: str) -> sql.Composable:
         validate_field_name(key)
-        return sql.SQL("value->>{field} = %s").format(field=sql.Literal(key))
+        # value->>{field} extracts as text, so the bound parameter (which
+        # may be an int, bool, etc.) must be cast to text to compare.
+        return sql.SQL("value->>{field} = %s::text").format(field=sql.Literal(key))
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
@@ -295,7 +303,7 @@ class PostgresStore(BasePostgresStore):
                 "ON CONFLICT ({key_col}) DO UPDATE SET value = EXCLUDED.value"
             ).format(table=self._table_ident, key_col=sql.Identifier(self._key_column))
             with self._conn.cursor() as cur:
-                cur.executemany(query, list(items.items()))
+                cur.executemany(query, [(key, Jsonb(value)) for key, value in items.items()])
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
@@ -391,7 +399,9 @@ class TypedPostgresStore(BasePostgresStore):
         if key in self._schema:
             return sql.SQL("{col} = %s").format(col=sql.Identifier(key))
         validate_field_name(key)
-        return sql.SQL("extra->>{field} = %s").format(field=sql.Literal(key))
+        # extra->>{field} extracts as text, so the bound parameter (which
+        # may be an int, bool, etc.) must be cast to text to compare.
+        return sql.SQL("extra->>{field} = %s::text").format(field=sql.Literal(key))
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
@@ -425,4 +435,4 @@ class TypedPostgresStore(BasePostgresStore):
     def _value_to_row(self, key: str, value: dict[str, Any]) -> tuple[Any, ...]:
         known = [value.get(k) for k in self._schema]
         extra = {k: v for k, v in value.items() if k not in self._schema}
-        return (key, *known, extra or None)
+        return (key, *known, Jsonb(extra) if extra else None)

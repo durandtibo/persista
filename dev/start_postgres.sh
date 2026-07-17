@@ -57,8 +57,11 @@ elif command -v initdb &>/dev/null && command -v postgres &>/dev/null; then
 	echo "Initializing Postgres data directory at ${DATA_DIR}..."
 	# --locale=C avoids initdb's "could not find suitable text search
 	# configuration for locale" warning triggered by some macOS/UTF-8
-	# locale setups; it has no effect on the JSONB-based stores under test.
-	initdb -D "${DATA_DIR}" -U "${USER_NAME}" -A trust --locale=C >/dev/null
+	# locale setups. --encoding=UTF8 must be passed explicitly alongside
+	# it: without it, --locale=C makes initdb default to SQL_ASCII, which
+	# makes psycopg return raw bytes instead of decoded str for text
+	# columns.
+	initdb -D "${DATA_DIR}" -U "${USER_NAME}" -A trust --locale=C --encoding=UTF8 >/dev/null
 
 	if [[ "${DB_NAME}" != "postgres" ]]; then
 		# createdb needs a running server, so start one briefly to create it.
