@@ -12,6 +12,8 @@ __all__ = [
     "duckdb_not_available",
     "faker_available",
     "faker_not_available",
+    "lmdb_available",
+    "lmdb_not_available",
     "psycopg_available",
     "psycopg_not_available",
     "redis_available",
@@ -24,6 +26,7 @@ from persista.utils.imports import (
     is_aiosqlite_available,
     is_duckdb_available,
     is_faker_available,
+    is_lmdb_available,
     is_psycopg_available,
     is_redis_available,
 )
@@ -47,6 +50,13 @@ faker_available: pytest.MarkDecorator = pytest.mark.skipif(
 )
 faker_not_available: pytest.MarkDecorator = pytest.mark.skipif(
     is_faker_available(), reason="Skip if faker is available"
+)
+
+lmdb_available: pytest.MarkDecorator = pytest.mark.skipif(
+    not is_lmdb_available(), reason="Requires lmdb"
+)
+lmdb_not_available: pytest.MarkDecorator = pytest.mark.skipif(
+    is_lmdb_available(), reason="Skip if lmdb is available"
 )
 
 psycopg_available: pytest.MarkDecorator = pytest.mark.skipif(
