@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 fakeredis = pytest.importorskip("fakeredis")
 
 
+MODULE = "persista.store.async_redis"
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -23,7 +25,7 @@ def _use_fake_redis(monkeypatch: pytest.MonkeyPatch) -> None:
     # AsyncRedisStore/AsyncPickleRedisStore only differ in serialization, and
     # both request the correct `decode_responses` mode via `from_url` kwargs.
     monkeypatch.setattr(
-        "persista.store.async_redis.redis.Redis.from_url",
+        f"{MODULE}.redis.Redis.from_url",
         lambda *_args, **kwargs: fakeredis.aioredis.FakeRedis(
             decode_responses=kwargs.get("decode_responses", True)
         ),
@@ -673,7 +675,7 @@ async def test_context_manager_multiple_open_close_same_server(
     previously written data is still there."""
     server = fakeredis.FakeServer()
     monkeypatch.setattr(
-        "persista.store.async_redis.redis.Redis.from_url",
+        f"{MODULE}.redis.Redis.from_url",
         lambda *_args, **kwargs: fakeredis.aioredis.FakeRedis(
             server=server, decode_responses=kwargs.get("decode_responses", True)
         ),

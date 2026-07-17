@@ -25,6 +25,8 @@ psycopg = pytest.importorskip("psycopg")
 
 logger = logging.getLogger(__name__)
 
+MODULE = "persista.store.postgres"
+
 
 # ---------------------------------------------------------------------------
 # Fake psycopg connection
@@ -195,7 +197,7 @@ class FakeConnection:
 def _connect(store_cls: type[BasePostgresStore], table: str = "store", **kwargs: Any) -> Any:
     """Construct a store against a fresh :class:`FakeConnection`."""
     conn = FakeConnection()
-    with patch("persista.store.postgres.psycopg.connect", return_value=conn):
+    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
         store = store_cls("postgresql://x", table=table, **kwargs)
     conn.store = store
     return store
@@ -259,14 +261,14 @@ def items() -> dict[str, dict[str, Any]]:
 
 
 def test_invalid_table_name_raises_before_connect(store_cls: type[BasePostgresStore]) -> None:
-    with patch("persista.store.postgres.psycopg.connect") as mock_connect:
+    with patch(f"{MODULE}.psycopg.connect") as mock_connect:
         with pytest.raises(ValueError, match="Invalid table name"):
             store_cls("postgresql://x", table="bad; DROP TABLE store;--")
         mock_connect.assert_not_called()
 
 
 def test_valid_table_name_calls_connect(store_cls: type[BasePostgresStore]) -> None:
-    with patch("persista.store.postgres.psycopg.connect") as mock_connect:
+    with patch(f"{MODULE}.psycopg.connect") as mock_connect:
         mock_connect.return_value = MagicMock()
         store_cls("postgresql://x", table="mytable")
         mock_connect.assert_called_once_with("postgresql://x", autocommit=True)
@@ -283,7 +285,7 @@ def test_init_accepts_psycopg_connect_kwargs(store_cls: type[BasePostgresStore])
 
 def test_two_stores_different_tables_are_isolated(store_cls: type[BasePostgresStore]) -> None:
     conn = FakeConnection()
-    with patch("persista.store.postgres.psycopg.connect", return_value=conn):
+    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
         store_a = store_cls("postgresql://x", table="store_a")
         store_b = store_cls("postgresql://x", table="store_b")
     conn.store = store_a
@@ -1003,7 +1005,7 @@ def test_iter_batches_with_typed_schema(
 
 @pytest.fixture
 def plain_store() -> PostgresStore:
-    with patch("persista.store.postgres.psycopg.connect") as mock_connect:
+    with patch(f"{MODULE}.psycopg.connect") as mock_connect:
         mock_connect.return_value = MagicMock()
         store = PostgresStore("postgresql://x", table="store")
     store._conn.reset_mock()
@@ -1039,7 +1041,7 @@ def test_plain_build_filter_condition_invalid_field_name(plain_store: PostgresSt
 
 @pytest.fixture
 def typed_sql_store() -> TypedPostgresStore:
-    with patch("persista.store.postgres.psycopg.connect") as mock_connect:
+    with patch(f"{MODULE}.psycopg.connect") as mock_connect:
         mock_connect.return_value = MagicMock()
         store = TypedPostgresStore(
             "postgresql://x", table="store", value_schema={"author": "TEXT", "year": "INTEGER"}
