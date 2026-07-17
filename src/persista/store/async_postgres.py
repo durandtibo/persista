@@ -369,9 +369,7 @@ class AsyncPostgresStore(AsyncBasePostgresStore):
                 "ON CONFLICT ({key_col}) DO UPDATE SET value = EXCLUDED.value"
             ).format(table=self._table_ident, key_col=sql.Identifier(self._key_column))
             async with self._conn.cursor() as cur:
-                await cur.executemany(
-                    query, [(key, Jsonb(value)) for key, value in items.items()]
-                )
+                await cur.executemany(query, [(key, Jsonb(value)) for key, value in items.items()])
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
@@ -380,8 +378,8 @@ _KEY_COLUMN = "_KEY_"
 
 
 class AsyncTypedPostgresStore(AsyncBasePostgresStore):
-    """An asynchronous Postgres-backed key-value store with an
-    optional typed value schema.
+    """An asynchronous Postgres-backed key-value store with an optional
+    typed value schema.
 
     Persists values to a Postgres database and supports adding,
     retrieving, and filtering by value fields. An optional

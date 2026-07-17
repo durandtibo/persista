@@ -851,6 +851,18 @@ async def test_close_closes_underlying_connection(store: AsyncBasePostgresStore)
     assert store._conn.closed
 
 
+async def test_close_without_ever_connecting_is_safe(
+    store_cls: type[AsyncBasePostgresStore],
+) -> None:
+    """A store that never ran a query never established a connection
+    (see the class docstring), so ``close()`` must tolerate ``_conn``
+    still being ``None``."""
+    store = store_cls("postgresql://x", table="store")
+    assert store._conn is None
+    await store.close()
+    assert store.closed
+
+
 async def test_close_is_idempotent(store: AsyncBasePostgresStore) -> None:
     await store.close()
     await store.close()  # should not raise
@@ -889,6 +901,28 @@ async def test_context_manager_closes_on_normal_exit(
         await store.set("1", {"text": "hello"})
         assert await store.count() == 1
     assert store._conn.closed
+
+
+async def test_context_manager_reopens_closed_store(
+    store_cls: type[AsyncBasePostgresStore],
+) -> None:
+    """Reopening a closed store via ``__aenter__`` must reset its
+    connection state so the next query reconnects and recreates the
+    schema, rather than reusing the closed connection."""
+    store = await _connect(store_cls)
+    await store.close()
+    assert store.closed
+
+    async with store:
+        assert not store.closed
+        assert store._conn is None
+        conn = FakeConnection()
+
+        async def _fake_connect(*_args: Any, **_kwargs: Any) -> FakeConnection:
+            return conn
+
+        with patch(f"{MODULE}.psycopg.AsyncConnection.connect", side_effect=_fake_connect):
+            assert await store.count() == 0
 
 
 async def test_context_manager_closes_on_exception(

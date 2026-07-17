@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.store import AsyncBasePostgresStore, AsyncPostgresStore, AsyncTypedPostgresStore
+from persista.store import (
+    AsyncBasePostgresStore,
+    AsyncPostgresStore,
+    AsyncTypedPostgresStore,
+)
 from persista.testing.fixtures import psycopg_available
 from persista.utils.imports import is_psycopg_available
 
@@ -794,9 +798,7 @@ async def test_init_no_schema_stores_everything_in_extra(
     }
 
 
-async def test_init_schema_with_reserved_key_column_raises(
-    conninfo: str, table_name: str
-) -> None:
+async def test_init_schema_with_reserved_key_column_raises(conninfo: str, table_name: str) -> None:
     with pytest.raises(ValueError, match=r"reserved key column name"):
         AsyncTypedPostgresStore(conninfo, table=table_name, value_schema={"_KEY_": "TEXT"})
 
