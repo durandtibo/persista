@@ -3,17 +3,21 @@ r"""Contain utilities for optional dependencies."""
 from __future__ import annotations
 
 __all__ = [
+    "aiosqlite_available",
+    "check_aiosqlite",
     "check_duckdb",
     "check_faker",
     "check_psycopg",
     "check_redis",
     "duckdb_available",
     "faker_available",
+    "is_aiosqlite_available",
     "is_duckdb_available",
     "is_faker_available",
     "is_psycopg_available",
     "is_redis_available",
     "psycopg_available",
+    "raise_aiosqlite_missing_error",
     "raise_duckdb_missing_error",
     "raise_faker_missing_error",
     "raise_psycopg_missing_error",
@@ -21,6 +25,12 @@ __all__ = [
     "redis_available",
 ]
 
+from persista.utils.imports.aiosqlite import (
+    aiosqlite_available,
+    check_aiosqlite,
+    is_aiosqlite_available,
+    raise_aiosqlite_missing_error,
+)
 from persista.utils.imports.duckdb import (
     check_duckdb,
     duckdb_available,
