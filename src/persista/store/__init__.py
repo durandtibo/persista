@@ -14,6 +14,7 @@ __all__ = [
     "TypedSQLiteStore",
     "normalize_on_conflict",
     "validate_batch_size",
+    "validate_field_name",
     "validate_on_conflict",
 ]
 
@@ -27,5 +28,6 @@ from persista.store.types import OnConflict
 from persista.store.validation import (
     normalize_on_conflict,
     validate_batch_size,
+    validate_field_name,
     validate_on_conflict,
 )

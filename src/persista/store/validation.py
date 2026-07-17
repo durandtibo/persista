@@ -7,14 +7,18 @@ __all__ = [
     "ON_CONFLICT_VALUES",
     "normalize_on_conflict",
     "validate_batch_size",
+    "validate_field_name",
     "validate_on_conflict",
 ]
 
+import re
 from typing import cast, get_args
 
 from persista.store.types import OnConflict
 
 ON_CONFLICT_VALUES = sorted(get_args(OnConflict))
+
+_FIELD_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def normalize_on_conflict(on_conflict: str) -> OnConflict:
@@ -49,6 +53,28 @@ def validate_on_conflict(on_conflict: str) -> None:
     """
     if on_conflict not in ON_CONFLICT_VALUES:
         msg = f"Invalid on_conflict value: {on_conflict!r}. Valid values are: {ON_CONFLICT_VALUES}"
+        raise ValueError(msg)
+
+
+def validate_field_name(name: str) -> None:
+    """Validate that a value filter field name is safe to interpolate
+    into a SQL fragment.
+
+    ``BaseStore.filter`` implementations build SQL by interpolating
+    the field name directly (only the filter value is passed as a
+    bound parameter), so an unrestricted field name is a SQL
+    injection vector. Restricting it to a simple identifier shape
+    closes that off.
+
+    Args:
+        name: The field name to validate.
+
+    Raises:
+        ValueError: If ``name`` is not a valid identifier (letters,
+            digits, underscores, not starting with a digit).
+    """
+    if not _FIELD_NAME_PATTERN.match(name):
+        msg = f"Invalid filter field name: {name!r}. Field names must match {_FIELD_NAME_PATTERN.pattern!r}"
         raise ValueError(msg)
 
 

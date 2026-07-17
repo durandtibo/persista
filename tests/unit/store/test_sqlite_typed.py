@@ -439,6 +439,17 @@ def test_filter_no_match_returns_empty(
     assert typed_store.filter(author="Charlie") == []
 
 
+def test_filter_rejects_malicious_field_name(
+    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    """A non-schema field name is interpolated into the SQL (only the
+    value is bound), so anything but a plain identifier must be rejected
+    to prevent SQL injection."""
+    typed_store.set_many(items)
+    with pytest.raises(ValueError, match="Invalid filter field name"):
+        typed_store.filter(**{"x') OR 1=1 OR ('": "nonmatching"})
+
+
 def test_filter_extra_field(typed_store: TypedSQLiteStore) -> None:
     typed_store.set_many(
         {

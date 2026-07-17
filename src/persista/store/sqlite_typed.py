@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING, Any
 from coola.utils.batching import batchify
 
 from persista.store.sqlite import BaseSQLiteStore
-from persista.store.validation import normalize_on_conflict, validate_batch_size
+from persista.store.validation import (
+    normalize_on_conflict,
+    validate_batch_size,
+    validate_field_name,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator, Mapping
@@ -196,6 +200,7 @@ class TypedSQLiteStore(BaseSQLiteStore):
             if key in self._schema:
                 conditions.append(f"{key} = ?")
             else:
+                validate_field_name(key)
                 conditions.append(f"json_extract(extra, '$.{key}') = ?")
             values.append(value)
 
