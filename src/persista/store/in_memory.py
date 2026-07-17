@@ -79,6 +79,12 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
     ) -> None:
         on_conflict = normalize_on_conflict(on_conflict)
 
+        if on_conflict == "overwrite":
+            for key, value in items.items():
+                self._data[key] = copy.deepcopy(value)
+            logger.debug("Added/replaced %d key-value pair(s)", len(items))
+            return
+
         conflicts = [key for key in items if key in self._data]
         if conflicts and on_conflict == "raise":
             msg = f"Key(s) already exist in the store: {conflicts}"
@@ -88,9 +94,8 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
             if key in self._data:
                 if on_conflict == "skip":
                     continue
-                if on_conflict == "merge":
-                    self._data[key] = {**self._data[key], **copy.deepcopy(value)}
-                    continue
+                self._data[key] = {**self._data[key], **copy.deepcopy(value)}
+                continue
             self._data[key] = copy.deepcopy(value)
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
