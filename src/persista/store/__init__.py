@@ -3,8 +3,10 @@ r"""Contain stores."""
 from __future__ import annotations
 
 __all__ = [
+    "AsyncBaseSQLiteStore",
     "AsyncBaseStore",
     "AsyncInMemoryStore",
+    "AsyncSQLiteStore",
     "BaseDuckDBStore",
     "BasePostgresStore",
     "BaseRedisStore",
@@ -27,6 +29,7 @@ __all__ = [
 ]
 
 from persista.store.async_in_memory import AsyncInMemoryStore
+from persista.store.async_sqlite import AsyncBaseSQLiteStore, AsyncSQLiteStore
 from persista.store.base import AsyncBaseStore, BaseStore
 from persista.store.duckdb import BaseDuckDBStore, DuckDBStore, TypedDuckDBStore
 from persista.store.in_memory import InMemoryStore

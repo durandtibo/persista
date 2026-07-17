@@ -59,8 +59,8 @@ def is_aiosqlite_available() -> bool:
 
 
 def aiosqlite_available(fn: F) -> F:
-    r"""Implement a decorator to execute a function only if
-    ``aiosqlite`` package is installed.
+    r"""Implement a decorator to execute a function only if ``aiosqlite``
+    package is installed.
 
     Args:
         fn: The function to execute.
