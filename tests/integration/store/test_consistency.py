@@ -37,9 +37,7 @@ from persista.store import (
 )
 from persista.testing.fixtures import duckdb_available
 from persista.utils.imports import is_psycopg_available, is_redis_available
-
-if is_redis_available():
-    import redis
+from tests.integration.store.redis_helpers import REDIS_URL, redis_server_reachable
 
 if is_psycopg_available():
     import psycopg
@@ -49,8 +47,6 @@ try:
     from docker.errors import DockerException
 except ImportError:  # pragma: no cover
     DockerException = Exception
-
-REDIS_URL = os.environ.get("PERSISTA_TEST_REDIS_URL", "redis://localhost:6379/0")
 
 # PERSISTA_TEST_POSTGRES_URL lets a manually-managed server (e.g. one
 # started via `dev/start_postgres.sh`) be reused instead of paying the cost
@@ -106,16 +102,6 @@ def _get_postgres_conninfo() -> str | None:
     return _postgres_conninfo
 
 
-def _redis_server_reachable() -> bool:
-    if not is_redis_available():
-        return False
-    try:
-        redis.Redis.from_url(REDIS_URL, socket_connect_timeout=1).ping()
-    except redis.exceptions.RedisError:
-        return False
-    return True
-
-
 def _is_redis_store(store: BaseStore) -> bool:
     return is_redis_available() and isinstance(store, BaseRedisStore)
 
@@ -131,7 +117,7 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
     `pytest -k`/reports.
     """
     redis_skip = pytest.mark.skipif(
-        not _redis_server_reachable(), reason="Requires a reachable Redis server"
+        not redis_server_reachable(), reason="Requires a reachable Redis server"
     )
     postgres_conninfo = _get_postgres_conninfo()
     postgres_skip = pytest.mark.skipif(

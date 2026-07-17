@@ -15,7 +15,7 @@ from persista.utils.imports import is_psycopg_available
 if TYPE_CHECKING:
     from typing import Self
 
-    from persista.store.postgres import BasePostgresStore
+    from persista.store import BasePostgresStore
 
 
 if is_psycopg_available():
