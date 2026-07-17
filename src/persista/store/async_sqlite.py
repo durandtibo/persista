@@ -3,7 +3,7 @@ storing values as JSON."""
 
 from __future__ import annotations
 
-__all__ = ["AsyncBaseSQLiteStore", "AsyncSQLiteStore"]
+__all__ = ["AsyncBaseSQLiteStore", "AsyncSQLiteStore", "AsyncTypedSQLiteStore"]
 
 import json
 import logging
@@ -426,3 +426,129 @@ class AsyncSQLiteStore(AsyncBaseSQLiteStore):
             await self._conn.commit()
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
+
+_KEY_COLUMN = "_KEY_"
+
+
+class AsyncTypedSQLiteStore(AsyncBaseSQLiteStore):
+    """An asynchronous SQLite-backed key-value store with an optional
+    typed value schema.
+
+    Persists values to a SQLite database and supports adding,
+    retrieving, and filtering by value fields. An optional
+    ``value_schema`` maps known value field names to SQLite types.
+    Known fields are stored as typed columns for fast, index-friendly
+    queries. Any value fields not in the schema are stored in an
+    ``extra`` JSON overflow column, so nothing is lost. Mirrors
+    :class:`~persista.store.sqlite.TypedSQLiteStore`, but every
+    method is a coroutine, backed by :mod:`aiosqlite` instead of the
+    blocking :mod:`sqlite3` driver.
+
+    The constructor mirrors :func:`aiosqlite.connect` directly (plus
+    the ``value_schema`` argument). For the common case of opening a
+    file by path (optionally read-only), use
+    :meth:`~AsyncBaseSQLiteStore.from_path` instead.
+
+    Requires the optional ``aiosqlite`` dependency
+    (``pip install aiosqlite``).
+
+    Args:
+        database: The ``database`` argument passed to
+            ``aiosqlite.connect`` (path, ``":memory:"``, or ``file:``
+            URI).
+        value_schema: Optional mapping of value field names to SQLite
+            type strings (e.g. ``{"author": "TEXT", "year":
+            "INTEGER"}``). Fields in the schema get native typed
+            columns; all other value fields go into the ``extra``
+            JSON overflow column. Defaults to ``None``, which stores
+            every value field as JSON only.
+        **kwargs: Additional keyword arguments to pass to
+            ``aiosqlite.connect``.
+
+    Example:
+        ```pycon
+        >>> import asyncio
+        >>> from persista.store import AsyncTypedSQLiteStore
+        >>> async def main():
+        ...     schema = {"author": "TEXT", "year": "INTEGER", "category": "TEXT"}
+        ...     store = AsyncTypedSQLiteStore(":memory:", value_schema=schema)
+        ...     await store.set_many(
+        ...         {
+        ...             "1": {"title": "Intro to Python", "author": "Alice"},
+        ...             "2": {"title": "Advanced Python", "author": "Alice"},
+        ...             "3": {"title": "History of Rome", "author": "Bob"},
+        ...         }
+        ...     )
+        ...     result = await store.filter(author="Alice")
+        ...     print(len(result))
+        ...     await store.close()
+        ...
+        >>> asyncio.run(main())
+        2
+
+        ```
+    """
+
+    _key_column = _KEY_COLUMN
+
+    def __init__(
+        self,
+        database: Path | str = ":memory:",
+        value_schema: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        value_schema = value_schema or {}
+        if _KEY_COLUMN in value_schema:
+            msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
+            raise ValueError(msg)
+        self._schema: dict[str, str] = value_schema
+        super().__init__(database, **kwargs)
+
+    def _create_table_sql(self) -> str:
+        typed_cols = "".join(f", {name} {dtype}" for name, dtype in self._schema.items())
+        return (
+            f"CREATE TABLE IF NOT EXISTS store "
+            f"({_KEY_COLUMN} TEXT PRIMARY KEY{typed_cols}, extra JSON)"
+        )
+
+    def _row_to_value(self, row: sqlite3.Row) -> dict[str, Any]:
+        # row layout: key, [schema cols...], extra
+        schema_vals = dict(zip(self._schema.keys(), row[1 : 1 + len(self._schema)], strict=True))
+        extra_json = row[1 + len(self._schema)]
+        value = {k: v for k, v in schema_vals.items() if v is not None}
+        if extra_json:
+            value.update(json.loads(extra_json))
+        return value
+
+    def _build_filter_condition(self, key: str) -> str:
+        if key in self._schema:
+            return f"{key} = ?"
+        validate_field_name(key)
+        return f"json_extract(extra, '$.{key}') = ?"
+
+    async def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        if items:
+            await self._conn.executemany(
+                self._build_insert(),
+                [self._value_to_row(key, value) for key, value in items.items()],
+            )
+            await self._conn.commit()
+
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
+    # ---------------------------------------------------------------------------
+    # Private helpers
+    # ---------------------------------------------------------------------------
+
+    def _build_insert(self) -> str:
+        """Build the INSERT OR REPLACE statement from the schema."""
+        col_names = [_KEY_COLUMN, *self._schema.keys(), "extra"]
+        placeholders = ", ".join("?" * len(col_names))
+        return f"INSERT OR REPLACE INTO store ({', '.join(col_names)}) VALUES ({placeholders})"  # noqa: S608
+
+    def _value_to_row(self, key: str, value: dict[str, Any]) -> tuple:
+        """Convert a key-value pair to an INSERT row tuple."""
+        known = [value.get(k) for k in self._schema]
+        extra = {k: v for k, v in value.items() if k not in self._schema}
+        return (key, *known, json.dumps(extra) if extra else None)
