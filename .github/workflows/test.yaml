@@ -136,3 +136,51 @@ jobs:
           PERSISTA_TEST_REDIS_URL: redis://localhost:6379/0
         run: |
           inv integration-test
+
+
+  # Test PostgresStore/TypedPostgresStore against a live Postgres server (only
+  # supported on Linux-hosted runners, hence the separate job instead of a
+  # service on the OS matrix above)
+  postgres:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      max-parallel: 8
+      fail-fast: false
+      matrix:
+        os: [
+          ubuntu-latest,
+          ubuntu-24.04,
+          ubuntu-22.04,
+        ]
+        python-version: [ '3.14', '3.13', '3.12', '3.11', '3.10' ]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup python environment
+        uses: durandtibo/setup-venv-uv-action@v0.0.3
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run PostgresStore integration tests
+        env:
+          PERSISTA_TEST_POSTGRES_URL: postgresql://postgres@localhost:5432/postgres
+        run: |
+          inv integration-test
