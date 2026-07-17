@@ -79,12 +79,12 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     def _ensure_schema(self) -> None:
         """Create the store's table if it doesn't already exist.
 
-        Called once from ``__init__`` and again each time the store
-        is reopened via :meth:`__enter__` after being closed. A
+        Called once from ``__init__`` and again each time the store is
+        reopened via :meth:`__enter__` after being closed. A
         ``:memory:`` database starts empty every time it is
-        (re)connected to, so this is what makes reopening a closed
-        in-memory store behave like a reset rather than resuming
-        where it left off.
+        (re)connected to, so this is what makes reopening a closed in-
+        memory store behave like a reset rather than resuming where it
+        left off.
         """
         try:
             self._conn.execute(self._create_table_sql())

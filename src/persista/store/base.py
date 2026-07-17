@@ -281,12 +281,11 @@ class AsyncBaseStore(ABC):
 
     Mirrors :class:`BaseStore`, but every method that touches the
     underlying store is a coroutine (or an async generator), for
-    implementations backed by an async driver (e.g. an async DB
-    client).
+    implementations backed by an async driver (e.g. an async DB client).
 
     Implementations are expected to support use as an async context
-    manager (``async with SomeStore(...) as store: ...``), which
-    calls :meth:`close` automatically on exit.
+    manager (``async with SomeStore(...) as store: ...``), which calls
+    :meth:`close` automatically on exit.
     """
 
     @abstractmethod
