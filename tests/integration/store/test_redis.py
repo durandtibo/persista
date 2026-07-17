@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import os
 from collections.abc import Generator, Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from persista.testing.fixtures import redis_available
 from persista.utils.imports import is_redis_available
 
+if TYPE_CHECKING:
+    from persista.store.redis import BaseRedisStore
+
 if is_redis_available():
     import redis
+
+    from persista.store import PickleRedisStore, RedisStore
 
 REDIS_URL = os.environ.get("PERSISTA_TEST_REDIS_URL", "redis://localhost:6379/0")
 
@@ -29,19 +34,24 @@ redis_server_available = pytest.mark.skipif(
     not _redis_server_reachable(), reason="Requires a reachable Redis server"
 )
 
-if is_redis_available():
-    from persista.store import RedisStore
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(
+    params=(["json", "pickle"] if is_redis_available() else []),
+)
+def store_cls(request: pytest.FixtureRequest) -> type[BaseRedisStore]:
+    return {"json": RedisStore, "pickle": PickleRedisStore}[request.param]
+
+
 @pytest.fixture
-def store() -> Generator[RedisStore, None, None]:
-    with RedisStore(REDIS_URL) as store:
-        # RedisStore has no namespace prefix, so clear any leftover keys
-        # before and after each test to keep tests isolated on a shared server.
+def store(store_cls: type[BaseRedisStore]) -> Generator[BaseRedisStore, None, None]:
+    with store_cls(REDIS_URL) as store:
+        # RedisStore/PickleRedisStore have no namespace prefix, so a shared
+        # server must be cleared before/after each test to keep tests
+        # isolated.
         store.delete_many(list(store.keys()))
         yield store
         store.delete_many(list(store.keys()))
@@ -77,14 +87,14 @@ def items() -> dict[str, dict[str, Any]]:
 
 @redis_available
 @redis_server_available
-def test_init_defaults(store: RedisStore) -> None:
+def test_init_defaults(store: BaseRedisStore) -> None:
     assert store.count() == 0
 
 
 @redis_available
 @redis_server_available
-def test_init_accepts_redis_from_url_kwargs() -> None:
-    with RedisStore(REDIS_URL, socket_timeout=5.0) as store:
+def test_init_accepts_redis_from_url_kwargs(store_cls: type[BaseRedisStore]) -> None:
+    with store_cls(REDIS_URL, socket_timeout=5.0) as store:
         store.delete_many(list(store.keys()))
         assert store.count() == 0
 
@@ -94,21 +104,21 @@ def test_init_accepts_redis_from_url_kwargs() -> None:
 
 @redis_available
 @redis_server_available
-def test_repr(store: RedisStore) -> None:
-    assert repr(store).startswith("RedisStore(")
+def test_repr(store: BaseRedisStore) -> None:
+    assert repr(store).startswith(f"{type(store).__name__}(")
 
 
 @redis_available
 @redis_server_available
-def test_str(store: RedisStore) -> None:
-    assert str(store).startswith("RedisStore(")
+def test_str(store: BaseRedisStore) -> None:
+    assert str(store).startswith(f"{type(store).__name__}(")
 
 
 @redis_available
 @redis_server_available
-def test_repr_after_close_does_not_raise(store: RedisStore) -> None:
+def test_repr_after_close_does_not_raise(store: BaseRedisStore) -> None:
     store.close()
-    assert repr(store).startswith("RedisStore(")
+    assert repr(store).startswith(f"{type(store).__name__}(")
 
 
 # --- set ---
@@ -116,21 +126,21 @@ def test_repr_after_close_does_not_raise(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_set_increases_count(store: RedisStore) -> None:
+def test_set_increases_count(store: BaseRedisStore) -> None:
     store.set("1", {"text": "hello"})
     assert store.count() == 1
 
 
 @redis_available
 @redis_server_available
-def test_set_stores_value(store: RedisStore) -> None:
+def test_set_stores_value(store: BaseRedisStore) -> None:
     store.set("1", {"text": "hello"})
     assert store.get("1") == {"text": "hello"}
 
 
 @redis_available
 @redis_server_available
-def test_set_default_overwrites_existing(store: RedisStore) -> None:
+def test_set_default_overwrites_existing(store: BaseRedisStore) -> None:
     store.set("1", {"text": "original"})
     store.set("1", {"text": "updated"})
     assert store.count() == 1
@@ -139,7 +149,7 @@ def test_set_default_overwrites_existing(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_set_on_conflict_raise(store: RedisStore) -> None:
+def test_set_on_conflict_raise(store: BaseRedisStore) -> None:
     store.set("1", {"text": "original"})
     with pytest.raises(KeyError, match=r"1"):
         store.set("1", {"text": "updated"}, on_conflict="raise")
@@ -148,7 +158,7 @@ def test_set_on_conflict_raise(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_set_on_conflict_skip(store: RedisStore) -> None:
+def test_set_on_conflict_skip(store: BaseRedisStore) -> None:
     store.set("1", {"text": "original"})
     store.set("1", {"text": "updated"}, on_conflict="skip")
     assert store.get("1") == {"text": "original"}
@@ -156,7 +166,7 @@ def test_set_on_conflict_skip(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_set_on_conflict_overwrite(store: RedisStore) -> None:
+def test_set_on_conflict_overwrite(store: BaseRedisStore) -> None:
     store.set("1", {"text": "original"})
     store.set("1", {"text": "updated"}, on_conflict="overwrite")
     assert store.get("1") == {"text": "updated"}
@@ -164,7 +174,7 @@ def test_set_on_conflict_overwrite(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_set_on_conflict_merge(store: RedisStore) -> None:
+def test_set_on_conflict_merge(store: BaseRedisStore) -> None:
     store.set("1", {"text": "original", "author": "Alice"})
     store.set("1", {"text": "updated"}, on_conflict="merge")
     assert store.get("1") == {"text": "updated", "author": "Alice"}
@@ -172,7 +182,7 @@ def test_set_on_conflict_merge(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_set_on_conflict_invalid_raises(store: RedisStore) -> None:
+def test_set_on_conflict_invalid_raises(store: BaseRedisStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
         store.set("1", {"text": "hello"}, on_conflict="bogus")
 
@@ -182,21 +192,21 @@ def test_set_on_conflict_invalid_raises(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_set_many_increases_count(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_set_many_increases_count(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     assert store.count() == len(items)
 
 
 @redis_available
 @redis_server_available
-def test_set_many_empty_is_no_op(store: RedisStore) -> None:
+def test_set_many_empty_is_no_op(store: BaseRedisStore) -> None:
     store.set_many({})
     assert store.count() == 0
 
 
 @redis_available
 @redis_server_available
-def test_set_many_on_conflict_raise(store: RedisStore) -> None:
+def test_set_many_on_conflict_raise(store: BaseRedisStore) -> None:
     store.set_many({"1": {"text": "original"}, "2": {"text": "other"}})
     with pytest.raises(KeyError, match=r"1"):
         store.set_many({"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise")
@@ -206,7 +216,7 @@ def test_set_many_on_conflict_raise(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_set_many_on_conflict_skip(store: RedisStore) -> None:
+def test_set_many_on_conflict_skip(store: BaseRedisStore) -> None:
     store.set_many({"1": {"text": "original"}})
     store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
     assert store.get("1") == {"text": "original"}
@@ -215,7 +225,7 @@ def test_set_many_on_conflict_skip(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_set_many_on_conflict_merge(store: RedisStore) -> None:
+def test_set_many_on_conflict_merge(store: BaseRedisStore) -> None:
     store.set_many({"1": {"text": "original", "author": "Alice"}})
     store.set_many({"1": {"text": "updated"}}, on_conflict="merge")
     assert store.get("1") == {"text": "updated", "author": "Alice"}
@@ -226,7 +236,7 @@ def test_set_many_on_conflict_merge(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_set_batches_writes_all_pairs(store: RedisStore) -> None:
+def test_set_batches_writes_all_pairs(store: BaseRedisStore) -> None:
     store.set_batches([("1", {"v": 1}), ("2", {"v": 2}), ("3", {"v": 3})], batch_size=2)
     assert store.count() == 3
     assert store.get("2") == {"v": 2}
@@ -237,13 +247,13 @@ def test_set_batches_writes_all_pairs(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_get_missing_key_returns_none(store: RedisStore) -> None:
+def test_get_missing_key_returns_none(store: BaseRedisStore) -> None:
     assert store.get("nonexistent") is None
 
 
 @redis_available
 @redis_server_available
-def test_get_many_preserves_order(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_get_many_preserves_order(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     result = store.get_many(["3", "1", "2"])
     assert result == [items["3"], items["1"], items["2"]]
@@ -252,7 +262,7 @@ def test_get_many_preserves_order(store: RedisStore, items: dict[str, dict[str, 
 @redis_available
 @redis_server_available
 def test_get_many_returns_none_for_missing(
-    store: RedisStore, items: dict[str, dict[str, Any]]
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
     result = store.get_many(["1", "99", "2"])
@@ -261,7 +271,7 @@ def test_get_many_returns_none_for_missing(
 
 @redis_available
 @redis_server_available
-def test_get_many_empty_list_returns_empty_list(store: RedisStore) -> None:
+def test_get_many_empty_list_returns_empty_list(store: BaseRedisStore) -> None:
     assert store.get_many([]) == []
 
 
@@ -270,14 +280,16 @@ def test_get_many_empty_list_returns_empty_list(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_filter_no_args_returns_all(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_filter_no_args_returns_all(
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
     store.set_many(items)
     assert len(store.filter()) == len(items)
 
 
 @redis_available
 @redis_server_available
-def test_filter_single_field(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_filter_single_field(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     result = store.filter(author="Alice")
     assert all(r["author"] == "Alice" for r in result)
@@ -286,7 +298,7 @@ def test_filter_single_field(store: RedisStore, items: dict[str, dict[str, Any]]
 
 @redis_available
 @redis_server_available
-def test_filter_multiple_fields(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_filter_multiple_fields(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     result = store.filter(author="Alice", category="Programming")
     assert len(result) == 2
@@ -294,14 +306,18 @@ def test_filter_multiple_fields(store: RedisStore, items: dict[str, dict[str, An
 
 @redis_available
 @redis_server_available
-def test_filter_no_match_returns_empty(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_filter_no_match_returns_empty(
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
     store.set_many(items)
     assert store.filter(author="Charlie") == []
 
 
 @redis_available
 @redis_server_available
-def test_filter_integer_field_value(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_filter_integer_field_value(
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
     store.set_many(items)
     result = store.filter(year=2022)
     assert len(result) == 1
@@ -313,7 +329,7 @@ def test_filter_integer_field_value(store: RedisStore, items: dict[str, dict[str
 
 @redis_available
 @redis_server_available
-def test_delete_removes_value(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_delete_removes_value(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     store.delete("1")
     assert store.count() == len(items) - 1
@@ -322,13 +338,15 @@ def test_delete_removes_value(store: RedisStore, items: dict[str, dict[str, Any]
 
 @redis_available
 @redis_server_available
-def test_delete_nonexistent_is_silent(store: RedisStore) -> None:
+def test_delete_nonexistent_is_silent(store: BaseRedisStore) -> None:
     store.delete("nonexistent")
 
 
 @redis_available
 @redis_server_available
-def test_delete_many_removes_values(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_delete_many_removes_values(
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
     store.set_many(items)
     store.delete_many(["1", "3"])
     assert store.count() == len(items) - 2
@@ -339,7 +357,7 @@ def test_delete_many_removes_values(store: RedisStore, items: dict[str, dict[str
 @redis_available
 @redis_server_available
 def test_delete_many_empty_list_is_no_op(
-    store: RedisStore, items: dict[str, dict[str, Any]]
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
     store.delete_many([])
@@ -351,7 +369,7 @@ def test_delete_many_empty_list_is_no_op(
 
 @redis_available
 @redis_server_available
-def test_contains_many_mixed(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_contains_many_mixed(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     found, missing = store.contains_many(["1", "99", "3", "42"])
     assert sorted(found) == ["1", "3"]
@@ -360,7 +378,7 @@ def test_contains_many_mixed(store: RedisStore, items: dict[str, dict[str, Any]]
 
 @redis_available
 @redis_server_available
-def test_contains_many_empty_input_returns_empty_lists(store: RedisStore) -> None:
+def test_contains_many_empty_input_returns_empty_lists(store: BaseRedisStore) -> None:
     found, missing = store.contains_many([])
     assert found == []
     assert missing == []
@@ -371,14 +389,14 @@ def test_contains_many_empty_input_returns_empty_lists(store: RedisStore) -> Non
 
 @redis_available
 @redis_server_available
-def test_keys_returns_all_keys(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_keys_returns_all_keys(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     assert sorted(store.keys()) == sorted(items.keys())
 
 
 @redis_available
 @redis_server_available
-def test_values_returns_all_values(store: RedisStore, items: dict[str, dict[str, Any]]) -> None:
+def test_values_returns_all_values(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     result = list(store.values())
     assert len(result) == len(items)
@@ -390,20 +408,20 @@ def test_values_returns_all_values(store: RedisStore, items: dict[str, dict[str,
 
 @redis_available
 @redis_server_available
-def test_iter_batches_empty_store_yields_nothing(store: RedisStore) -> None:
+def test_iter_batches_empty_store_yields_nothing(store: BaseRedisStore) -> None:
     assert list(store.iter_batches()) == []
 
 
 @redis_available
 @redis_server_available
-def test_iter_batches_returns_generator(store: RedisStore) -> None:
+def test_iter_batches_returns_generator(store: BaseRedisStore) -> None:
     assert isinstance(store.iter_batches(), Iterator)
 
 
 @redis_available
 @redis_server_available
 def test_iter_batches_returns_all_key_value_pairs(
-    store: RedisStore, items: dict[str, dict[str, Any]]
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
     result: dict[str, dict[str, Any]] = {}
@@ -415,7 +433,7 @@ def test_iter_batches_returns_all_key_value_pairs(
 @redis_available
 @redis_server_available
 def test_iter_batches_yields_correct_batch_sizes(
-    store: RedisStore, items: dict[str, dict[str, Any]]
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
     batches = list(store.iter_batches(batch_size=2))
@@ -424,7 +442,7 @@ def test_iter_batches_yields_correct_batch_sizes(
 
 @redis_available
 @redis_server_available
-def test_iter_batches_zero_batch_size_raises(store: RedisStore) -> None:
+def test_iter_batches_zero_batch_size_raises(store: BaseRedisStore) -> None:
     with pytest.raises(ValueError, match="batch_size must be a positive integer"):
         list(store.iter_batches(batch_size=0))
 
@@ -434,29 +452,29 @@ def test_iter_batches_zero_batch_size_raises(store: RedisStore) -> None:
 
 @redis_available
 @redis_server_available
-def test_close_is_idempotent(store: RedisStore) -> None:
+def test_close_is_idempotent(store: BaseRedisStore) -> None:
     store.close()
     store.close()  # should not raise
 
 
 @redis_available
 @redis_server_available
-def test_close_returns_none(store: RedisStore) -> None:
+def test_close_returns_none(store: BaseRedisStore) -> None:
     assert store.close() is None
 
 
 @redis_available
 @redis_server_available
-def test_context_manager_returns_self() -> None:
-    with RedisStore(REDIS_URL) as store:
-        assert isinstance(store, RedisStore)
+def test_context_manager_returns_self(store_cls: type[BaseRedisStore]) -> None:
+    with store_cls(REDIS_URL) as store:
+        assert isinstance(store, store_cls)
         store.delete_many(list(store.keys()))
 
 
 @redis_available
 @redis_server_available
-def test_context_manager_usable_for_reads_and_writes() -> None:
-    with RedisStore(REDIS_URL) as store:
+def test_context_manager_usable_for_reads_and_writes(store_cls: type[BaseRedisStore]) -> None:
+    with store_cls(REDIS_URL) as store:
         store.delete_many(list(store.keys()))
         store.set_many(
             {
@@ -473,8 +491,8 @@ def test_context_manager_usable_for_reads_and_writes() -> None:
 
 @redis_available
 @redis_server_available
-def test_context_manager_multiple_open_close() -> None:
-    redis_store = RedisStore(REDIS_URL)
+def test_context_manager_multiple_open_close(store_cls: type[BaseRedisStore]) -> None:
+    redis_store = store_cls(REDIS_URL)
     try:
         with redis_store as store:
             store.delete_many(list(store.keys()))
