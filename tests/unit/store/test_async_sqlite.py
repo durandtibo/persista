@@ -8,6 +8,7 @@ from persista.store import AsyncBaseSQLiteStore, AsyncSQLiteStore, AsyncTypedSQL
 from persista.testing.fixtures import aiosqlite_available
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
     from pathlib import Path
 
 aiosqlite = pytest.importorskip("aiosqlite")
@@ -29,24 +30,27 @@ def store_cls(request: pytest.FixtureRequest) -> type[AsyncBaseSQLiteStore]:
 
 
 @pytest.fixture
-def store(store_cls: type[AsyncBaseSQLiteStore]) -> AsyncBaseSQLiteStore:
-    return store_cls(":memory:")
+async def store(store_cls: type[AsyncBaseSQLiteStore]) -> AsyncGenerator[AsyncBaseSQLiteStore]:
+    async with store_cls(":memory:") as store:
+        yield store
 
 
 @pytest.fixture
-def typed_store_no_schema() -> AsyncTypedSQLiteStore:
+async def typed_store_no_schema() -> AsyncGenerator[AsyncTypedSQLiteStore]:
     """In-memory AsyncTypedSQLiteStore with no schema (everything in
     `extra`)."""
-    return AsyncTypedSQLiteStore(":memory:")
+    async with AsyncTypedSQLiteStore(":memory:") as store:
+        yield store
 
 
 @pytest.fixture
-def typed_store() -> AsyncTypedSQLiteStore:
+async def typed_store() -> AsyncGenerator[AsyncTypedSQLiteStore]:
     """In-memory store with a typed schema."""
-    return AsyncTypedSQLiteStore(
+    async with AsyncTypedSQLiteStore(
         ":memory:",
         value_schema={"author": "TEXT", "year": "INTEGER", "category": "TEXT"},
-    )
+    ) as store:
+        yield store
 
 
 @pytest.fixture
