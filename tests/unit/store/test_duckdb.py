@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 if is_duckdb_available():
     import duckdb
 
+psycopg = pytest.importorskip("duckdb")
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
