@@ -305,6 +305,18 @@ def integration_test(c: Context, cov: bool = False) -> None:
 
 
 @task
+def start_redis(c: Context, port: int = 6379) -> None:
+    r"""Start a local Redis server for RedisStore integration tests.
+
+    Args:
+        c: The invoke context.
+        port: Port to bind the server to.
+    """
+    logger.info("🚀 Starting Redis server on port %s...", port)
+    c.run(f"dev/start_redis.sh {port}", pty=True)
+
+
+@task
 def show_installed_packages(c: Context) -> None:
     r"""Show the installed packages.
 
