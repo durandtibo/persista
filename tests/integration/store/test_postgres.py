@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.store import PostgresStore
+from persista.store import PostgresStore, TypedPostgresStore
 from persista.testing.fixtures import psycopg_available
 from persista.utils.imports import is_psycopg_available
 
@@ -213,3 +213,61 @@ class TestPostgresStore:
             store_a.set("1", {"text": "a"})
             assert store_b.get("1") is None
             assert store_b.count() == 0
+
+
+@pytest.fixture
+def typed_store_no_schema(conninfo: str, table_name: str) -> Generator[TypedPostgresStore, None, None]:
+    with TypedPostgresStore(conninfo, table=table_name) as store:
+        yield store
+
+
+@pytest.fixture
+def typed_store(conninfo: str, table_name: str) -> Generator[TypedPostgresStore, None, None]:
+    with TypedPostgresStore(
+        conninfo,
+        table=table_name,
+        value_schema={"author": "TEXT", "year": "INTEGER", "category": "TEXT"},
+    ) as store:
+        yield store
+
+
+@psycopg_available
+@docker_available
+class TestTypedPostgresStore:
+    def test_no_schema_stores_everything_in_extra(self, typed_store_no_schema: TypedPostgresStore) -> None:
+        typed_store_no_schema.set("1", {"title": "Intro to Python", "author": "Alice"})
+        assert typed_store_no_schema.get("1") == {"title": "Intro to Python", "author": "Alice"}
+
+    def test_schema_field_rejects_reserved_key_column(self, conninfo: str, table_name: str) -> None:
+        with pytest.raises(ValueError, match=r"reserved key column name"):
+            TypedPostgresStore(conninfo, table=table_name, value_schema={"_KEY_": "TEXT"})
+
+    def test_known_fields_and_extra_round_trip(self, typed_store: TypedPostgresStore) -> None:
+        value = {
+            "title": "Intro to Python",
+            "author": "Alice",
+            "year": 2022,
+            "category": "Programming",
+        }
+        typed_store.set("1", value)
+        assert typed_store.get("1") == value
+
+    def test_filter_on_typed_column(self, typed_store: TypedPostgresStore) -> None:
+        typed_store.set_many(
+            {
+                "1": {"title": "Intro to Python", "author": "Alice", "year": 2022},
+                "2": {"title": "History of Rome", "author": "Bob", "year": 2021},
+            }
+        )
+        assert len(typed_store.filter(author="Alice")) == 1
+
+    def test_filter_on_extra_field(self, typed_store: TypedPostgresStore) -> None:
+        typed_store.set("1", {"title": "Intro to Python", "author": "Alice", "publisher": "OReilly"})
+        assert len(typed_store.filter(publisher="OReilly")) == 1
+
+    def test_set_on_conflict_merge_preserves_typed_and_extra_fields(
+        self, typed_store: TypedPostgresStore
+    ) -> None:
+        typed_store.set("1", {"author": "Alice", "year": 2022, "publisher": "OReilly"})
+        typed_store.set("1", {"year": 2023}, on_conflict="merge")
+        assert typed_store.get("1") == {"author": "Alice", "year": 2023, "publisher": "OReilly"}

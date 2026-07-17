@@ -3,7 +3,7 @@ values as JSONB."""
 
 from __future__ import annotations
 
-__all__ = ["BasePostgresStore", "PostgresStore"]
+__all__ = ["BasePostgresStore", "PostgresStore", "TypedPostgresStore"]
 
 import logging
 from abc import abstractmethod
@@ -299,3 +299,124 @@ class PostgresStore(BasePostgresStore):
                 cur.executemany(query, list(items.items()))
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
+
+_KEY_COLUMN = "_KEY_"
+
+
+class TypedPostgresStore(BasePostgresStore):
+    """A Postgres-backed key-value store with an optional typed value
+    schema.
+
+    Persists values to a Postgres database and supports adding,
+    retrieving, and filtering by value fields. An optional
+    ``value_schema`` maps known value field names to Postgres types.
+    Known fields are stored as typed columns for fast, index-friendly
+    queries. Any value fields not in the schema are stored in an
+    ``extra`` JSONB overflow column, so nothing is lost. Mirrors
+    :class:`~persista.store.sqlite.TypedSQLiteStore`.
+
+    Args:
+        conninfo: The connection string/DSN passed to
+            ``psycopg.connect``.
+        table: The name of the table backing this store.
+        value_schema: Optional mapping of value field names to
+            Postgres type strings (e.g. ``{"author": "TEXT", "year":
+            "INTEGER"}``). Fields in the schema get native typed
+            columns; all other value fields go into the ``extra``
+            JSONB overflow column. Defaults to ``None``, which stores
+            every value field as JSONB only.
+        **kwargs: Additional keyword arguments to pass to
+            ``psycopg.connect``.
+
+    Example:
+        ```pycon
+        >>> from persista.store import TypedPostgresStore
+        >>> schema = {"author": "TEXT", "year": "INTEGER"}
+        >>> store = TypedPostgresStore(  # doctest: +SKIP
+        ...     "postgresql://user:pass@localhost/dbname", value_schema=schema
+        ... )
+        >>> store.set_many(  # doctest: +SKIP
+        ...     {
+        ...         "1": {"title": "Intro to Python", "author": "Alice", "year": 2022},
+        ...         "2": {"title": "History of Rome", "author": "Bob", "year": 2021},
+        ...     }
+        ... )
+        >>> len(store.filter(author="Alice"))  # doctest: +SKIP
+        1
+
+        ```
+    """
+
+    _key_column = _KEY_COLUMN
+
+    def __init__(
+        self,
+        conninfo: str,
+        *,
+        table: str = "store",
+        value_schema: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        value_schema = value_schema or {}
+        if _KEY_COLUMN in value_schema:
+            msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
+            raise ValueError(msg)
+        self._schema: dict[str, str] = value_schema
+        super().__init__(conninfo, table=table, **kwargs)
+
+    def _create_table_sql(self) -> sql.Composed:
+        typed_cols = sql.SQL("").join(
+            sql.SQL(", {col} {dtype}").format(col=sql.Identifier(name), dtype=sql.SQL(dtype))
+            for name, dtype in self._schema.items()
+        )
+        return sql.SQL(
+            "CREATE TABLE IF NOT EXISTS {table} ({key_col} TEXT PRIMARY KEY{typed_cols}, extra JSONB)"
+        ).format(table=self._table_ident, key_col=sql.Identifier(_KEY_COLUMN), typed_cols=typed_cols)
+
+    def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
+        # row layout: key, [schema cols...], extra
+        schema_vals = dict(zip(self._schema.keys(), row[1 : 1 + len(self._schema)], strict=True))
+        extra = row[1 + len(self._schema)]
+        value = {k: v for k, v in schema_vals.items() if v is not None}
+        if extra:
+            value.update(extra)
+        return value
+
+    def _build_filter_condition(self, key: str) -> sql.Composable:
+        if key in self._schema:
+            return sql.SQL("{col} = %s").format(col=sql.Identifier(key))
+        validate_field_name(key)
+        return sql.SQL("extra->>{field} = %s").format(field=sql.Literal(key))
+
+    def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        if items:
+            query = self._build_insert()
+            with self._conn.cursor() as cur:
+                cur.executemany(query, [self._value_to_row(key, value) for key, value in items.items()])
+
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
+    def _build_insert(self) -> sql.Composed:
+        col_names = [_KEY_COLUMN, *self._schema.keys(), "extra"]
+        columns = sql.SQL(", ").join(sql.Identifier(name) for name in col_names)
+        placeholders = sql.SQL(", ").join(sql.Placeholder() * len(col_names))
+        update_cols = sql.SQL(", ").join(
+            sql.SQL("{col} = EXCLUDED.{col}").format(col=sql.Identifier(name))
+            for name in [*self._schema.keys(), "extra"]
+        )
+        return sql.SQL(
+            "INSERT INTO {table} ({columns}) VALUES ({placeholders}) "
+            "ON CONFLICT ({key_col}) DO UPDATE SET {update_cols}"
+        ).format(
+            table=self._table_ident,
+            columns=columns,
+            placeholders=placeholders,
+            key_col=sql.Identifier(_KEY_COLUMN),
+            update_cols=update_cols,
+        )
+
+    def _value_to_row(self, key: str, value: dict[str, Any]) -> tuple[Any, ...]:
+        known = [value.get(k) for k in self._schema]
+        extra = {k: v for k, v in value.items() if k not in self._schema}
+        return (key, *known, extra or None)
