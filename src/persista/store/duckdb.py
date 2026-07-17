@@ -25,8 +25,7 @@ from persista.utils.imports import check_duckdb, is_duckdb_available
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator, Mapping
     from pathlib import Path
-
-    from typing_extensions import Self
+    from typing import Self
 
     from persista.store.types import OnConflict
 

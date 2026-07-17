@@ -19,8 +19,7 @@ from persista.utils.imports import check_redis, is_redis_available
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator, Mapping
-
-    from typing_extensions import Self
+    from typing import Self
 
     from persista.store.types import OnConflict
 
