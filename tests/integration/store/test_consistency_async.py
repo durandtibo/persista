@@ -16,21 +16,26 @@ Mirrors ``test_consistency.py``, but for the async store hierarchy.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 import pytest
 
 from persista.store import (
+    AsyncBasePostgresStore,
     AsyncBaseRedisStore,
     AsyncBaseStore,
     AsyncInMemoryStore,
     AsyncPickleRedisStore,
+    AsyncPostgresStore,
     AsyncRedisStore,
     AsyncSQLiteStore,
+    AsyncTypedPostgresStore,
     AsyncTypedSQLiteStore,
 )
 from persista.utils.imports import is_aiosqlite_available, is_redis_available
+from tests.integration.store.postgres_helpers import get_postgres_conninfo
 from tests.integration.store.redis_helpers import REDIS_URL, redis_server_reachable
 
 
@@ -38,18 +43,27 @@ def _is_redis_store(store: AsyncBaseStore) -> bool:
     return is_redis_available() and isinstance(store, AsyncBaseRedisStore)
 
 
+def _is_postgres_store(store: AsyncBaseStore) -> bool:
+    return isinstance(store, AsyncBasePostgresStore)
+
+
 def _store_factories() -> list[pytest.mark.ParameterSet]:
     r"""Return one ``pytest.param`` per async store backend.
 
     Each param wraps a zero-argument factory that creates a fresh, empty
     store instance. Stores whose optional dependency is not installed
-    (SQLite driver, Redis), or whose server is unreachable (Redis), are
+    (SQLite driver, Redis, Postgres), or whose server is unreachable
+    (Redis) or whose container could not be started (Postgres), are
     marked as skipped rather than omitted, so they are still visible (as
     skips) in `pytest -k`/reports.
     """
     aiosqlite_skip = pytest.mark.skipif(not is_aiosqlite_available(), reason="Requires aiosqlite")
     redis_skip = pytest.mark.skipif(
         not redis_server_reachable(), reason="Requires a reachable Redis server"
+    )
+    postgres_conninfo = get_postgres_conninfo()
+    postgres_skip = pytest.mark.skipif(
+        postgres_conninfo is None, reason="Requires Docker and psycopg"
     )
     return [
         pytest.param(AsyncInMemoryStore, id="in_memory"),
@@ -61,6 +75,16 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
         ),
         pytest.param(lambda: AsyncRedisStore(REDIS_URL), id="redis", marks=redis_skip),
         pytest.param(lambda: AsyncPickleRedisStore(REDIS_URL), id="pickle_redis", marks=redis_skip),
+        pytest.param(
+            lambda: AsyncPostgresStore(postgres_conninfo, table=f"store_{uuid.uuid4().hex}"),
+            id="postgres",
+            marks=postgres_skip,
+        ),
+        pytest.param(
+            lambda: AsyncTypedPostgresStore(postgres_conninfo, table=f"store_{uuid.uuid4().hex}"),
+            id="postgres_typed",
+            marks=postgres_skip,
+        ),
     ]
 
 
