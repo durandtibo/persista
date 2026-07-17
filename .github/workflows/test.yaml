@@ -125,3 +125,4 @@ jobs:
           PERSISTA_TEST_REDIS_URL: redis://localhost:6379/0
         run: |
           python -m pytest --xdoctest --timeout 60 tests/integration/store/test_redis.py
+          python -m pytest --xdoctest --timeout 60 tests/integration/store/test_consistency.py
