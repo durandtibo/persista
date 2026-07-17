@@ -6,17 +6,13 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from persista.store import DuckDBStore, TypedDuckDBStore
-from persista.utils.imports import is_duckdb_available
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from persista.store import BaseDuckDBStore
 
-if is_duckdb_available():
-    import duckdb
-
-psycopg = pytest.importorskip("duckdb")
+duckdb = pytest.importorskip("duckdb")
 
 # ---------------------------------------------------------------------------
 # Fixtures
