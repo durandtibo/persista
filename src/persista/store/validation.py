@@ -9,6 +9,7 @@ __all__ = [
     "validate_batch_size",
     "validate_field_name",
     "validate_on_conflict",
+    "validate_table_name",
 ]
 
 import re
@@ -75,6 +76,24 @@ def validate_field_name(name: str) -> None:
     """
     if not _FIELD_NAME_PATTERN.match(name):
         msg = f"Invalid filter field name: {name!r}. Field names must match {_FIELD_NAME_PATTERN.pattern!r}"
+        raise ValueError(msg)
+
+
+def validate_table_name(name: str) -> None:
+    """Validate that a value is safe to interpolate into SQL as a table
+    name.
+
+    Args:
+        name: The table name to validate.
+
+    Raises:
+        ValueError: If ``name`` is not a valid identifier (letters,
+            digits, underscores, not starting with a digit).
+    """
+    if not _FIELD_NAME_PATTERN.match(name):
+        msg = (
+            f"Invalid table name: {name!r}. Table names must match {_FIELD_NAME_PATTERN.pattern!r}"
+        )
         raise ValueError(msg)
 
 

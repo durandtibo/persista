@@ -3,7 +3,8 @@ r"""Consistency tests across every ``BaseStore`` implementation.
 Each concrete store (:class:`~persista.store.InMemoryStore`,
 :class:`~persista.store.SQLiteStore`, :class:`~persista.store.DuckDBStore`,
 :class:`~persista.store.RedisStore`,
-:class:`~persista.store.PickleRedisStore`) is expected to implement the
+:class:`~persista.store.PickleRedisStore`,
+:class:`~persista.store.PostgresStore`) is expected to implement the
 exact same behavior for the :class:`~persista.store.BaseStore` contract.
 The tests below are parametrized over every available backend (stores
 whose optional dependency is missing, or whose server is unreachable, are
@@ -13,7 +14,9 @@ pass -- identically for every implementation.
 
 from __future__ import annotations
 
+import atexit
 import os
+import uuid
 from collections.abc import Generator, Iterator
 from typing import Any
 
@@ -25,17 +28,82 @@ from persista.store import (
     DuckDBStore,
     InMemoryStore,
     PickleRedisStore,
+    PostgresStore,
     RedisStore,
     SQLiteStore,
     TypedDuckDBStore,
+    TypedPostgresStore,
     TypedSQLiteStore,
 )
-from persista.utils.imports import is_duckdb_available, is_redis_available
+from persista.testing.fixtures import duckdb_available
+from persista.utils.imports import is_psycopg_available, is_redis_available
 
 if is_redis_available():
     import redis
 
+if is_psycopg_available():
+    import psycopg
+    from testcontainers.postgres import PostgresContainer
+
+try:
+    from docker.errors import DockerException
+except ImportError:  # pragma: no cover
+    DockerException = Exception
+
 REDIS_URL = os.environ.get("PERSISTA_TEST_REDIS_URL", "redis://localhost:6379/0")
+
+# PERSISTA_TEST_POSTGRES_URL lets a manually-managed server (e.g. one
+# started via `dev/start_postgres.sh`) be reused instead of paying the cost
+# of a fresh testcontainers/Docker container every session. Mirrors
+# tests/integration/store/test_postgres.py.
+POSTGRES_URL = os.environ.get("PERSISTA_TEST_POSTGRES_URL")
+
+_postgres_conninfo: str | None = None
+_postgres_conninfo_resolved = False
+
+
+def _postgres_url_reachable(url: str) -> bool:
+    if not is_psycopg_available():
+        return False
+    try:
+        with psycopg.connect(url, connect_timeout=1):
+            return True
+    except psycopg.OperationalError:
+        return False
+
+
+def _get_postgres_conninfo() -> str | None:
+    r"""Return a Postgres conninfo, preferring
+    ``PERSISTA_TEST_POSTGRES_URL`` and otherwise lazily starting a
+    shared container.
+
+    ``None`` is returned (and cached) if psycopg is not installed, the
+    configured server is unreachable, or Docker is unavailable, so this
+    only pays the container-startup cost once per test session, and only
+    when Postgres tests can actually run.
+    """
+    global _postgres_conninfo, _postgres_conninfo_resolved
+    if _postgres_conninfo_resolved:
+        return _postgres_conninfo
+    _postgres_conninfo_resolved = True
+    if not is_psycopg_available():
+        return None
+    if POSTGRES_URL:
+        _postgres_conninfo = POSTGRES_URL if _postgres_url_reachable(POSTGRES_URL) else None
+        return _postgres_conninfo
+    try:
+        container = PostgresContainer("postgres:16-alpine")
+        container.start()
+    except DockerException:
+        return None
+    atexit.register(container.stop)
+    _postgres_conninfo = (
+        f"postgresql://{container.username}:{container.password}"
+        f"@{container.get_container_host_ip()}"
+        f":{container.get_exposed_port(5432)}"
+        f"/{container.dbname}"
+    )
+    return _postgres_conninfo
 
 
 def _redis_server_reachable() -> bool:
@@ -57,12 +125,17 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
 
     Each param wraps a zero-argument factory that creates a fresh, empty
     store instance. Stores whose optional dependency is not installed
-    (DuckDB, Redis), or whose server is unreachable (Redis), are marked
-    as skipped rather than omitted, so they are still visible (as skips)
-    in `pytest -k`/reports.
+    (DuckDB, Redis, Postgres), or whose server is unreachable (Redis) or
+    whose container could not be started (Postgres), are marked as
+    skipped rather than omitted, so they are still visible (as skips) in
+    `pytest -k`/reports.
     """
     redis_skip = pytest.mark.skipif(
         not _redis_server_reachable(), reason="Requires a reachable Redis server"
+    )
+    postgres_conninfo = _get_postgres_conninfo()
+    postgres_skip = pytest.mark.skipif(
+        postgres_conninfo is None, reason="Requires Docker and psycopg"
     )
     return [
         pytest.param(InMemoryStore, id="in_memory"),
@@ -71,15 +144,25 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
         pytest.param(
             lambda: DuckDBStore(":memory:"),
             id="duckdb",
-            marks=pytest.mark.skipif(not is_duckdb_available(), reason="Requires duckdb"),
+            marks=duckdb_available,
         ),
         pytest.param(
             lambda: TypedDuckDBStore(":memory:"),
             id="duckdb_typed",
-            marks=pytest.mark.skipif(not is_duckdb_available(), reason="Requires duckdb"),
+            marks=duckdb_available,
         ),
         pytest.param(lambda: RedisStore(REDIS_URL), id="redis", marks=redis_skip),
         pytest.param(lambda: PickleRedisStore(REDIS_URL), id="pickle_redis", marks=redis_skip),
+        pytest.param(
+            lambda: PostgresStore(postgres_conninfo, table=f"store_{uuid.uuid4().hex}"),
+            id="postgres",
+            marks=postgres_skip,
+        ),
+        pytest.param(
+            lambda: TypedPostgresStore(postgres_conninfo, table=f"store_{uuid.uuid4().hex}"),
+            id="postgres_typed",
+            marks=postgres_skip,
+        ),
     ]
 
 

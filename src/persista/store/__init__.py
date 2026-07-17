@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "BaseDuckDBStore",
+    "BasePostgresStore",
     "BaseRedisStore",
     "BaseSQLiteStore",
     "BaseStore",
@@ -11,9 +12,11 @@ __all__ = [
     "InMemoryStore",
     "OnConflict",
     "PickleRedisStore",
+    "PostgresStore",
     "RedisStore",
     "SQLiteStore",
     "TypedDuckDBStore",
+    "TypedPostgresStore",
     "TypedSQLiteStore",
     "normalize_on_conflict",
     "validate_batch_size",
@@ -24,6 +27,7 @@ __all__ = [
 from persista.store.base import BaseStore
 from persista.store.duckdb import BaseDuckDBStore, DuckDBStore, TypedDuckDBStore
 from persista.store.in_memory import InMemoryStore
+from persista.store.postgres import BasePostgresStore, PostgresStore, TypedPostgresStore
 from persista.store.redis import BaseRedisStore, PickleRedisStore, RedisStore
 from persista.store.sqlite import BaseSQLiteStore, SQLiteStore, TypedSQLiteStore
 from persista.store.types import OnConflict

@@ -10,7 +10,7 @@ from persista.store import (
     validate_field_name,
     validate_on_conflict,
 )
-from persista.store.validation import ON_CONFLICT_VALUES
+from persista.store.validation import ON_CONFLICT_VALUES, validate_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -134,3 +134,23 @@ def test_validate_field_name_valid(name: str) -> None:
 def test_validate_field_name_invalid(name: str) -> None:
     with pytest.raises(ValueError, match="Invalid filter field name"):
         validate_field_name(name)
+
+
+###############################
+#     validate_table_name      #
+###############################
+
+
+def test_validate_table_name_accepts_valid_identifier() -> None:
+    validate_table_name("store")
+    validate_table_name("_my_table_2")
+
+
+def test_validate_table_name_rejects_invalid_identifier() -> None:
+    with pytest.raises(ValueError, match=r"Invalid table name"):
+        validate_table_name("store; DROP TABLE store;--")
+
+
+def test_validate_table_name_rejects_leading_digit() -> None:
+    with pytest.raises(ValueError, match=r"Invalid table name"):
+        validate_table_name("2store")
