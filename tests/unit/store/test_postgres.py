@@ -822,6 +822,18 @@ def test_close_returns_none(store: BasePostgresStore) -> None:
     assert store.close() is None
 
 
+# --- closed ---
+
+
+def test_closed_false_before_close(store: BasePostgresStore) -> None:
+    assert store.closed is False
+
+
+def test_closed_true_after_close(store: BasePostgresStore) -> None:
+    store.close()
+    assert store.closed is True
+
+
 # --- context manager ---
 
 

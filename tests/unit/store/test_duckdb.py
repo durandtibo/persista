@@ -752,6 +752,20 @@ def test_close_returns_none(store: BaseDuckDBStore) -> None:
     assert store.close() is None
 
 
+# --- closed ---
+
+
+@duckdb_available
+def test_closed_false_before_close(store: BaseDuckDBStore) -> None:
+    assert store.closed is False
+
+
+@duckdb_available
+def test_closed_true_after_close(store: BaseDuckDBStore) -> None:
+    store.close()
+    assert store.closed is True
+
+
 # --- context manager ---
 
 
