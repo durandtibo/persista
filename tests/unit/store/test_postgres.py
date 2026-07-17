@@ -4,7 +4,7 @@ import contextlib
 import logging
 import re
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +13,8 @@ from persista.store import PostgresStore, TypedPostgresStore
 from persista.utils.imports import is_psycopg_available
 
 if TYPE_CHECKING:
+    from typing import Self
+
     from persista.store.postgres import BasePostgresStore
 
 
