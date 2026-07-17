@@ -10,12 +10,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from persista.store import PostgresStore, TypedPostgresStore
+from persista.utils.imports import is_psycopg_available
 
 if TYPE_CHECKING:
     from persista.store.postgres import BasePostgresStore
 
+
+if is_psycopg_available():
+    from psycopg.types.json import Jsonb
+
 psycopg = pytest.importorskip("psycopg")
-from psycopg.types.json import Jsonb  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
