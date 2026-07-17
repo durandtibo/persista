@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -13,58 +12,16 @@ from persista.store import (
 )
 from persista.testing.fixtures import psycopg_available
 from persista.utils.imports import is_psycopg_available
+from tests.integration.store.postgres_helpers import (
+    get_postgres_conninfo,
+    postgres_available,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator
 
 if is_psycopg_available():
     import psycopg
-    from testcontainers.postgres import PostgresContainer
-
-try:
-    from docker.errors import DockerException
-except ImportError:  # pragma: no cover
-    DockerException = Exception
-
-# PERSISTA_TEST_POSTGRES_URL lets a manually-managed server (e.g. one
-# started via `dev/start_postgres.sh`) be reused across test runs instead
-# of paying the cost of a fresh testcontainers/Docker container every
-# session. Falls back to spinning up a disposable Docker container, mirroring
-# tests/integration/store/test_postgres.py.
-POSTGRES_URL = os.environ.get(
-    "PERSISTA_TEST_POSTGRES_URL", "postgresql://postgres@localhost:5433/postgres"
-)
-
-
-def _postgres_url_reachable(url: str) -> bool:
-    if not is_psycopg_available():
-        return False
-    try:
-        with psycopg.connect(url, connect_timeout=1):
-            return True
-    except psycopg.OperationalError:
-        return False
-
-
-def _docker_available() -> bool:
-    if not is_psycopg_available():
-        return False
-    try:
-        container = PostgresContainer("postgres:16-alpine")
-        container.start()
-    except DockerException:
-        return False
-    container.stop()
-    return True
-
-
-if POSTGRES_URL:
-    postgres_available = pytest.mark.skipif(
-        not _postgres_url_reachable(POSTGRES_URL),
-        reason=f"Requires a reachable Postgres server at {POSTGRES_URL!r}",
-    )
-else:
-    postgres_available = pytest.mark.skipif(not _docker_available(), reason="Requires Docker")
 
 pytestmark = [psycopg_available, postgres_available]
 
@@ -75,17 +32,8 @@ pytestmark = [psycopg_available, postgres_available]
 
 
 @pytest.fixture(scope="session")
-def conninfo() -> Generator[str, None, None]:
-    if POSTGRES_URL:
-        yield POSTGRES_URL
-        return
-    with PostgresContainer("postgres:16-alpine") as container:
-        yield (
-            f"postgresql://{container.username}:{container.password}"
-            f"@{container.get_container_host_ip()}"
-            f":{container.get_exposed_port(5432)}"
-            f"/{container.dbname}"
-        )
+def conninfo() -> str:
+    return get_postgres_conninfo()
 
 
 @pytest.fixture

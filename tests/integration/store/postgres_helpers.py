@@ -1,20 +1,23 @@
 r"""Shared helpers for Postgres-backed integration tests.
 
-Used by ``test_consistency.py`` and ``test_consistency_async.py``, which
-both need to resolve a Postgres conninfo the same way: prefer
+Used by ``test_postgres.py``, ``test_async_postgres.py``,
+``test_consistency.py``, and ``test_consistency_async.py``, which all
+need to resolve a Postgres conninfo the same way: prefer
 ``PERSISTA_TEST_POSTGRES_URL`` if it points at a reachable server, and
 otherwise lazily start a shared Docker container (skipping Postgres tests
 if Docker or psycopg is unavailable). The resolution is cached at module
-scope so the sync and async consistency suites share a single container
-instead of paying the startup cost twice.
+scope so every suite shares a single container instead of paying the
+startup cost multiple times.
 """
 
 from __future__ import annotations
 
-__all__ = ["get_postgres_conninfo"]
+__all__ = ["POSTGRES_URL", "get_postgres_conninfo", "postgres_available"]
 
 import atexit
 import os
+
+import pytest
 
 from persista.utils.imports import is_psycopg_available
 
@@ -80,3 +83,8 @@ def get_postgres_conninfo() -> str | None:
         f"/{container.dbname}"
     )
     return _postgres_conninfo
+
+
+postgres_available = pytest.mark.skipif(
+    get_postgres_conninfo() is None, reason="Requires a reachable Postgres server or Docker"
+)
