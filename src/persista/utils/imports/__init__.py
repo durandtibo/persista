@@ -6,15 +6,19 @@ __all__ = [
     "check_duckdb",
     "check_faker",
     "check_psycopg",
+    "check_redis",
     "duckdb_available",
     "faker_available",
     "is_duckdb_available",
     "is_faker_available",
     "is_psycopg_available",
+    "is_redis_available",
     "psycopg_available",
     "raise_duckdb_missing_error",
     "raise_faker_missing_error",
     "raise_psycopg_missing_error",
+    "raise_redis_missing_error",
+    "redis_available",
 ]
 
 from persista.utils.imports.duckdb import (
@@ -34,4 +38,10 @@ from persista.utils.imports.psycopg import (
     is_psycopg_available,
     psycopg_available,
     raise_psycopg_missing_error,
+)
+from persista.utils.imports.redis import (
+    check_redis,
+    is_redis_available,
+    raise_redis_missing_error,
+    redis_available,
 )
