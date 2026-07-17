@@ -84,6 +84,13 @@ jobs:
       package-name: psycopg
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).psycopg) }}
 
+  redis:
+    needs: get-versions
+    uses: ./.github/workflows/test-package-dep.yaml
+    with:
+      package-name: redis
+      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).redis) }}
+
   rich:
     needs: get-versions
     uses: ./.github/workflows/test-package-dep.yaml
