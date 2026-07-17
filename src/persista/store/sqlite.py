@@ -241,6 +241,9 @@ class SQLiteStore(BaseSQLiteStore):
         if not items:
             return
         on_conflict = normalize_on_conflict(on_conflict)
+        if on_conflict == "overwrite":
+            self._set_many(items)
+            return
 
         conflicts = set(self.contains_many(list(items))[0])
         if conflicts and on_conflict == "raise":
@@ -252,19 +255,21 @@ class SQLiteStore(BaseSQLiteStore):
             if key in conflicts:
                 if on_conflict == "skip":
                     continue
-                if on_conflict == "merge":
-                    to_write[key] = {**(self.get(key) or {}), **value}
-                    continue
+                to_write[key] = {**(self.get(key) or {}), **value}
+                continue
             to_write[key] = value
 
-        if to_write:
+        self._set_many(to_write)
+
+    def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        if items:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO store VALUES (?, ?)",
-                [(key, json.dumps(value)) for key, value in to_write.items()],
+                [(key, json.dumps(value)) for key, value in items.items()],
             )
             self._conn.commit()
 
-        logger.debug("Added/replaced %d key-value pair(s)", len(to_write))
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         if not field_filters:
