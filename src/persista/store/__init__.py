@@ -9,6 +9,7 @@ __all__ = [
     "DuckDBStore",
     "InMemoryStore",
     "OnConflict",
+    "RedisStore",
     "SQLiteStore",
     "TypedDuckDBStore",
     "TypedSQLiteStore",
@@ -22,6 +23,7 @@ from persista.store.base import BaseStore
 from persista.store.duckdb import BaseDuckDBStore, DuckDBStore
 from persista.store.duckdb_typed import TypedDuckDBStore
 from persista.store.in_memory import InMemoryStore
+from persista.store.redis import RedisStore
 from persista.store.sqlite import BaseSQLiteStore, SQLiteStore
 from persista.store.sqlite_typed import TypedSQLiteStore
 from persista.store.types import OnConflict

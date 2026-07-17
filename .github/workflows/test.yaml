@@ -51,6 +51,8 @@ jobs:
         run: |
           inv integration-test --cov
 
+
+
   # Test with minimal dependencies to ensure optional dependencies are truly optional
   min:
     runs-on: ${{ matrix.os }}
@@ -91,3 +93,35 @@ jobs:
       - name: Run integration tests
         run: |
           inv integration-test --cov
+
+
+  # Test RedisStore against a live Redis server (only supported on Linux-hosted
+  # runners, hence the separate job instead of a service on the OS matrix above)
+  redis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup python environment
+        uses: durandtibo/setup-venv-uv-action@v0.0.3
+        with:
+          python-version: '3.13'
+
+      - name: Run RedisStore integration tests
+        env:
+          PERSISTA_TEST_REDIS_URL: redis://localhost:6379/0
+        run: |
+          python -m pytest --xdoctest --timeout 60 tests/integration/store/test_redis.py
