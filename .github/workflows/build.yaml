@@ -21,6 +21,7 @@ jobs:
         dist-type: [ "sdist", "wheel" ]
         package-extra: [
           "",
+          'aiosqlite',
           'duckdb',
           'faker',
           'psycopg',
