@@ -251,7 +251,9 @@ class TestPostgresStore:
     def test_get_missing_key_returns_none(self, store: PostgresStore) -> None:
         assert store.get("missing") is None
 
-    def test_get_many(self, store: PostgresStore, items: dict[str, dict[str, Any]]) -> None:
+    def test_get_many(
+        self, store: PostgresStore, items: dict[str, dict[str, Any]]
+    ) -> None:
         store.set_many(items)
         result = store.get_many(["1", "3", "missing"])
         assert result == [items["1"], items["3"], None]
@@ -277,14 +279,21 @@ class TestPostgresStore:
         store.set("1", {"text": "updated"}, on_conflict="merge")
         assert store.get("1") == {"text": "updated", "author": "Alice"}
 
-    def test_set_many_upserts(self, store: PostgresStore, items: dict[str, dict[str, Any]]) -> None:
+    def test_set_many_upserts(
+        self, store: PostgresStore, items: dict[str, dict[str, Any]]
+    ) -> None:
         store.set_many(items)
         assert store.count() == 3
         store.set_many({"1": {"title": "Intro to Python, 2nd ed.", "author": "Alice"}})
         assert store.count() == 3
-        assert store.get("1") == {"title": "Intro to Python, 2nd ed.", "author": "Alice"}
+        assert store.get("1") == {
+            "title": "Intro to Python, 2nd ed.",
+            "author": "Alice",
+        }
 
-    def test_set_batches(self, store: PostgresStore, items: dict[str, dict[str, Any]]) -> None:
+    def test_set_batches(
+        self, store: PostgresStore, items: dict[str, dict[str, Any]]
+    ) -> None:
         store.set_batches(items.items(), batch_size=2)
         assert store.count() == 3
 
@@ -321,13 +330,17 @@ class TestPostgresStore:
         store.delete("missing")
         assert store.count() == 0
 
-    def test_delete_many(self, store: PostgresStore, items: dict[str, dict[str, Any]]) -> None:
+    def test_delete_many(
+        self, store: PostgresStore, items: dict[str, dict[str, Any]]
+    ) -> None:
         store.set_many(items)
         store.delete_many(["1", "2"])
         assert store.count() == 1
         assert store.get("3") is not None
 
-    def test_contains_many(self, store: PostgresStore, items: dict[str, dict[str, Any]]) -> None:
+    def test_contains_many(
+        self, store: PostgresStore, items: dict[str, dict[str, Any]]
+    ) -> None:
         store.set_many(items)
         found, missing = store.contains_many(["1", "3", "missing"])
         assert sorted(found) == ["1", "3"]
@@ -337,19 +350,25 @@ class TestPostgresStore:
         store.set_many(items)
         assert sorted(store.keys()) == ["1", "2", "3"]
 
-    def test_values(self, store: PostgresStore, items: dict[str, dict[str, Any]]) -> None:
+    def test_values(
+        self, store: PostgresStore, items: dict[str, dict[str, Any]]
+    ) -> None:
         store.set_many(items)
         assert sorted(store.values(), key=lambda v: v["title"]) == sorted(
             items.values(), key=lambda v: v["title"]
         )
 
-    def test_iter_batches(self, store: PostgresStore, items: dict[str, dict[str, Any]]) -> None:
+    def test_iter_batches(
+        self, store: PostgresStore, items: dict[str, dict[str, Any]]
+    ) -> None:
         store.set_many(items)
         batches = list(store.iter_batches(batch_size=2))
         assert sum(len(b) for b in batches) == 3
         assert all(len(b) <= 2 for b in batches)
 
-    def test_count(self, store: PostgresStore, items: dict[str, dict[str, Any]]) -> None:
+    def test_count(
+        self, store: PostgresStore, items: dict[str, dict[str, Any]]
+    ) -> None:
         assert store.count() == 0
         store.set_many(items)
         assert store.count() == 3
@@ -361,7 +380,9 @@ class TestPostgresStore:
     def test_repr(self, store: PostgresStore) -> None:
         assert repr(store).startswith("PostgresStore(")
 
-    def test_two_stores_different_tables_are_isolated(self, conninfo: str, table_name: str) -> None:
+    def test_two_stores_different_tables_are_isolated(
+        self, conninfo: str, table_name: str
+    ) -> None:
         with (
             PostgresStore(conninfo, table=table_name) as store_a,
             PostgresStore(conninfo, table=f"{table_name}_other") as store_b,
@@ -513,7 +534,9 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         by_key = {row[0]: self._row_to_value(row) for row in rows}
         return [by_key.get(key) for key in keys]
 
-    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
+    def set(
+        self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+    ) -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
 
     def set_many(
@@ -577,9 +600,9 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []
-        query = sql.SQL("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = sql.SQL(
+            "SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)"
+        ).format(table=self._table_ident, key_col=sql.Identifier(self._key_column))
         with self._conn.cursor() as cur:
             cur.execute(query, (keys,))
             existing = {row[0] for row in cur.fetchall()}
@@ -623,14 +646,12 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         return self
 
 
-_CREATE_TABLE = sql.SQL(
-    """
+_CREATE_TABLE = sql.SQL("""
     CREATE TABLE IF NOT EXISTS {table} (
         key   TEXT PRIMARY KEY,
         value JSONB NOT NULL
     )
-    """
-)
+    """)
 
 
 class PostgresStore(BasePostgresStore):
@@ -741,13 +762,17 @@ from persista.store import TypedPostgresStore
 
 
 @pytest.fixture
-def typed_store_no_schema(conninfo: str, table_name: str) -> Generator[TypedPostgresStore, None, None]:
+def typed_store_no_schema(
+    conninfo: str, table_name: str
+) -> Generator[TypedPostgresStore, None, None]:
     with TypedPostgresStore(conninfo, table=table_name) as store:
         yield store
 
 
 @pytest.fixture
-def typed_store(conninfo: str, table_name: str) -> Generator[TypedPostgresStore, None, None]:
+def typed_store(
+    conninfo: str, table_name: str
+) -> Generator[TypedPostgresStore, None, None]:
     with TypedPostgresStore(
         conninfo,
         table=table_name,
@@ -759,15 +784,26 @@ def typed_store(conninfo: str, table_name: str) -> Generator[TypedPostgresStore,
 @psycopg_available
 @docker_available
 class TestTypedPostgresStore:
-    def test_no_schema_stores_everything_in_extra(self, typed_store_no_schema: TypedPostgresStore) -> None:
+    def test_no_schema_stores_everything_in_extra(
+        self, typed_store_no_schema: TypedPostgresStore
+    ) -> None:
         typed_store_no_schema.set("1", {"title": "Intro to Python", "author": "Alice"})
-        assert typed_store_no_schema.get("1") == {"title": "Intro to Python", "author": "Alice"}
+        assert typed_store_no_schema.get("1") == {
+            "title": "Intro to Python",
+            "author": "Alice",
+        }
 
-    def test_schema_field_rejects_reserved_key_column(self, conninfo: str, table_name: str) -> None:
+    def test_schema_field_rejects_reserved_key_column(
+        self, conninfo: str, table_name: str
+    ) -> None:
         with pytest.raises(ValueError, match=r"reserved key column name"):
-            TypedPostgresStore(conninfo, table=table_name, value_schema={"_KEY_": "TEXT"})
+            TypedPostgresStore(
+                conninfo, table=table_name, value_schema={"_KEY_": "TEXT"}
+            )
 
-    def test_known_fields_and_extra_round_trip(self, typed_store: TypedPostgresStore) -> None:
+    def test_known_fields_and_extra_round_trip(
+        self, typed_store: TypedPostgresStore
+    ) -> None:
         value = {
             "title": "Intro to Python",
             "author": "Alice",
@@ -787,7 +823,9 @@ class TestTypedPostgresStore:
         assert len(typed_store.filter(author="Alice")) == 1
 
     def test_filter_on_extra_field(self, typed_store: TypedPostgresStore) -> None:
-        typed_store.set("1", {"title": "Intro to Python", "author": "Alice", "publisher": "OReilly"})
+        typed_store.set(
+            "1", {"title": "Intro to Python", "author": "Alice", "publisher": "OReilly"}
+        )
         assert len(typed_store.filter(publisher="OReilly")) == 1
 
     def test_set_on_conflict_merge_preserves_typed_and_extra_fields(
@@ -795,7 +833,11 @@ class TestTypedPostgresStore:
     ) -> None:
         typed_store.set("1", {"author": "Alice", "year": 2022, "publisher": "OReilly"})
         typed_store.set("1", {"year": 2023}, on_conflict="merge")
-        assert typed_store.get("1") == {"author": "Alice", "year": 2023, "publisher": "OReilly"}
+        assert typed_store.get("1") == {
+            "author": "Alice",
+            "year": 2023,
+            "publisher": "OReilly",
+        }
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -874,16 +916,24 @@ class TypedPostgresStore(BasePostgresStore):
 
     def _create_table_sql(self) -> sql.Composed:
         typed_cols = sql.SQL("").join(
-            sql.SQL(", {col} {dtype}").format(col=sql.Identifier(name), dtype=sql.SQL(dtype))
+            sql.SQL(", {col} {dtype}").format(
+                col=sql.Identifier(name), dtype=sql.SQL(dtype)
+            )
             for name, dtype in self._schema.items()
         )
         return sql.SQL(
             "CREATE TABLE IF NOT EXISTS {table} ({key_col} TEXT PRIMARY KEY{typed_cols}, extra JSONB)"
-        ).format(table=self._table_ident, key_col=sql.Identifier(_KEY_COLUMN), typed_cols=typed_cols)
+        ).format(
+            table=self._table_ident,
+            key_col=sql.Identifier(_KEY_COLUMN),
+            typed_cols=typed_cols,
+        )
 
     def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
         # row layout: key, [schema cols...], extra
-        schema_vals = dict(zip(self._schema.keys(), row[1 : 1 + len(self._schema)], strict=True))
+        schema_vals = dict(
+            zip(self._schema.keys(), row[1 : 1 + len(self._schema)], strict=True)
+        )
         extra = row[1 + len(self._schema)]
         value = {k: v for k, v in schema_vals.items() if v is not None}
         if extra:
@@ -900,7 +950,10 @@ class TypedPostgresStore(BasePostgresStore):
         if items:
             query = self._build_insert()
             with self._conn.cursor() as cur:
-                cur.executemany(query, [self._value_to_row(key, value) for key, value in items.items()])
+                cur.executemany(
+                    query,
+                    [self._value_to_row(key, value) for key, value in items.items()],
+                )
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 

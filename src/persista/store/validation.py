@@ -91,7 +91,9 @@ def validate_table_name(name: str) -> None:
             digits, underscores, not starting with a digit).
     """
     if not _FIELD_NAME_PATTERN.match(name):
-        msg = f"Invalid table name: {name!r}. Table names must match {_FIELD_NAME_PATTERN.pattern!r}"
+        msg = (
+            f"Invalid table name: {name!r}. Table names must match {_FIELD_NAME_PATTERN.pattern!r}"
+        )
         raise ValueError(msg)
 
 

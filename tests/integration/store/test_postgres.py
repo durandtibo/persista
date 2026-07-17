@@ -216,7 +216,9 @@ class TestPostgresStore:
 
 
 @pytest.fixture
-def typed_store_no_schema(conninfo: str, table_name: str) -> Generator[TypedPostgresStore, None, None]:
+def typed_store_no_schema(
+    conninfo: str, table_name: str
+) -> Generator[TypedPostgresStore, None, None]:
     with TypedPostgresStore(conninfo, table=table_name) as store:
         yield store
 
@@ -234,7 +236,9 @@ def typed_store(conninfo: str, table_name: str) -> Generator[TypedPostgresStore,
 @psycopg_available
 @docker_available
 class TestTypedPostgresStore:
-    def test_no_schema_stores_everything_in_extra(self, typed_store_no_schema: TypedPostgresStore) -> None:
+    def test_no_schema_stores_everything_in_extra(
+        self, typed_store_no_schema: TypedPostgresStore
+    ) -> None:
         typed_store_no_schema.set("1", {"title": "Intro to Python", "author": "Alice"})
         assert typed_store_no_schema.get("1") == {"title": "Intro to Python", "author": "Alice"}
 
@@ -262,7 +266,9 @@ class TestTypedPostgresStore:
         assert len(typed_store.filter(author="Alice")) == 1
 
     def test_filter_on_extra_field(self, typed_store: TypedPostgresStore) -> None:
-        typed_store.set("1", {"title": "Intro to Python", "author": "Alice", "publisher": "OReilly"})
+        typed_store.set(
+            "1", {"title": "Intro to Python", "author": "Alice", "publisher": "OReilly"}
+        )
         assert len(typed_store.filter(publisher="OReilly")) == 1
 
     def test_set_on_conflict_merge_preserves_typed_and_extra_fields(

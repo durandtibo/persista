@@ -274,14 +274,12 @@ class PostgresStore(BasePostgresStore):
     """
 
     def _create_table_sql(self) -> sql.Composed:
-        return sql.SQL(
-            """
+        return sql.SQL("""
             CREATE TABLE IF NOT EXISTS {table} (
                 key   TEXT PRIMARY KEY,
                 value JSONB NOT NULL
             )
-            """
-        ).format(table=self._table_ident)
+            """).format(table=self._table_ident)
 
     def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
         return row[1]
@@ -376,7 +374,9 @@ class TypedPostgresStore(BasePostgresStore):
         )
         return sql.SQL(
             "CREATE TABLE IF NOT EXISTS {table} ({key_col} TEXT PRIMARY KEY{typed_cols}, extra JSONB)"
-        ).format(table=self._table_ident, key_col=sql.Identifier(_KEY_COLUMN), typed_cols=typed_cols)
+        ).format(
+            table=self._table_ident, key_col=sql.Identifier(_KEY_COLUMN), typed_cols=typed_cols
+        )
 
     def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
         # row layout: key, [schema cols...], extra
@@ -397,7 +397,9 @@ class TypedPostgresStore(BasePostgresStore):
         if items:
             query = self._build_insert()
             with self._conn.cursor() as cur:
-                cur.executemany(query, [self._value_to_row(key, value) for key, value in items.items()])
+                cur.executemany(
+                    query, [self._value_to_row(key, value) for key, value in items.items()]
+                )
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
