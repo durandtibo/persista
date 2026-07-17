@@ -432,16 +432,16 @@ wheels = [
 
 [[package]]
 name = "feu"
-version = "0.7.2"
+version = "0.7.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
     { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/36/c4/fc04369b6f31e879328be7df6249c4f9ad98c3affa9ed2e23a8f8559aec8/feu-0.7.2.tar.gz", hash = "sha256:f540736180e38b792447318afeb8fbd58995be76aabc05ffa173ddd808eba00c", size = 33726, upload-time = "2026-07-10T06:33:13.209Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/34/92/d8fb155ce41e6b4659896da975cbb26a4b9bae4a00c41c2cf4ea6530db35/feu-0.7.3.tar.gz", hash = "sha256:8add8e39398401e311dc7efe330c9238a4efdbe6f11edc521dd3e0d8ce6fd4b3", size = 33754, upload-time = "2026-07-17T06:22:39.91Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f5/66/9fd7147b17fe450e6391433d91de93d6198e3306defab922842738eb7fc5/feu-0.7.2-py3-none-any.whl", hash = "sha256:26d48011bad3827fc56d53cba14572ab0a39bc0b8174f0425dff8e210f3d2ec5", size = 48221, upload-time = "2026-07-10T06:33:12.025Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/d5/1b877f86510c11f4dde77c300e4b892051cc5e10f3cca95cdab3da36e31e/feu-0.7.3-py3-none-any.whl", hash = "sha256:43e0f62f68a2c3b9b15dbe25a8b0b71b86cede8d55800d3fad845cb5c4bc871d", size = 48257, upload-time = "2026-07-17T06:22:38.849Z" },
 ]
 
 [package.optional-dependencies]
@@ -1031,7 +1031,7 @@ dev = [
     { name = "coverage", extras = ["toml"], specifier = ">=7.15.2,<8.0" },
     { name = "docformatter", extras = ["tomli"], specifier = ">=1.7.8,<2.0" },
     { name = "fakeredis", specifier = ">=2.36,<3.0" },
-    { name = "feu", extras = ["all"], specifier = ">=0.7.2,<1.0" },
+    { name = "feu", extras = ["all"], specifier = ">=0.7.3,<1.0" },
     { name = "invoke", specifier = ">=3.0,<4.0" },
     { name = "pre-commit", specifier = ">=4.6,<5.0" },
     { name = "pygments", specifier = ">=2.20,<3.0" },
