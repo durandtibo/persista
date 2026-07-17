@@ -29,8 +29,8 @@ class BaseStore(ABC):
     implement all abstract methods.
 
     Implementations are expected to support use as a context manager
-    (``with SomeStore(...) as store: ...``), which calls
-    :meth:`close` automatically on exit.
+    (``with SomeStore(...) as store: ...``), which calls :meth:`close`
+    automatically on exit.
     """
 
     @abstractmethod
