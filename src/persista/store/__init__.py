@@ -22,8 +22,7 @@ __all__ = [
 ]
 
 from persista.store.base import BaseStore
-from persista.store.duckdb import BaseDuckDBStore, DuckDBStore
-from persista.store.duckdb_typed import TypedDuckDBStore
+from persista.store.duckdb import BaseDuckDBStore, DuckDBStore, TypedDuckDBStore
 from persista.store.in_memory import InMemoryStore
 from persista.store.redis import BaseRedisStore, PickleRedisStore, RedisStore
 from persista.store.sqlite import BaseSQLiteStore, SQLiteStore
