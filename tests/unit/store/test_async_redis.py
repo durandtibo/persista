@@ -180,9 +180,7 @@ async def test_set_many_default_overwrites_existing(store: AsyncBaseRedisStore) 
 async def test_set_many_on_conflict_raise(store: AsyncBaseRedisStore) -> None:
     await store.set_many({"1": {"text": "original"}, "2": {"text": "other"}})
     with pytest.raises(KeyError, match=r"1"):
-        await store.set_many(
-            {"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise"
-        )
+        await store.set_many({"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise")
     assert await store.get("1") == {"text": "original"}
     assert await store.get("3") is None
 
@@ -196,9 +194,7 @@ async def test_set_many_on_conflict_skip(store: AsyncBaseRedisStore) -> None:
 
 async def test_set_many_on_conflict_overwrite(store: AsyncBaseRedisStore) -> None:
     await store.set_many({"1": {"text": "original"}})
-    await store.set_many(
-        {"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="overwrite"
-    )
+    await store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="overwrite")
     assert await store.get("1") == {"text": "updated"}
     assert await store.get("2") == {"text": "new"}
 
@@ -487,14 +483,15 @@ async def test_contains_many_returns_tuple_of_two_lists(
 
 
 async def test_keys_empty_store_yields_nothing(store: AsyncBaseRedisStore) -> None:
-    assert [key async for key in store.keys()] == []
+    assert [key async for key in store.keys()] == []  # noqa: SIM118
 
 
 async def test_keys_returns_all_keys(
     store: AsyncBaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await store.set_many(items)
-    assert sorted([key async for key in store.keys()]) == sorted(items.keys())
+    result = [key async for key in store.keys()]  # noqa: SIM118
+    assert sorted(result) == sorted(items.keys())
 
 
 # --- values ---

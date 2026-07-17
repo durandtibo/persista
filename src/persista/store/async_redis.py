@@ -249,8 +249,16 @@ class AsyncRedisStore(AsyncBaseRedisStore):
         ...     store = AsyncRedisStore("redis://localhost:6379/0")
         ...     await store.set_many(
         ...         {
-        ...             "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        ...             "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
+        ...             "1": {
+        ...                 "title": "Intro to Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "2": {
+        ...                 "title": "Advanced Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
         ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
         ...         }
         ...     )
@@ -299,9 +307,7 @@ class AsyncPickleRedisStore(AsyncBaseRedisStore):
         >>> from persista.store import AsyncPickleRedisStore
         >>> async def main():
         ...     store = AsyncPickleRedisStore("redis://localhost:6379/0")
-        ...     await store.set(
-        ...         "1", {"title": "Intro to Python", "tags": {"python", "intro"}}
-        ...     )
+        ...     await store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
         ...     print(await store.get("1"))
         ...     await store.close()
         ...
