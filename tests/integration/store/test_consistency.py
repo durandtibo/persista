@@ -27,6 +27,8 @@ from persista.store import (
     PickleRedisStore,
     RedisStore,
     SQLiteStore,
+    TypedDuckDBStore,
+    TypedSQLiteStore,
 )
 from persista.utils.imports import is_duckdb_available, is_redis_available
 
@@ -65,9 +67,15 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
     return [
         pytest.param(InMemoryStore, id="in_memory"),
         pytest.param(lambda: SQLiteStore(":memory:"), id="sqlite"),
+        pytest.param(lambda: TypedSQLiteStore(":memory:"), id="sqlite_typed"),
         pytest.param(
             lambda: DuckDBStore(":memory:"),
             id="duckdb",
+            marks=pytest.mark.skipif(not is_duckdb_available(), reason="Requires duckdb"),
+        ),
+        pytest.param(
+            lambda: TypedDuckDBStore(":memory:"),
+            id="duckdb_typed",
             marks=pytest.mark.skipif(not is_duckdb_available(), reason="Requires duckdb"),
         ),
         pytest.param(lambda: RedisStore(REDIS_URL), id="redis", marks=redis_skip),
