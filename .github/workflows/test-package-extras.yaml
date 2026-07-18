@@ -26,9 +26,10 @@ jobs:
           'aiosqlite',
           'duckdb',
           'faker',
+          'lmdb',
           'psycopg',
-          'rich',
           'redis',
+          'rich',
         ]
 
     steps:

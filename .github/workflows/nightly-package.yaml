@@ -77,6 +77,13 @@ jobs:
       package-name: faker
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).faker) }}
 
+  lmdb:
+    needs: get-versions
+    uses: ./.github/workflows/test-package-dep.yaml
+    with:
+      package-name: lmdb
+      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).lmdb) }}
+
 #  polars:
 #    needs: get-versions
 #    uses: ./.github/workflows/test-package-dep.yaml
