@@ -98,7 +98,7 @@ def store() -> InMemoryTestStore:
 
 def test_base_store_is_abstract() -> None:
     with pytest.raises(TypeError, match="abstract"):
-        BaseStore()  # type: ignore[abstract]
+        BaseStore()
 
 
 def test_base_store_values(store: InMemoryTestStore) -> None:

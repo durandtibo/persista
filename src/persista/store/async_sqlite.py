@@ -306,7 +306,7 @@ class AsyncBaseSQLiteStore(AsyncBaseStore, MultilineDisplayMixin):
         cursor = await self._conn.execute("SELECT COUNT(*) FROM store")
         row = await cursor.fetchone()
         # COUNT(*) always returns exactly one row.
-        return row[0]  # type: ignore[index]
+        return row[0]
 
     async def get_columns_info(self) -> dict[str, str]:
         """Return the column names and types of the store's table.

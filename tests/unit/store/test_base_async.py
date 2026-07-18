@@ -101,7 +101,7 @@ def store() -> AsyncInMemoryStore:
 
 def test_async_base_store_is_abstract() -> None:
     with pytest.raises(TypeError, match="abstract"):
-        AsyncBaseStore()  # type: ignore[abstract]
+        AsyncBaseStore()
 
 
 async def test_async_base_store_values(store: AsyncInMemoryStore) -> None:
