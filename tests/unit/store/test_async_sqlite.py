@@ -266,7 +266,7 @@ async def test_set_on_conflict_new_key_is_unaffected(store: AsyncBaseSQLiteStore
 @aiosqlite_available
 async def test_set_on_conflict_invalid_raises(store: AsyncBaseSQLiteStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        await store.set("1", {"text": "hello"}, on_conflict="bogus")  # type: ignore[arg-type]
+        await store.set("1", {"text": "hello"}, on_conflict="bogus")
 
 
 # --- set_many ---
@@ -329,7 +329,7 @@ async def test_set_many_on_conflict_merge(store: AsyncBaseSQLiteStore) -> None:
 @aiosqlite_available
 async def test_set_many_on_conflict_invalid_raises(store: AsyncBaseSQLiteStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        await store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")  # type: ignore[arg-type]
+        await store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")
 
 
 # --- set_batches ---

@@ -113,7 +113,7 @@ async def test_set_on_conflict_new_key_is_unaffected(store: AsyncInMemoryStore) 
 
 async def test_set_on_conflict_invalid_raises(store: AsyncInMemoryStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        await store.set("1", {"text": "hello"}, on_conflict="bogus")  # type: ignore[arg-type]
+        await store.set("1", {"text": "hello"}, on_conflict="bogus")
 
 
 async def test_set_does_not_alias_input(store: AsyncInMemoryStore) -> None:
@@ -176,7 +176,7 @@ async def test_set_many_on_conflict_merge(store: AsyncInMemoryStore) -> None:
 
 async def test_set_many_on_conflict_invalid_raises(store: AsyncInMemoryStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        await store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")  # type: ignore[arg-type]
+        await store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")
 
 
 async def test_set_many_does_not_alias_input(store: AsyncInMemoryStore) -> None:

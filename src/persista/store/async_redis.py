@@ -172,23 +172,20 @@ class AsyncBaseRedisStore(AsyncBaseStore, MultilineDisplayMixin):
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []
-        flags = await self._client.smismember(_KEYS_SET, keys)  # type: ignore[misc]
+        flags = await self._client.smismember(_KEYS_SET, keys)
         found = [key for key, flag in zip(keys, flags, strict=True) if flag]
         missing = [key for key, flag in zip(keys, flags, strict=True) if not flag]
         return found, missing
 
     async def keys(self) -> AsyncIterator[str]:
-        for key in await self._client.smembers(_KEYS_SET):  # type: ignore[misc]
+        for key in await self._client.smembers(_KEYS_SET):
             yield self._key_str(key)
 
     async def iter_batches(
         self, batch_size: int = 32
     ) -> AsyncGenerator[dict[str, dict[str, Any]], None]:
         validate_batch_size(batch_size)
-        all_keys = [
-            self._key_str(key)
-            for key in await self._client.smembers(_KEYS_SET)  # type: ignore[misc]
-        ]
+        all_keys = [self._key_str(key) for key in await self._client.smembers(_KEYS_SET)]
         for i in range(0, len(all_keys), batch_size):
             batch = all_keys[i : i + batch_size]
             values = await self._client.mget(batch)
@@ -199,7 +196,7 @@ class AsyncBaseRedisStore(AsyncBaseStore, MultilineDisplayMixin):
             }
 
     async def count(self) -> int:
-        return await self._client.scard(_KEYS_SET)  # type: ignore[misc]
+        return await self._client.scard(_KEYS_SET)
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
         # `count` is intentionally omitted: computing it requires an
