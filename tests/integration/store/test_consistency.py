@@ -4,6 +4,8 @@ Each concrete store (:class:`~persista.store.InMemoryStore`,
 :class:`~persista.store.SQLiteStore`, :class:`~persista.store.DuckDBStore`,
 :class:`~persista.store.RedisStore`,
 :class:`~persista.store.PickleRedisStore`,
+:class:`~persista.store.LmdbStore`,
+:class:`~persista.store.PickleLmdbStore`,
 :class:`~persista.store.PostgresStore`) is expected to implement the
 exact same behavior for the :class:`~persista.store.BaseStore` contract.
 The tests below are parametrized over every available backend (stores
@@ -14,6 +16,7 @@ pass -- identically for every implementation.
 
 from __future__ import annotations
 
+import tempfile
 import uuid
 from collections.abc import Generator, Iterator
 from typing import Any
@@ -25,6 +28,8 @@ from persista.store import (
     BaseStore,
     DuckDBStore,
     InMemoryStore,
+    LmdbStore,
+    PickleLmdbStore,
     PickleRedisStore,
     PostgresStore,
     RedisStore,
@@ -33,7 +38,7 @@ from persista.store import (
     TypedPostgresStore,
     TypedSQLiteStore,
 )
-from persista.testing.fixtures import duckdb_available
+from persista.testing.fixtures import duckdb_available, lmdb_available
 from persista.utils.imports import is_redis_available
 from tests.integration.store.postgres_helpers import get_postgres_conninfo
 from tests.integration.store.redis_helpers import REDIS_URL, redis_server_reachable
@@ -48,10 +53,10 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
 
     Each param wraps a zero-argument factory that creates a fresh, empty
     store instance. Stores whose optional dependency is not installed
-    (DuckDB, Redis, Postgres), or whose server is unreachable (Redis) or
-    whose container could not be started (Postgres), are marked as
-    skipped rather than omitted, so they are still visible (as skips) in
-    `pytest -k`/reports.
+    (DuckDB, Redis, LMDB, Postgres), or whose server is unreachable
+    (Redis) or whose container could not be started (Postgres), are
+    marked as skipped rather than omitted, so they are still visible (as
+    skips) in `pytest -k`/reports.
     """
     redis_skip = pytest.mark.skipif(
         not redis_server_reachable(), reason="Requires a reachable Redis server"
@@ -76,6 +81,10 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
         ),
         pytest.param(lambda: RedisStore(REDIS_URL), id="redis", marks=redis_skip),
         pytest.param(lambda: PickleRedisStore(REDIS_URL), id="pickle_redis", marks=redis_skip),
+        pytest.param(lambda: LmdbStore(tempfile.mkdtemp()), id="lmdb", marks=lmdb_available),
+        pytest.param(
+            lambda: PickleLmdbStore(tempfile.mkdtemp()), id="pickle_lmdb", marks=lmdb_available
+        ),
         pytest.param(
             lambda: PostgresStore(postgres_conninfo, table=f"store_{uuid.uuid4().hex}"),
             id="postgres",
