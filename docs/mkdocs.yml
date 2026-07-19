@@ -25,6 +25,7 @@ nav:
   - Home: index.md
   - get_started.md
   - Reference:
+      - refs/cache.md
       - refs/store.md
       - refs/testing.md
       - refs/utils.md
