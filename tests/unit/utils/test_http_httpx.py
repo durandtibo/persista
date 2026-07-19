@@ -1,0 +1,221 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from unittest.mock import Mock
+
+import pytest
+
+from persista.utils.http_httpx import _get_retry_delay, fetch_response
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+httpx = pytest.importorskip("httpx")
+
+
+MODULE = "persista.utils.http_httpx"
+
+
+@pytest.fixture(autouse=True)
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> Mock:
+    mock = Mock()
+    monkeypatch.setattr(f"{MODULE}.time.sleep", mock)
+    return mock
+
+
+def _counting_handler(
+    statuses: list[int], json: dict[str, object] | None = None
+) -> tuple[Callable, Mock]:
+    calls = Mock(side_effect=iter(statuses))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        return httpx.Response(status, json=json, request=request)
+
+    return handler, calls
+
+
+def _client(handler: Callable) -> httpx.Client:
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+############################
+#     fetch_response       #
+############################
+
+
+def test_fetch_response_success_first_try() -> None:
+    handler, calls = _counting_handler([200], json={"ok": True})
+
+    response = fetch_response("https://example.com", client=_client(handler))
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls.call_count == 1
+
+
+def test_fetch_response_passes_headers() -> None:
+    received: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.update(request.headers)
+        return httpx.Response(200)
+
+    fetch_response("https://example.com", client=_client(handler), headers={"X-Custom": "value"})
+
+    assert received["x-custom"] == "value"
+
+
+def test_fetch_response_provided_client_is_not_closed() -> None:
+    handler, _ = _counting_handler([200])
+    client = _client(handler)
+
+    fetch_response("https://example.com", client=client)
+
+    assert not client.is_closed
+
+
+def test_fetch_response_own_client_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handler, _ = _counting_handler([200])
+    client = _client(handler)
+    monkeypatch.setattr(f"{MODULE}.httpx.Client", lambda **_kwargs: client)
+
+    fetch_response("https://example.com")
+
+    assert client.is_closed
+
+
+def test_fetch_response_retries_default_status_codes_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 502, 200], json={"ok": True})
+
+    response = fetch_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls.call_count == 3
+    assert no_sleep.call_count == 2
+
+
+def test_fetch_response_exhausts_retries_raises_http_status_error() -> None:
+    handler, calls = _counting_handler([500, 500, 500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        fetch_response("https://example.com", client=_client(handler), max_retries=2)
+
+    assert calls.call_count == 3
+
+
+def test_fetch_response_max_retries_zero_does_not_retry(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        fetch_response("https://example.com", client=_client(handler), max_retries=0)
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+def test_fetch_response_status_not_in_retry_set_raises_immediately(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([404])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        fetch_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+def test_fetch_response_custom_retry_status_codes() -> None:
+    handler, calls = _counting_handler([418, 200], json={"ok": True})
+
+    response = fetch_response(
+        "https://example.com",
+        client=_client(handler),
+        max_retries=1,
+        retry_status_codes={418},
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+
+
+def test_fetch_response_retries_on_transport_error_then_succeeds(no_sleep: Mock) -> None:
+    attempts = Mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(200)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        result = attempts()
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    response = fetch_response("https://example.com", client=_client(handler), max_retries=1)
+
+    assert response.status_code == 200
+    assert attempts.call_count == 2
+    assert no_sleep.call_count == 1
+
+
+def test_fetch_response_transport_error_exhausted_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = "boom"
+        raise httpx.ConnectError(message, request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        fetch_response("https://example.com", client=_client(handler), max_retries=2)
+
+
+def test_fetch_response_honors_retry_after_header(no_sleep: Mock) -> None:
+    calls = Mock(side_effect=[503, 200])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        headers = {"Retry-After": "5"} if status == 503 else {}
+        return httpx.Response(status, headers=headers, request=request)
+
+    fetch_response("https://example.com", client=_client(handler), max_retries=1)
+
+    no_sleep.assert_called_once_with(5.0)
+
+
+def test_fetch_response_exponential_backoff_without_retry_after(no_sleep: Mock) -> None:
+    handler, _ = _counting_handler([503, 503, 503, 200])
+
+    fetch_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert [call.args[0] for call in no_sleep.call_args_list] == [1.0, 2.0, 4.0]
+
+
+def test_fetch_response_raises_when_httpx_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    error_message = "'httpx' package is required but not installed."
+
+    def _raise() -> None:
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(f"{MODULE}.check_httpx", _raise)
+
+    with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
+        fetch_response("https://example.com")
+
+
+############################
+#     _get_retry_delay     #
+############################
+
+
+def test_get_retry_delay_uses_retry_after_header() -> None:
+    response = httpx.Response(503, headers={"Retry-After": "2.5"})
+
+    assert _get_retry_delay(response, attempt=1) == 2.5
+
+
+def test_get_retry_delay_ignores_invalid_retry_after_header() -> None:
+    response = httpx.Response(503, headers={"Retry-After": "not-a-number"})
+
+    assert _get_retry_delay(response, attempt=3) == 4.0
+
+
+@pytest.mark.parametrize(("attempt", "expected"), [(1, 1.0), (2, 2.0), (3, 4.0), (4, 8.0)])
+def test_get_retry_delay_exponential_backoff(attempt: int, expected: float) -> None:
+    response = httpx.Response(503)
+
+    assert _get_retry_delay(response, attempt=attempt) == expected
