@@ -5,7 +5,11 @@ from unittest.mock import Mock
 
 import pytest
 
-from persista.utils.http_httpx import _get_retry_delay, fetch_response
+from persista.utils.http_httpx import (
+    _get_retry_delay,
+    fetch_response,
+    fetch_response_async,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -19,7 +23,12 @@ MODULE = "persista.utils.http_httpx"
 @pytest.fixture(autouse=True)
 def no_sleep(monkeypatch: pytest.MonkeyPatch) -> Mock:
     mock = Mock()
+
+    async def fake_async_sleep(*args: object, **kwargs: object) -> None:
+        mock(*args, **kwargs)
+
     monkeypatch.setattr(f"{MODULE}.time.sleep", mock)
+    monkeypatch.setattr(f"{MODULE}.asyncio.sleep", fake_async_sleep)
     return mock
 
 
@@ -37,6 +46,10 @@ def _counting_handler(
 
 def _client(handler: Callable) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def _async_client(handler: Callable) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
 ############################
@@ -195,6 +208,188 @@ def test_fetch_response_raises_when_httpx_not_available(monkeypatch: pytest.Monk
 
     with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
         fetch_response("https://example.com")
+
+
+############################
+#   fetch_response_async   #
+############################
+
+
+async def test_fetch_response_async_success_first_try() -> None:
+    handler, calls = _counting_handler([200], json={"ok": True})
+
+    response = await fetch_response_async("https://example.com", client=_async_client(handler))
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls.call_count == 1
+
+
+async def test_fetch_response_async_passes_headers() -> None:
+    received: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.update(request.headers)
+        return httpx.Response(200)
+
+    await fetch_response_async(
+        "https://example.com", client=_async_client(handler), headers={"X-Custom": "value"}
+    )
+
+    assert received["x-custom"] == "value"
+
+
+async def test_fetch_response_async_provided_client_is_not_closed() -> None:
+    handler, _ = _counting_handler([200])
+    client = _async_client(handler)
+
+    await fetch_response_async("https://example.com", client=client)
+
+    assert not client.is_closed
+
+
+async def test_fetch_response_async_own_client_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handler, _ = _counting_handler([200])
+    client = _async_client(handler)
+    monkeypatch.setattr(f"{MODULE}.httpx.AsyncClient", lambda **_kwargs: client)
+
+    await fetch_response_async("https://example.com")
+
+    assert client.is_closed
+
+
+async def test_fetch_response_async_retries_default_status_codes_then_succeeds(
+    no_sleep: Mock,
+) -> None:
+    handler, calls = _counting_handler([503, 502, 200], json={"ok": True})
+
+    response = await fetch_response_async(
+        "https://example.com", client=_async_client(handler), max_retries=3
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls.call_count == 3
+    assert no_sleep.call_count == 2
+
+
+async def test_fetch_response_async_exhausts_retries_raises_http_status_error() -> None:
+    handler, calls = _counting_handler([500, 500, 500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await fetch_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=2
+        )
+
+    assert calls.call_count == 3
+
+
+async def test_fetch_response_async_max_retries_zero_does_not_retry(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await fetch_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=0
+        )
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+async def test_fetch_response_async_status_not_in_retry_set_raises_immediately(
+    no_sleep: Mock,
+) -> None:
+    handler, calls = _counting_handler([404])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await fetch_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=3
+        )
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+async def test_fetch_response_async_custom_retry_status_codes() -> None:
+    handler, calls = _counting_handler([418, 200], json={"ok": True})
+
+    response = await fetch_response_async(
+        "https://example.com",
+        client=_async_client(handler),
+        max_retries=1,
+        retry_status_codes={418},
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+
+
+async def test_fetch_response_async_retries_on_transport_error_then_succeeds(
+    no_sleep: Mock,
+) -> None:
+    attempts = Mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(200)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        result = attempts()
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    response = await fetch_response_async(
+        "https://example.com", client=_async_client(handler), max_retries=1
+    )
+
+    assert response.status_code == 200
+    assert attempts.call_count == 2
+    assert no_sleep.call_count == 1
+
+
+async def test_fetch_response_async_transport_error_exhausted_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = "boom"
+        raise httpx.ConnectError(message, request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        await fetch_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=2
+        )
+
+
+async def test_fetch_response_async_honors_retry_after_header(no_sleep: Mock) -> None:
+    calls = Mock(side_effect=[503, 200])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        headers = {"Retry-After": "5"} if status == 503 else {}
+        return httpx.Response(status, headers=headers, request=request)
+
+    await fetch_response_async("https://example.com", client=_async_client(handler), max_retries=1)
+
+    no_sleep.assert_called_once_with(5.0)
+
+
+async def test_fetch_response_async_exponential_backoff_without_retry_after(
+    no_sleep: Mock,
+) -> None:
+    handler, _ = _counting_handler([503, 503, 503, 200])
+
+    await fetch_response_async("https://example.com", client=_async_client(handler), max_retries=3)
+
+    assert [call.args[0] for call in no_sleep.call_args_list] == [1.0, 2.0, 4.0]
+
+
+async def test_fetch_response_async_raises_when_httpx_not_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error_message = "'httpx' package is required but not installed."
+
+    def _raise() -> None:
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(f"{MODULE}.check_httpx", _raise)
+
+    with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
+        await fetch_response_async("https://example.com")
 
 
 ############################
