@@ -145,10 +145,6 @@ Helpers to fetch HTTP responses with automatic retries, built on top of `request
 
 - `fetch_response` (sync, `requests`) and `fetch_response_async` (async, `httpx`)
 
-### 🧪 **Testing Helpers**
-
-Fixtures and utilities to simplify writing tests against `persista` stores and caches.
-
 ## Installation
 
 We highly recommend installing `persista` in
