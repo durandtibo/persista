@@ -16,23 +16,25 @@ def make_key(func_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> s
 
     ``func_name``, ``args``, and ``kwargs`` are JSON-serialized (with
     ``kwargs`` keys sorted, so key order doesn't affect the result)
-    and hashed. Values that aren't natively JSON-serializable fall
-    back to their ``str()`` representation, so two arguments with
-    different types but the same ``str()`` (e.g. ``1`` and ``"1"``
-    would not collide, since ``json.dumps`` only falls back to
-    ``str()`` for types it can't encode, but two custom objects with
-    the same ``str()`` output would).
+    and hashed. ``args`` and the values in ``kwargs`` must be
+    JSON-serializable.
 
     Args:
         func_name: The name of the function being cached, typically
             its ``__qualname__``.
         args: The positional arguments the function was called with.
+            Must be JSON-serializable.
         kwargs: The keyword arguments the function was called with.
+            Must be JSON-serializable.
 
     Returns:
         A hash of ``func_name``, ``args``, and ``kwargs``, stable
         across calls with equal arguments regardless of ``kwargs``
         order.
+
+    Raises:
+        TypeError: If ``args`` or ``kwargs`` contains a value that is
+            not JSON-serializable.
 
     Example:
         ```pycon
@@ -46,9 +48,5 @@ def make_key(func_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> s
 
         ```
     """
-    raw = json.dumps(
-        {"func": func_name, "args": args, "kwargs": kwargs},
-        sort_keys=True,
-        default=str,
-    )
+    raw = json.dumps({"func": func_name, "args": args, "kwargs": kwargs}, sort_keys=True)
     return hash_bytes(raw.encode())

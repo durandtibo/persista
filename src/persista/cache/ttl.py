@@ -160,13 +160,14 @@ class TTLCache:
         The cache key is derived from the decorated function's
         qualified name (``__qualname__``) and call arguments, via
         :func:`~persista.cache.utils.make_key`, so calls with equal
-        arguments share a cached result. Arguments and the return
-        value must be JSON-serializable if the backing store
-        serializes values (see the class docstring). Because the key
-        is based on ``__qualname__`` rather than object identity, two
-        distinct functions defined with the same qualified name (e.g.
-        two calls to the same factory returning a closure) share their
-        cache entries.
+        arguments share a cached result. Call arguments must always
+        be JSON-serializable, regardless of the backing store; the
+        return value must additionally be JSON-serializable if the
+        backing store serializes values (see the class docstring).
+        Because the key is based on ``__qualname__`` rather than
+        object identity, two distinct functions defined with the same
+        qualified name (e.g. two calls to the same factory returning
+        a closure) share their cache entries.
 
         Args:
             ttl: The time-to-live, in seconds, applied to cached

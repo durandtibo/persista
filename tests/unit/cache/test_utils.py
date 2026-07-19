@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from persista.cache.utils import make_key
 
 logger = logging.getLogger(__name__)
@@ -42,9 +44,7 @@ def test_make_key_args_vs_kwargs_distinct() -> None:
 
 def test_make_key_non_json_serializable_argument() -> None:
     class Custom:
-        def __str__(self) -> str:
-            return "custom"
+        pass
 
-    # falls back to str() via json.dumps(default=str), so this must not raise
-    key = make_key("func", (Custom(),), {})
-    assert isinstance(key, str)
+    with pytest.raises(TypeError):
+        make_key("func", (Custom(),), {})
