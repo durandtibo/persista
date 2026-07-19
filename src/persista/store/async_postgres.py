@@ -97,10 +97,10 @@ class AsyncBasePostgresStore(AsyncBaseStore, MultilineDisplayMixin):
         """Connect to the database and create the store's table if it
         doesn't already exist.
 
-        Called lazily before every query, since the connection cannot
-        be established eagerly in ``__init__`` (see the class
-        docstring). Also called again each time the store is reopened
-        via :meth:`__aenter__` after being closed.
+        Called lazily before every query, since the connection cannot be
+        established eagerly in ``__init__`` (see the class docstring).
+        Also called again each time the store is reopened via
+        :meth:`__aenter__` after being closed.
         """
         if self._conn is None:
             self._conn = await psycopg.AsyncConnection.connect(

@@ -59,6 +59,7 @@ async def typed_store_no_schema(
     conninfo: str, table_name: str
 ) -> AsyncGenerator[AsyncTypedPostgresStore, None]:
     """Store with no schema (everything in `extra`)."""
+
     async with AsyncTypedPostgresStore(conninfo, table=table_name) as store:
         yield store
 
@@ -68,6 +69,7 @@ async def typed_store(
     conninfo: str, table_name: str
 ) -> AsyncGenerator[AsyncTypedPostgresStore, None]:
     """Store with a typed schema."""
+
     async with AsyncTypedPostgresStore(
         conninfo,
         table=table_name,

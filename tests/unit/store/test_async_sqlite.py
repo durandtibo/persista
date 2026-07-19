@@ -39,6 +39,7 @@ async def store(store_cls: type[AsyncBaseSQLiteStore]) -> AsyncGenerator[AsyncBa
 async def typed_store_no_schema() -> AsyncGenerator[AsyncTypedSQLiteStore]:
     """In-memory AsyncTypedSQLiteStore with no schema (everything in
     `extra`)."""
+
     async with AsyncTypedSQLiteStore(":memory:") as store:
         yield store
 
@@ -46,6 +47,7 @@ async def typed_store_no_schema() -> AsyncGenerator[AsyncTypedSQLiteStore]:
 @pytest.fixture
 async def typed_store() -> AsyncGenerator[AsyncTypedSQLiteStore]:
     """In-memory store with a typed schema."""
+
     async with AsyncTypedSQLiteStore(
         ":memory:",
         value_schema={"author": "TEXT", "year": "INTEGER", "category": "TEXT"},
