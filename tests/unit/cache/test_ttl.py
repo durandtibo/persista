@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+MODULE = "persista.cache.ttl"
+
 
 @pytest.fixture
 def fake_time(monkeypatch: pytest.MonkeyPatch) -> list[float]:
@@ -23,7 +25,7 @@ def fake_time(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     time passing.
     """
     clock = [1_000_000.0]
-    monkeypatch.setattr("persista.cache.ttl.time.time", lambda: clock[0])
+    monkeypatch.setattr(f"{MODULE}.time.time", lambda: clock[0])
     return clock
 
 
