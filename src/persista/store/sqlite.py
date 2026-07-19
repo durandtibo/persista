@@ -227,6 +227,10 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         )
         self._conn.commit()
 
+    def clear(self) -> None:
+        self._conn.execute("DELETE FROM store")
+        self._conn.commit()
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []

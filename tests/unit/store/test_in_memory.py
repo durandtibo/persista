@@ -664,6 +664,33 @@ def test_context_manager_usable_for_reads_and_writes() -> None:
         assert store.count() == 1
 
 
+# --- clear ---
+
+
+def test_clear_removes_all_values(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
+    store.set_many(items)
+    store.clear()
+    assert store.count() == 0
+    assert store.data == {}
+
+
+def test_clear_empty_store_is_no_op(store: InMemoryStore) -> None:
+    store.clear()
+    assert store.count() == 0
+
+
+def test_clear_returns_none(store: InMemoryStore) -> None:
+    assert store.clear() is None
+
+
+def test_clear_then_set_works(store: InMemoryStore) -> None:
+    store.set("1", {"text": "hello"})
+    store.clear()
+    store.set("2", {"text": "world"})
+    assert store.count() == 1
+    assert store.get("2") == {"text": "world"}
+
+
 def test_context_manager_multiple_open_close() -> None:
     in_memory_store = InMemoryStore()
     for i in range(3):

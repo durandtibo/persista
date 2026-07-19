@@ -493,6 +493,33 @@ def test_delete_many_single_key(store: BaseSQLiteStore, items: dict[str, dict[st
     assert store.get("2") is None
 
 
+# --- clear ---
+
+
+def test_clear_removes_all_values(store: BaseSQLiteStore, items: dict[str, dict[str, Any]]) -> None:
+    store.set_many(items)
+    store.clear()
+    assert store.count() == 0
+    assert list(store.keys()) == []
+
+
+def test_clear_empty_store_is_no_op(store: BaseSQLiteStore) -> None:
+    store.clear()
+    assert store.count() == 0
+
+
+def test_clear_returns_none(store: BaseSQLiteStore) -> None:
+    assert store.clear() is None
+
+
+def test_clear_then_set_works(store: BaseSQLiteStore) -> None:
+    store.set("1", {"text": "hello"})
+    store.clear()
+    store.set("2", {"text": "world"})
+    assert store.count() == 1
+    assert store.get("2") == {"text": "world"}
+
+
 # --- contains_many ---
 
 

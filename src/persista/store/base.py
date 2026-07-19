@@ -181,6 +181,14 @@ class BaseStore(ABC):
         """
 
     @abstractmethod
+    def clear(self) -> None:
+        """Remove every key-value pair from the store.
+
+        This is equivalent to resetting the store to empty, without
+        closing it.
+        """
+
+    @abstractmethod
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         """Check which keys exist in the store.
 
@@ -428,6 +436,14 @@ class AsyncBaseStore(ABC):
 
         Args:
             keys: The keys of the values to delete.
+        """
+
+    @abstractmethod
+    async def clear(self) -> None:
+        """Remove every key-value pair from the store.
+
+        This is equivalent to resetting the store to empty, without
+        closing it.
         """
 
     @abstractmethod

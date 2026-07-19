@@ -55,6 +55,7 @@ _CREATE_RE = re.compile(r'^CREATE TABLE IF NOT EXISTS "(\w+)"')
 _INSERT_RE = re.compile(r'^INSERT INTO "(\w+)"')
 _DELETE_ANY_RE = re.compile(r'^DELETE FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
 _DELETE_ONE_RE = re.compile(r'^DELETE FROM "(\w+)" WHERE "[^"]+" = %s$')
+_DELETE_ALL_RE = re.compile(r'^DELETE FROM "(\w+)"$')
 _COUNT_RE = re.compile(r'^SELECT COUNT\(\*\) FROM "(\w+)"$')
 _COL_ANY_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
 _COL_ALL_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)"$')
@@ -129,6 +130,9 @@ class FakeConnection:
         if m := _DELETE_ONE_RE.match(text):
             table = self.tables.setdefault(m.group(1), {})
             table.pop(params[0], None)
+            return
+        if m := _DELETE_ALL_RE.match(text):
+            self.tables[m.group(1)] = {}
             return
         msg = f"Unsupported write query in FakeConnection: {text!r}"
         raise AssertionError(msg)
@@ -627,6 +631,35 @@ def test_delete_many_single_key(store: BasePostgresStore, items: dict[str, dict[
     store.delete_many(["2"])
     assert store.count() == len(items) - 1
     assert store.get("2") is None
+
+
+# --- clear ---
+
+
+def test_clear_removes_all_values(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    store.clear()
+    assert store.count() == 0
+    assert list(store.keys()) == []
+
+
+def test_clear_empty_store_is_no_op(store: BasePostgresStore) -> None:
+    store.clear()
+    assert store.count() == 0
+
+
+def test_clear_returns_none(store: BasePostgresStore) -> None:
+    assert store.clear() is None
+
+
+def test_clear_then_set_works(store: BasePostgresStore) -> None:
+    store.set("1", {"text": "hello"})
+    store.clear()
+    store.set("2", {"text": "world"})
+    assert store.count() == 1
+    assert store.get("2") == {"text": "world"}
 
 
 # --- contains_many ---

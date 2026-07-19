@@ -162,6 +162,9 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         pipe.srem(_KEYS_SET, *keys)
         pipe.execute()
 
+    def clear(self) -> None:
+        self.delete_many(list(self.keys()))
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []

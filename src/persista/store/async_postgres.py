@@ -234,6 +234,11 @@ class AsyncBasePostgresStore(AsyncBaseStore, MultilineDisplayMixin):
         )
         await self._conn.execute(query, (keys,))
 
+    async def clear(self) -> None:
+        await self._ensure_schema()
+        query = sql.SQL("DELETE FROM {table}").format(table=self._table_ident)
+        await self._conn.execute(query)
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []
