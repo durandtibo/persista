@@ -21,7 +21,11 @@ jobs:
         run: |
           python -c "import persista"
 
-      - name: check persista.agents
+      - name: check persista.cache
+        run: |
+          python -c "from persista import cache"
+
+      - name: check persista.store
         run: |
           python -c "from persista import store"
 
