@@ -18,6 +18,10 @@ __all__ = [
     "psycopg_not_available",
     "redis_available",
     "redis_not_available",
+    "requests_available",
+    "requests_not_available",
+    "urllib3_available",
+    "urllib3_not_available",
 ]
 
 import pytest
@@ -30,6 +34,8 @@ from persista.utils.imports import (
     is_lmdb_available,
     is_psycopg_available,
     is_redis_available,
+    is_requests_available,
+    is_urllib3_available,
 )
 
 aiosqlite_available: pytest.MarkDecorator = pytest.mark.skipif(
@@ -79,4 +85,18 @@ redis_available: pytest.MarkDecorator = pytest.mark.skipif(
 )
 redis_not_available: pytest.MarkDecorator = pytest.mark.skipif(
     is_redis_available(), reason="Skip if redis is available"
+)
+
+requests_available: pytest.MarkDecorator = pytest.mark.skipif(
+    not is_requests_available(), reason="Requires requests"
+)
+requests_not_available: pytest.MarkDecorator = pytest.mark.skipif(
+    is_requests_available(), reason="Skip if requests is available"
+)
+
+urllib3_available: pytest.MarkDecorator = pytest.mark.skipif(
+    not is_urllib3_available(), reason="Requires urllib3"
+)
+urllib3_not_available: pytest.MarkDecorator = pytest.mark.skipif(
+    is_urllib3_available(), reason="Skip if urllib3 is available"
 )
