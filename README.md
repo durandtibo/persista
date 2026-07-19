@@ -106,7 +106,7 @@ solves this with a single, consistent `BaseStore` interface:
 ```pycon
 >>> from persista.cache import cached
 >>> @cached(ttl=60)
-... def slow_call(x):
+... def slow_call(x: int) -> int:
 ...     return x**2
 ...
 >>> slow_call(4)
