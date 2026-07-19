@@ -208,16 +208,22 @@ For detailed installation instructions, see the [documentation](https://durandti
 ## Contributing
 
 Contributions are welcome! We appreciate bug fixes, feature additions, documentation improvements,
-and more. Whether you're fixing a bug or proposing a new feature, please open an
-[issue](https://github.com/durandtibo/persista/issues) first to discuss your changes.
+and more. Please check the [contributing guidelines](CONTRIBUTING.md) for details on:
+
+- Setting up the development environment
+- Code style and testing requirements
+- Submitting pull requests
+
+Whether you're fixing a bug or proposing a new feature, please open an issue first to discuss
+your changes.
 
 ## API Stability
 
-:warning: **Important**: As `persista` is under active development, its API is not yet stable and
-may change between releases. We recommend pinning a specific version in your project's
-dependencies to ensure consistent behavior.
+:warning: **Important**: As `persista` is under active development, its API is not yet stable and may
+change between releases. We recommend pinning a specific version in your project’s dependencies to
+ensure consistent behavior.
 
 ## License
 
-`persista` is licensed under BSD 3-Clause "New" or "Revised" license available in
-[LICENSE](LICENSE) file.
+`persista` is licensed under BSD 3-Clause "New" or "Revised" license available in [LICENSE](LICENSE)
+file.
