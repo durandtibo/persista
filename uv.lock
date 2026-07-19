@@ -1108,8 +1108,14 @@ psycopg = [
 redis = [
     { name = "redis", extra = ["hiredis"] },
 ]
+requests = [
+    { name = "requests" },
+]
 rich = [
     { name = "rich" },
+]
+urllib3 = [
+    { name = "urllib3" },
 ]
 
 [package.dev-dependencies]
@@ -1148,9 +1154,11 @@ requires-dist = [
     { name = "lmdb", marker = "extra == 'lmdb'", specifier = ">=2.0,<3.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'psycopg'", specifier = ">=3.2,<4.0" },
     { name = "redis", extras = ["hiredis"], marker = "extra == 'redis'", specifier = ">=7.0,<8.0" },
+    { name = "requests", marker = "extra == 'requests'", specifier = ">=2.32,<3.0" },
     { name = "rich", marker = "extra == 'rich'", specifier = ">=15.0,<16.0" },
+    { name = "urllib3", marker = "extra == 'urllib3'", specifier = ">=2.4,<3.0" },
 ]
-provides-extras = ["aiosqlite", "duckdb", "faker", "httpx", "lmdb", "psycopg", "redis", "rich"]
+provides-extras = ["aiosqlite", "duckdb", "faker", "httpx", "lmdb", "psycopg", "redis", "rich", "requests", "urllib3"]
 
 [package.metadata.requires-dev]
 dev = [
