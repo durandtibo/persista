@@ -7,14 +7,17 @@ __all__ = [
     "check_aiosqlite",
     "check_duckdb",
     "check_faker",
+    "check_httpx",
     "check_lmdb",
     "check_psycopg",
     "check_redis",
     "duckdb_available",
     "faker_available",
+    "httpx_available",
     "is_aiosqlite_available",
     "is_duckdb_available",
     "is_faker_available",
+    "is_httpx_available",
     "is_lmdb_available",
     "is_psycopg_available",
     "is_redis_available",
@@ -23,6 +26,7 @@ __all__ = [
     "raise_aiosqlite_missing_error",
     "raise_duckdb_missing_error",
     "raise_faker_missing_error",
+    "raise_httpx_missing_error",
     "raise_lmdb_missing_error",
     "raise_psycopg_missing_error",
     "raise_redis_missing_error",
@@ -46,6 +50,12 @@ from persista.utils.imports.faker import (
     faker_available,
     is_faker_available,
     raise_faker_missing_error,
+)
+from persista.utils.imports.httpx import (
+    check_httpx,
+    httpx_available,
+    is_httpx_available,
+    raise_httpx_missing_error,
 )
 from persista.utils.imports.lmdb import (
     check_lmdb,
