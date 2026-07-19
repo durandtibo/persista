@@ -236,6 +236,62 @@ def test_memoize_kwargs(cache: TTLCache) -> None:
     assert calls == [(1, 2)]
 
 
+async def test_memoize_caches_result_async(cache: TTLCache) -> None:
+    calls = []
+
+    @cache.memoize()
+    async def func(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert await func(1) == 2
+    assert await func(1) == 2
+    assert calls == [1]
+
+
+async def test_memoize_different_args_not_shared_async(cache: TTLCache) -> None:
+    calls = []
+
+    @cache.memoize()
+    async def func(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    await func(1)
+    await func(2)
+    assert calls == [1, 2]
+
+
+async def test_memoize_preserves_function_metadata_async(cache: TTLCache) -> None:
+    @cache.memoize()
+    async def func(x: int) -> int:
+        """Double x."""
+        return x * 2
+
+    assert func.__name__ == "func"
+    assert func.__doc__ == "Double x."
+
+
+def test_memoize_two_caches_do_not_share_entries() -> None:
+    cache1 = TTLCache()
+    cache2 = TTLCache()
+    calls = []
+
+    @cache1.memoize()
+    def func1(x: int) -> int:
+        calls.append(("func1", x))
+        return x * 2
+
+    @cache2.memoize()
+    def func2(x: int) -> int:
+        calls.append(("func2", x))
+        return x * 2
+
+    func1(1)
+    func2(1)
+    assert calls == [("func1", 1), ("func2", 1)]
+
+
 def test_memoize_shared_across_functions_with_same_qualname(cache: TTLCache) -> None:
     # keys are derived from __qualname__, which is the same for both
     # closures below, so their cached results collide
