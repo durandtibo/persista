@@ -284,8 +284,8 @@ class PostgresStore(BasePostgresStore):
     """
 
     def _create_table_sql(self) -> sql.Composed:
-        return sql.SQL("""CREATE TABLE IF NOT EXISTS {table} ( key
-                       TEXT PRIMARY KEY,
+        return sql.SQL("""CREATE TABLE IF NOT EXISTS {table} ( key TEXT
+                       PRIMARY KEY,
 
                        value JSONB NOT NULL )
                        """).format(table=self._table_ident)

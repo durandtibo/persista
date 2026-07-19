@@ -4,10 +4,10 @@ Used by ``test_postgres.py``, ``test_async_postgres.py``,
 ``test_consistency.py``, and ``test_consistency_async.py``, which all
 need to resolve a Postgres conninfo the same way: prefer
 ``PERSISTA_TEST_POSTGRES_URL`` if it points at a reachable server, and
-otherwise lazily start a shared Docker container (skipping Postgres tests
-if Docker or psycopg is unavailable). The resolution is cached at module
-scope so every suite shares a single container instead of paying the
-startup cost multiple times.
+otherwise lazily start a shared Docker container (skipping Postgres
+tests if Docker or psycopg is unavailable). The resolution is cached at
+module scope so every suite shares a single container instead of paying
+the startup cost multiple times.
 """
 
 from __future__ import annotations
