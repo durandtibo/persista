@@ -180,16 +180,13 @@ class BaseStore(ABC):
             keys: The keys of the values to delete.
         """
 
+    @abstractmethod
     def clear(self) -> None:
         """Remove every key-value pair from the store.
 
         This is equivalent to resetting the store to empty, without
-        closing it. The default implementation deletes every key
-        returned by :meth:`keys`; implementations backed by a table
-        or collection that supports a bulk delete/truncate operation
-        should override this for efficiency.
+        closing it.
         """
-        self.delete_many(list(self.keys()))
 
     @abstractmethod
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
@@ -441,16 +438,13 @@ class AsyncBaseStore(ABC):
             keys: The keys of the values to delete.
         """
 
+    @abstractmethod
     async def clear(self) -> None:
         """Remove every key-value pair from the store.
 
         This is equivalent to resetting the store to empty, without
-        closing it. The default implementation deletes every key
-        returned by :meth:`keys`; implementations backed by a table
-        or collection that supports a bulk delete/truncate operation
-        should override this for efficiency.
+        closing it.
         """
-        await self.delete_many([key async for key in self.keys()])
 
     @abstractmethod
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:

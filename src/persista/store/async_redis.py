@@ -169,6 +169,9 @@ class AsyncBaseRedisStore(AsyncBaseStore, MultilineDisplayMixin):
         pipe.srem(_KEYS_SET, *keys)
         await pipe.execute()
 
+    async def clear(self) -> None:
+        await self.delete_many([key async for key in self.keys()])
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []
