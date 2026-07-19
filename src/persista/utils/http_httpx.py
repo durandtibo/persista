@@ -65,7 +65,7 @@ def fetch_response(
         ```pycon
         >>> from persista.utils.http_httpx import fetch_response
         >>> response = fetch_response(  # doctest: +SKIP
-        ...     "https://data.sec.gov/submissions/CIK0000320193.json",
+        ...     "https://jsonplaceholder.typicode.com/todos/1",
         ...     timeout=10,
         ...     max_retries=5,
         ... )
