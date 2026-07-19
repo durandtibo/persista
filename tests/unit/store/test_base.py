@@ -121,3 +121,22 @@ def test_base_store_context_manager() -> None:
     with InMemoryTestStore() as store:
         assert not store.closed
     assert store.closed
+
+
+# --- clear ---
+
+
+def test_base_store_clear_removes_all_values(store: InMemoryTestStore) -> None:
+    store.set_many({"1": {"a": 1}, "2": {"a": 2}})
+    store.clear()
+    assert store.count() == 0
+    assert list(store.keys()) == []
+
+
+def test_base_store_clear_empty_store_is_no_op(store: InMemoryTestStore) -> None:
+    store.clear()
+    assert store.count() == 0
+
+
+def test_base_store_clear_returns_none(store: InMemoryTestStore) -> None:
+    assert store.clear() is None

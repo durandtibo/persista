@@ -265,6 +265,11 @@ class AsyncBaseSQLiteStore(AsyncBaseStore, MultilineDisplayMixin):
         )
         await self._conn.commit()
 
+    async def clear(self) -> None:
+        await self._ensure_schema()
+        await self._conn.execute("DELETE FROM store")
+        await self._conn.commit()
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []

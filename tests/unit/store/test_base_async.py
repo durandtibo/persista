@@ -124,3 +124,22 @@ async def test_async_base_store_context_manager() -> None:
     async with AsyncInMemoryStore() as store:
         assert not store.closed
     assert store.closed
+
+
+# --- clear ---
+
+
+async def test_async_base_store_clear_removes_all_values(store: AsyncInMemoryStore) -> None:
+    await store.set_many({"1": {"a": 1}, "2": {"a": 2}})
+    await store.clear()
+    assert await store.count() == 0
+    assert [key async for key in store.keys()] == []  # noqa: SIM118
+
+
+async def test_async_base_store_clear_empty_store_is_no_op(store: AsyncInMemoryStore) -> None:
+    await store.clear()
+    assert await store.count() == 0
+
+
+async def test_async_base_store_clear_returns_none(store: AsyncInMemoryStore) -> None:
+    assert await store.clear() is None

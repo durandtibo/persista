@@ -196,6 +196,10 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         )
         self._conn.execute(query, (keys,))
 
+    def clear(self) -> None:
+        query = sql.SQL("DELETE FROM {table}").format(table=self._table_ident)
+        self._conn.execute(query)
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []
