@@ -424,6 +424,35 @@ async def test_delete_many_single_key(
     assert await store.get("2") is None
 
 
+# --- clear ---
+
+
+async def test_clear_removes_all_values(
+    store: AsyncBaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    await store.clear()
+    assert await store.count() == 0
+    assert [key async for key in store.keys()] == []  # noqa: SIM118
+
+
+async def test_clear_empty_store_is_no_op(store: AsyncBaseRedisStore) -> None:
+    await store.clear()
+    assert await store.count() == 0
+
+
+async def test_clear_returns_none(store: AsyncBaseRedisStore) -> None:
+    assert await store.clear() is None
+
+
+async def test_clear_then_set_works(store: AsyncBaseRedisStore) -> None:
+    await store.set("1", {"text": "hello"})
+    await store.clear()
+    await store.set("2", {"text": "world"})
+    assert await store.count() == 1
+    assert await store.get("2") == {"text": "world"}
+
+
 # --- contains_many ---
 
 
@@ -485,7 +514,7 @@ async def test_contains_many_returns_tuple_of_two_lists(
 
 
 async def test_keys_empty_store_yields_nothing(store: AsyncBaseRedisStore) -> None:
-    assert [key async for key in store.keys()] == []  # noqa: SIM118
+    assert [key async for key in store.keys()] == []  # noqa: SIM118  # noqa: SIM118
 
 
 async def test_keys_returns_all_keys(

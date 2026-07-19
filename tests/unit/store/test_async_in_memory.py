@@ -597,6 +597,35 @@ async def test_closed_true_after_close(store: AsyncInMemoryStore) -> None:
     assert store.closed
 
 
+# --- clear ---
+
+
+async def test_clear_removes_all_values(
+    store: AsyncInMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    await store.clear()
+    assert await store.count() == 0
+    assert store.data == {}
+
+
+async def test_clear_empty_store_is_no_op(store: AsyncInMemoryStore) -> None:
+    await store.clear()
+    assert await store.count() == 0
+
+
+async def test_clear_returns_none(store: AsyncInMemoryStore) -> None:
+    assert await store.clear() is None
+
+
+async def test_clear_then_set_works(store: AsyncInMemoryStore) -> None:
+    await store.set("1", {"text": "hello"})
+    await store.clear()
+    await store.set("2", {"text": "world"})
+    assert await store.count() == 1
+    assert await store.get("2") == {"text": "world"}
+
+
 # --- context manager ---
 
 

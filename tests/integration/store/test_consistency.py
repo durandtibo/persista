@@ -322,6 +322,33 @@ def test_delete_many_nonexistent_keys_are_silent(store: BaseStore) -> None:
     store.delete_many(["99", "100"])
 
 
+# --- clear ---
+
+
+def test_clear_removes_all_values(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
+    store.set_many(items)
+    store.clear()
+    assert store.count() == 0
+    assert list(store.keys()) == []
+
+
+def test_clear_empty_store_is_no_op(store: BaseStore) -> None:
+    store.clear()
+    assert store.count() == 0
+
+
+def test_clear_returns_none(store: BaseStore) -> None:
+    assert store.clear() is None
+
+
+def test_clear_then_set_works(store: BaseStore) -> None:
+    store.set("1", {"text": "hello"})
+    store.clear()
+    store.set("2", {"text": "world"})
+    assert store.count() == 1
+    assert store.get("2") == {"text": "world"}
+
+
 # --- contains_many ---
 
 

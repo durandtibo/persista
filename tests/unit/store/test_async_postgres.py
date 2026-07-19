@@ -54,6 +54,7 @@ _CREATE_RE = re.compile(r'^CREATE TABLE IF NOT EXISTS "(\w+)"')
 _INSERT_RE = re.compile(r'^INSERT INTO "(\w+)"')
 _DELETE_ANY_RE = re.compile(r'^DELETE FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
 _DELETE_ONE_RE = re.compile(r'^DELETE FROM "(\w+)" WHERE "[^"]+" = %s$')
+_DELETE_ALL_RE = re.compile(r'^DELETE FROM "(\w+)"$')
 _COUNT_RE = re.compile(r'^SELECT COUNT\(\*\) FROM "(\w+)"$')
 _COL_ANY_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
 _COL_ALL_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)"$')
@@ -133,6 +134,9 @@ class FakeConnection:
         if m := _DELETE_ONE_RE.match(text):
             table = self.tables.setdefault(m.group(1), {})
             table.pop(params[0], None)
+            return
+        if m := _DELETE_ALL_RE.match(text):
+            self.tables[m.group(1)] = {}
             return
         msg = f"Unsupported write query in FakeConnection: {text!r}"
         raise AssertionError(msg)
@@ -668,6 +672,35 @@ async def test_delete_many_single_key(
     assert await store.get("2") is None
 
 
+# --- clear ---
+
+
+async def test_clear_removes_all_values(
+    store: AsyncBasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    await store.clear()
+    assert await store.count() == 0
+    assert [key async for key in store.keys()] == []  # noqa: SIM118
+
+
+async def test_clear_empty_store_is_no_op(store: AsyncBasePostgresStore) -> None:
+    await store.clear()
+    assert await store.count() == 0
+
+
+async def test_clear_returns_none(store: AsyncBasePostgresStore) -> None:
+    assert await store.clear() is None
+
+
+async def test_clear_then_set_works(store: AsyncBasePostgresStore) -> None:
+    await store.set("1", {"text": "hello"})
+    await store.clear()
+    await store.set("2", {"text": "world"})
+    assert await store.count() == 1
+    assert await store.get("2") == {"text": "world"}
+
+
 # --- contains_many ---
 
 
@@ -729,7 +762,7 @@ async def test_contains_many_returns_tuple_of_two_lists(
 
 
 async def test_keys_empty_store_yields_nothing(store: AsyncBasePostgresStore) -> None:
-    assert [key async for key in store.keys()] == []  # noqa: SIM118
+    assert [key async for key in store.keys()] == []  # noqa: SIM118  # noqa: SIM118
 
 
 async def test_keys_returns_all_keys(

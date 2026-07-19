@@ -131,6 +131,9 @@ class AsyncInMemoryStore(AsyncBaseStore, InlineDisplayMixin):
         for key in keys:
             await self.delete(key)
 
+    async def clear(self) -> None:
+        self._data.clear()
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         found = [key for key in keys if key in self._data]
         missing = [key for key in keys if key not in self._data]

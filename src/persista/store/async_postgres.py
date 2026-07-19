@@ -97,10 +97,10 @@ class AsyncBasePostgresStore(AsyncBaseStore, MultilineDisplayMixin):
         """Connect to the database and create the store's table if it
         doesn't already exist.
 
-        Called lazily before every query, since the connection cannot
-        be established eagerly in ``__init__`` (see the class
-        docstring). Also called again each time the store is reopened
-        via :meth:`__aenter__` after being closed.
+        Called lazily before every query, since the connection cannot be
+        established eagerly in ``__init__`` (see the class docstring).
+        Also called again each time the store is reopened via
+        :meth:`__aenter__` after being closed.
         """
         if self._conn is None:
             self._conn = await psycopg.AsyncConnection.connect(
@@ -233,6 +233,11 @@ class AsyncBasePostgresStore(AsyncBaseStore, MultilineDisplayMixin):
             table=self._table_ident, key_col=sql.Identifier(self._key_column)
         )
         await self._conn.execute(query, (keys,))
+
+    async def clear(self) -> None:
+        await self._ensure_schema()
+        query = sql.SQL("DELETE FROM {table}").format(table=self._table_ident)
+        await self._conn.execute(query)
 
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:

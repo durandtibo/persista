@@ -164,6 +164,9 @@ class BaseDuckDBStore(BaseStore, MultilineDisplayMixin):
             keys,
         )
 
+    def clear(self) -> None:
+        self._conn.execute("DELETE FROM store")
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []
