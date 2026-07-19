@@ -39,6 +39,7 @@ async def store(store_cls: type[AsyncBaseSQLiteStore]) -> AsyncGenerator[AsyncBa
 async def typed_store_no_schema() -> AsyncGenerator[AsyncTypedSQLiteStore]:
     """In-memory AsyncTypedSQLiteStore with no schema (everything in
     `extra`)."""
+
     async with AsyncTypedSQLiteStore(":memory:") as store:
         yield store
 
@@ -46,6 +47,7 @@ async def typed_store_no_schema() -> AsyncGenerator[AsyncTypedSQLiteStore]:
 @pytest.fixture
 async def typed_store() -> AsyncGenerator[AsyncTypedSQLiteStore]:
     """In-memory store with a typed schema."""
+
     async with AsyncTypedSQLiteStore(
         ":memory:",
         value_schema={"author": "TEXT", "year": "INTEGER", "category": "TEXT"},
@@ -573,6 +575,39 @@ async def test_delete_many_single_key(
     assert await store.get("2") is None
 
 
+# --- clear ---
+
+
+@aiosqlite_available
+async def test_clear_removes_all_values(
+    store: AsyncBaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    await store.clear()
+    assert await store.count() == 0
+    assert [key async for key in store.keys()] == []  # noqa: SIM118
+
+
+@aiosqlite_available
+async def test_clear_empty_store_is_no_op(store: AsyncBaseSQLiteStore) -> None:
+    await store.clear()
+    assert await store.count() == 0
+
+
+@aiosqlite_available
+async def test_clear_returns_none(store: AsyncBaseSQLiteStore) -> None:
+    assert await store.clear() is None
+
+
+@aiosqlite_available
+async def test_clear_then_set_works(store: AsyncBaseSQLiteStore) -> None:
+    await store.set("1", {"text": "hello"})
+    await store.clear()
+    await store.set("2", {"text": "world"})
+    assert await store.count() == 1
+    assert await store.get("2") == {"text": "world"}
+
+
 # --- contains_many ---
 
 
@@ -685,7 +720,7 @@ async def test_show_columns_info_returns_none(store: AsyncBaseSQLiteStore) -> No
 
 @aiosqlite_available
 async def test_keys_empty_store_yields_nothing(store: AsyncBaseSQLiteStore) -> None:
-    assert [key async for key in store.keys()] == []  # noqa: SIM118
+    assert [key async for key in store.keys()] == []  # noqa: SIM118  # noqa: SIM118
 
 
 @aiosqlite_available

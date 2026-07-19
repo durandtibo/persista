@@ -329,6 +329,35 @@ async def test_delete_many_nonexistent_keys_are_silent(store: AsyncBaseStore) ->
     await store.delete_many(["99", "100"])
 
 
+# --- clear ---
+
+
+async def test_clear_removes_all_values(
+    store: AsyncBaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    await store.clear()
+    assert await store.count() == 0
+    assert [key async for key in store.keys()] == []  # noqa: SIM118
+
+
+async def test_clear_empty_store_is_no_op(store: AsyncBaseStore) -> None:
+    await store.clear()
+    assert await store.count() == 0
+
+
+async def test_clear_returns_none(store: AsyncBaseStore) -> None:
+    assert await store.clear() is None
+
+
+async def test_clear_then_set_works(store: AsyncBaseStore) -> None:
+    await store.set("1", {"text": "hello"})
+    await store.clear()
+    await store.set("2", {"text": "world"})
+    assert await store.count() == 1
+    assert await store.get("2") == {"text": "world"}
+
+
 # --- contains_many ---
 
 
