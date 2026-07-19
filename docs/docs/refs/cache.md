@@ -1,1 +1,1 @@
-::: persista.store
+::: persista.cache
