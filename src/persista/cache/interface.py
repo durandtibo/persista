@@ -1,23 +1,31 @@
-r"""Provide module-level access to a shared default ``TTLCache``."""
+r"""Provide module-level access to shared default caches."""
 
 from __future__ import annotations
 
-__all__ = ["cached", "get_ttl_cache", "set_ttl_cache"]
+__all__ = [
+    "async_cached",
+    "cached",
+    "get_async_ttl_cache",
+    "get_ttl_cache",
+    "set_async_ttl_cache",
+    "set_ttl_cache",
+]
 
 
 import functools
 import inspect
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from persista.cache.async_ttl import AsyncTTLCache
 from persista.cache.ttl import TTLCache
 from persista.cache.utils import make_key
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 T = TypeVar("T")
 
-_state = {"cache": TTLCache()}
+_state = {"cache": TTLCache(), "async_cache": AsyncTTLCache()}
 
 
 def get_ttl_cache() -> TTLCache:
@@ -62,13 +70,58 @@ def set_ttl_cache(cache: TTLCache) -> None:
     _state["cache"] = cache
 
 
+def get_async_ttl_cache() -> AsyncTTLCache:
+    """Return the shared default async cache.
+
+    Returns:
+        The shared default :class:`~persista.cache.async_ttl.AsyncTTLCache`
+        instance, used by :func:`async_cached` when no explicit cache
+        is given.
+
+    Example:
+        ```pycon
+        >>> import asyncio
+        >>> from persista.cache.interface import get_async_ttl_cache
+        >>> async def main():
+        ...     cache = get_async_ttl_cache()
+        ...     await cache.set("greeting", "hello")
+        ...     print(await cache.get("greeting"))
+        ...
+        >>> asyncio.run(main())
+        hello
+
+        ```
+    """
+    return _state["async_cache"]
+
+
+def set_async_ttl_cache(cache: AsyncTTLCache) -> None:
+    """Replace the shared default async cache.
+
+    Args:
+        cache: The :class:`~persista.cache.async_ttl.AsyncTTLCache`
+            instance to install as the new shared default, in place of
+            the one returned by :func:`get_async_ttl_cache`.
+
+    Example:
+        ```pycon
+        >>> from persista.cache import AsyncTTLCache
+        >>> from persista.cache import get_async_ttl_cache, set_async_ttl_cache
+        >>> set_async_ttl_cache(AsyncTTLCache(default_ttl=60))
+        >>> get_async_ttl_cache().default_ttl
+        60
+
+        ```
+    """
+    _state["async_cache"] = cache
+
+
 def cached(ttl: int | None = None) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Cache a function's return values in the shared default cache.
 
     Works on both sync and async functions (``async def``), by
-    delegating to :meth:`~persista.cache.ttl.TTLCache.memoize` on the
-    cache returned by :func:`get_ttl_cache` at call time, so replacing
-    the shared cache via :func:`set_ttl_cache` also changes where
+    looking up :func:`get_ttl_cache` on every call, so replacing the
+    shared cache via :func:`set_ttl_cache` also changes where
     already-decorated functions store their results.
 
     Args:
@@ -125,6 +178,66 @@ def cached(ttl: int | None = None) -> Callable[[Callable[..., T]], Callable[...,
                 return result
             result = func(*args, **kwargs)
             cache.set(key, result, ttl=ttl)
+            return result
+
+        return wrapper
+
+    return decorator
+
+
+def async_cached(
+    ttl: int | None = None,
+) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
+    """Cache an async function's return values in the shared default
+    async cache.
+
+    Looks up :func:`get_async_ttl_cache` on every call, so replacing
+    the shared cache via :func:`set_async_ttl_cache` also changes
+    where already-decorated functions store their results.
+
+    Args:
+        ttl: The time-to-live, in seconds, applied to cached results.
+            Defaults to the cache's ``default_ttl``. Must be positive.
+
+    Returns:
+        A decorator that wraps an async function with caching.
+
+    Raises:
+        ValueError: If ``ttl`` is not positive.
+
+    Example:
+        ```pycon
+        >>> import asyncio
+        >>> from persista.cache import async_cached
+        >>> calls = []
+        >>> @async_cached(ttl=60)
+        ... async def square(x):
+        ...     calls.append(x)
+        ...     return x * x
+        ...
+        >>> async def main():
+        ...     print(await square(4))
+        ...     print(await square(4))  # served from the cache, not re-computed
+        ...
+        >>> asyncio.run(main())
+        16
+        16
+        >>> calls
+        [4]
+
+        ```
+    """
+
+    def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
+        @functools.wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            cache = get_async_ttl_cache()
+            key = make_key(func.__qualname__, args, kwargs)
+            result = await cache.get(key)
+            if result is not None:
+                return result
+            result = await func(*args, **kwargs)
+            await cache.set(key, result, ttl=ttl)
             return result
 
         return wrapper
