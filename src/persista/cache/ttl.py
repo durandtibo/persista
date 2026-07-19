@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = ["TTLCache"]
 
 import functools
+import inspect
 import time
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -157,6 +158,8 @@ class TTLCache:
     def memoize(self, ttl: float | None = None) -> Callable[[Callable[..., T]], Callable[..., T]]:
         """Decorate a function so its return values are cached.
 
+        Works on both sync and async functions (``async def``).
+
         The cache key is derived from the decorated function's
         qualified name (``__qualname__``) and call arguments, via
         :func:`~persista.cache.utils.make_key`, so calls with equal
@@ -201,6 +204,20 @@ class TTLCache:
         """
 
         def decorator(func: Callable[..., T]) -> Callable[..., T]:
+            if inspect.iscoroutinefunction(func):
+
+                @functools.wraps(func)
+                async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    key = make_key(func.__qualname__, args, kwargs)
+                    cached = self.get(key)
+                    if cached is not None:
+                        return cached
+                    result = await func(*args, **kwargs)
+                    self.set(key, result, ttl=ttl)
+                    return result
+
+                return async_wrapper
+
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> T:
                 key = make_key(func.__qualname__, args, kwargs)
