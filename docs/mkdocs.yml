@@ -24,6 +24,11 @@ theme:
 nav:
   - Home: index.md
   - get_started.md
+  - User Guide:
+      - uguide/store.md
+      - uguide/cache.md
+      - uguide/http.md
+      - uguide/testing.md
   - Reference:
       - refs/cache.md
       - refs/store.md

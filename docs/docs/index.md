@@ -55,7 +55,100 @@
 
 ## Overview
 
-TODO
+`persista` is a lightweight Python library that provides simple, consistent building blocks for
+persisting and caching data. It offers a uniform key-value store interface backed by multiple
+storage engines (in-memory, SQLite, DuckDB, LMDB, Redis, PostgreSQL) with both sync and async
+APIs, plus TTL caching and HTTP fetch utilities.
+
+**Quick Links:**
+
+- [User Guide](uguide/store.md)
+- [Installation](get_started.md)
+- [Features](#features)
+- [Contributing](#contributing)
+
+## Why persista?
+
+Storage backends have different APIs, and switching between them (e.g. moving from an in-memory
+store in tests to Redis or PostgreSQL in production) usually means rewriting code. `persista`
+solves this with a single, consistent `BaseStore` interface:
+
+**Store and retrieve values:**
+
+```pycon
+>>> from persista.store import InMemoryStore
+>>> store = InMemoryStore()
+>>> store.set("user:1", {"name": "Alice"})
+>>> store.get("user:1")
+{'name': 'Alice'}
+
+```
+
+**Swap the backend without changing the calling code:**
+
+```pycon
+>>> import tempfile
+>>> from pathlib import Path
+>>> from persista.store import SQLiteStore
+>>> with tempfile.TemporaryDirectory() as tmpdir:
+...     with SQLiteStore(Path(tmpdir).joinpath("data.sqlite")) as store:
+...         store.set("user:1", {"name": "Alice"})
+...         store.get("user:1")
+...
+{'name': 'Alice'}
+
+```
+
+**Cache expensive calls with a TTL:**
+
+```pycon
+>>> from persista.cache import cached
+>>> @cached(ttl=60)
+... def slow_call(x: int) -> int:
+...     return x**2
+...
+>>> slow_call(4)
+16
+
+```
+
+See the [user guide](uguide/store.md) for detailed examples.
+
+## Features
+
+`persista` provides a comprehensive set of utilities for persisting and caching data:
+
+### 🗄️ **Key-Value Stores**
+
+A consistent `BaseStore` / `AsyncBaseStore` interface for storing dict values under string keys:
+
+- Uniform API across backends: `get`, `get_many`, `set`, `set_many`, `delete`, `filter`, iteration
+- Sync backends: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`
+- Async backends: `AsyncInMemoryStore`, `AsyncSQLiteStore`, `AsyncRedisStore`, `AsyncPostgresStore`
+- Typed variants (`TypedSQLiteStore`, `TypedPostgresStore`, ...) and pickle-backed variants
+  (`PickleLmdbStore`, `PickleRedisStore`, `AsyncPickleRedisStore`) for non-dict values
+- Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`, `"merge"`)
+
+[Learn more →](uguide/store.md)
+
+### ⏱️ **TTL Caching**
+
+Time-to-live caching for functions and values, with sync and async variants:
+
+- `TTLCache` and `AsyncTTLCache` for explicit cache instances
+- `cached` / `async_cached` decorators for caching function calls
+- Shared default caches via `get_ttl_cache` / `get_async_ttl_cache`
+
+[Learn more →](uguide/cache.md)
+
+### 🌐 **HTTP Utilities**
+
+Helpers to fetch HTTP responses with automatic retries, built on top of `requests` or `httpx`:
+
+- `fetch_response` (sync, `requests`) and `fetch_response_async` (async, `httpx`)
+
+[Learn more →](uguide/http.md)
+
 
 ## Contributing
 
