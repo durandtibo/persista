@@ -11,6 +11,8 @@ __all__ = [
     "check_lmdb",
     "check_psycopg",
     "check_redis",
+    "check_requests",
+    "check_urllib3",
     "duckdb_available",
     "faker_available",
     "httpx_available",
@@ -21,6 +23,8 @@ __all__ = [
     "is_lmdb_available",
     "is_psycopg_available",
     "is_redis_available",
+    "is_requests_available",
+    "is_urllib3_available",
     "lmdb_available",
     "psycopg_available",
     "raise_aiosqlite_missing_error",
@@ -30,7 +34,11 @@ __all__ = [
     "raise_lmdb_missing_error",
     "raise_psycopg_missing_error",
     "raise_redis_missing_error",
+    "raise_requests_missing_error",
+    "raise_urllib3_missing_error",
     "redis_available",
+    "requests_available",
+    "urllib3_available",
 ]
 
 from persista.utils.imports.aiosqlite import (
@@ -74,4 +82,16 @@ from persista.utils.imports.redis import (
     is_redis_available,
     raise_redis_missing_error,
     redis_available,
+)
+from persista.utils.imports.requests import (
+    check_requests,
+    is_requests_available,
+    raise_requests_missing_error,
+    requests_available,
+)
+from persista.utils.imports.urllib3 import (
+    check_urllib3,
+    is_urllib3_available,
+    raise_urllib3_missing_error,
+    urllib3_available,
 )
