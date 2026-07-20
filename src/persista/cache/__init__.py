@@ -10,6 +10,7 @@ __all__ = [
     "get_async_ttl_cache",
     "get_ttl_cache",
     "make_key",
+    "make_pickle_key",
     "set_async_ttl_cache",
     "set_ttl_cache",
 ]
@@ -24,4 +25,4 @@ from persista.cache.interface import (
     set_ttl_cache,
 )
 from persista.cache.ttl import TTLCache
-from persista.cache.utils import make_key
+from persista.cache.utils import make_key, make_pickle_key
