@@ -273,7 +273,9 @@ False
 
 ```pycon
 >>> from persista.cache.utils import make_key
->>> make_key("add", (1, 2), {}, strategy="json") == make_key("add", (1, 2), {}, strategy="json")
+>>> make_key("add", (1, 2), {}, strategy="json") == make_key(
+...     "add", (1, 2), {}, strategy="json"
+... )
 True
 
 ```
