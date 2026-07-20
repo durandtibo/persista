@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from persista.cache.async_ttl import AsyncTTLCache
 from persista.cache.ttl import TTLCache
-from persista.cache.utils import make_json_key
+from persista.cache.utils import make_key
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -116,7 +116,11 @@ def set_async_ttl_cache(cache: AsyncTTLCache) -> None:
     _state["async_cache"] = cache
 
 
-def cached(ttl: int | None = None) -> Callable[[Callable[..., T]], Callable[..., T]]:
+def cached(
+    ttl: int | None = None,
+    strategy: str = "pickle",
+    ignore_non_serializable: bool = False,
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Cache a function's return values in the shared default cache.
 
     Works on both sync and async functions (``async def``), by
@@ -124,9 +128,21 @@ def cached(ttl: int | None = None) -> Callable[[Callable[..., T]], Callable[...,
     shared cache via :func:`set_ttl_cache` also changes where
     already-decorated functions store their results.
 
+    The cache key is derived from the decorated function's qualified
+    name (``__qualname__``) and call arguments, via
+    :func:`~persista.cache.utils.make_key`.
+
     Args:
         ttl: The time-to-live, in seconds, applied to cached results.
             Defaults to the cache's ``default_ttl``. Must be positive.
+        strategy: The serialization strategy used to compute the
+            cache key. Either ``"json"`` or ``"pickle"``. See
+            :func:`~persista.cache.utils.make_key`.
+        ignore_non_serializable: If ``True``, positional arguments and
+            keyword argument values that are not serializable with
+            ``strategy`` are dropped before computing the key, instead
+            of raising an error. See
+            :func:`~persista.cache.utils.make_key`.
 
     Returns:
         A decorator that wraps a function with caching.
@@ -159,7 +175,13 @@ def cached(ttl: int | None = None) -> Callable[[Callable[..., T]], Callable[...,
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 cache = get_ttl_cache()
-                key = make_json_key(func.__qualname__, args, kwargs)
+                key = make_key(
+                    func.__qualname__,
+                    args,
+                    kwargs,
+                    strategy=strategy,
+                    ignore_non_serializable=ignore_non_serializable,
+                )
                 result = cache.get(key)
                 if result is not None:
                     return result
@@ -172,7 +194,13 @@ def cached(ttl: int | None = None) -> Callable[[Callable[..., T]], Callable[...,
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> T:
             cache = get_ttl_cache()
-            key = make_json_key(func.__qualname__, args, kwargs)
+            key = make_key(
+                func.__qualname__,
+                args,
+                kwargs,
+                strategy=strategy,
+                ignore_non_serializable=ignore_non_serializable,
+            )
             result = cache.get(key)
             if result is not None:
                 return result
@@ -187,6 +215,8 @@ def cached(ttl: int | None = None) -> Callable[[Callable[..., T]], Callable[...,
 
 def async_cached(
     ttl: int | None = None,
+    strategy: str = "pickle",
+    ignore_non_serializable: bool = False,
 ) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """Cache an async function's return values in the shared default
     async cache.
@@ -195,9 +225,21 @@ def async_cached(
     the shared cache via :func:`set_async_ttl_cache` also changes
     where already-decorated functions store their results.
 
+    The cache key is derived from the decorated function's qualified
+    name (``__qualname__``) and call arguments, via
+    :func:`~persista.cache.utils.make_key`.
+
     Args:
         ttl: The time-to-live, in seconds, applied to cached results.
             Defaults to the cache's ``default_ttl``. Must be positive.
+        strategy: The serialization strategy used to compute the
+            cache key. Either ``"json"`` or ``"pickle"``. See
+            :func:`~persista.cache.utils.make_key`.
+        ignore_non_serializable: If ``True``, positional arguments and
+            keyword argument values that are not serializable with
+            ``strategy`` are dropped before computing the key, instead
+            of raising an error. See
+            :func:`~persista.cache.utils.make_key`.
 
     Returns:
         A decorator that wraps an async function with caching.
@@ -232,7 +274,13 @@ def async_cached(
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             cache = get_async_ttl_cache()
-            key = make_json_key(func.__qualname__, args, kwargs)
+            key = make_key(
+                func.__qualname__,
+                args,
+                kwargs,
+                strategy=strategy,
+                ignore_non_serializable=ignore_non_serializable,
+            )
             result = await cache.get(key)
             if result is not None:
                 return result
