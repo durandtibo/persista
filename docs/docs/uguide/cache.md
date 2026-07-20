@@ -196,17 +196,17 @@ change its backend or default TTL globally:
 ## Cache Keys
 
 Internally, `memoize`, `cached`, and `async_cached` derive a cache key from the function's
-qualified name and its arguments using `make_key`, which JSON-serializes `(func, args, kwargs)`
+qualified name and its arguments using `make_json_key`, which JSON-serializes `(func, args, kwargs)`
 with sorted keys and hashes the result. Calls with the same arguments (regardless of keyword
 argument order) map to the same key:
 
 ```pycon
->>> from persista.cache.utils import make_key
->>> make_key("add", (1, 2), {}) == make_key("add", (1, 2), {})
+>>> from persista.cache.utils import make_json_key
+>>> make_json_key("add", (1, 2), {}) == make_json_key("add", (1, 2), {})
 True
->>> make_key("add", (), {"a": 1, "b": 2}) == make_key("add", (), {"b": 2, "a": 1})
+>>> make_json_key("add", (), {"a": 1, "b": 2}) == make_json_key("add", (), {"b": 2, "a": 1})
 True
->>> make_key("add", (1, 2), {}) == make_key("add", (1, 3), {})
+>>> make_json_key("add", (1, 2), {}) == make_json_key("add", (1, 3), {})
 False
 
 ```

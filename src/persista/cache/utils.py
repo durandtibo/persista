@@ -2,7 +2,7 @@ r"""Provide helper functions for caches."""
 
 from __future__ import annotations
 
-__all__ = ["make_key", "make_pickle_key"]
+__all__ = ["make_json_key", "make_pickle_key"]
 
 import json
 import pickle
@@ -27,7 +27,7 @@ def _is_json_serializable(value: Any) -> bool:
     return True
 
 
-def make_key(
+def make_json_key(
     func_name: str,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
@@ -69,12 +69,12 @@ def make_key(
 
     Example:
         ```pycon
-        >>> from persista.cache.utils import make_key
-        >>> make_key("add", (1, 2), {}) == make_key("add", (1, 2), {})
+        >>> from persista.cache.utils import make_json_key
+        >>> make_json_key("add", (1, 2), {}) == make_json_key("add", (1, 2), {})
         True
-        >>> make_key("add", (), {"a": 1, "b": 2}) == make_key("add", (), {"b": 2, "a": 1})
+        >>> make_json_key("add", (), {"a": 1, "b": 2}) == make_json_key("add", (), {"b": 2, "a": 1})
         True
-        >>> make_key("add", (1, 2), {}) == make_key("add", (1, 3), {})
+        >>> make_json_key("add", (1, 2), {}) == make_json_key("add", (1, 3), {})
         False
 
         ```
@@ -111,7 +111,7 @@ def make_pickle_key(
     """Derive a stable cache key from a function name and its call
     arguments.
 
-    This is similar to ``make_key`` but uses ``pickle`` instead of
+    This is similar to ``make_json_key`` but uses ``pickle`` instead of
     ``json`` to serialize ``func_name``, ``args``, and ``kwargs``
     before hashing, so it supports a broader range of argument types
     at the cost of a key that is only stable within a single Python
