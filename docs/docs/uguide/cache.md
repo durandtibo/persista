@@ -92,6 +92,37 @@ name and its arguments:
 `memoize` also works on `async def` functions, in which case it must be used with an
 `AsyncTTLCache` (see below).
 
+`memoize` accepts two options that control how the cache key is computed from a call's arguments,
+via `make_key` (see [Cache Keys](#cache-keys) below):
+
+- `strategy`: either `"pickle"` (the default) or `"json"`. `"pickle"` supports a broader range of
+  argument types, but produces keys that are only stable within a single Python version. `"json"`
+  produces keys that are stable across Python versions and processes, but requires every argument
+  to be JSON-serializable.
+- `ignore_non_serializable`: if `True`, positional arguments and keyword argument values that
+  aren't serializable with `strategy` are silently dropped before computing the key, instead of
+  raising an error. This is useful when a function takes an argument that will never be
+  serializable (e.g. a logger or a client instance) but shouldn't prevent caching — calls that
+  differ only in that argument then share the same cache entry.
+
+```pycon
+>>> from persista.cache import TTLCache
+>>> cache = TTLCache()
+>>> calls = []
+>>> @cache.memoize(ttl=60, strategy="json", ignore_non_serializable=True)
+... def greet(name, client=None):
+...     calls.append(name)
+...     return f"hello {name}"
+...
+>>> greet("Ann", client=object())
+'hello Ann'
+>>> greet("Ann", client=object())  # different (non-serializable) client, still a cache hit
+'hello Ann'
+>>> calls
+['Ann']
+
+```
+
 ## Async Caching with `AsyncTTLCache`
 
 `AsyncTTLCache` mirrors `TTLCache`, but every method is a coroutine and it is backed by an
@@ -181,6 +212,26 @@ through your code. They use a shared module-level default cache, retrieved with 
 
 ```
 
+`cached` and `async_cached` accept the same `strategy` and `ignore_non_serializable` options as
+`TTLCache.memoize` (see above), since they compute cache keys the same way:
+
+```pycon
+>>> from persista.cache import cached
+>>> calls = []
+>>> @cached(ttl=60, strategy="json", ignore_non_serializable=True)
+... def greet(name, client=None):
+...     calls.append(name)
+...     return f"hello {name}"
+...
+>>> greet("Ann", client=object())
+'hello Ann'
+>>> greet("Ann", client=object())  # different (non-serializable) client, still a cache hit
+'hello Ann'
+>>> calls
+['Ann']
+
+```
+
 Use `set_ttl_cache` / `set_async_ttl_cache` to replace the shared default cache, for example to
 change its backend or default TTL globally:
 
@@ -196,23 +247,58 @@ change its backend or default TTL globally:
 ## Cache Keys
 
 Internally, `memoize`, `cached`, and `async_cached` derive a cache key from the function's
-qualified name and its arguments using `make_json_key`, which JSON-serializes `(func, args, kwargs)`
-with sorted keys and hashes the result. Calls with the same arguments (regardless of keyword
-argument order) map to the same key:
+qualified name and its arguments using `make_key`, which serializes `(func, args, kwargs)` with
+sorted keyword argument keys and hashes the result. Calls with the same arguments (regardless of
+keyword argument order) map to the same key:
 
 ```pycon
->>> from persista.cache.utils import make_json_key
->>> make_json_key("add", (1, 2), {}) == make_json_key("add", (1, 2), {})
+>>> from persista.cache.utils import make_key
+>>> make_key("add", (1, 2), {}) == make_key("add", (1, 2), {})
 True
->>> make_json_key("add", (), {"a": 1, "b": 2}) == make_json_key("add", (), {"b": 2, "a": 1})
+>>> make_key("add", (), {"a": 1, "b": 2}) == make_key("add", (), {"b": 2, "a": 1})
 True
->>> make_json_key("add", (1, 2), {}) == make_json_key("add", (1, 3), {})
+>>> make_key("add", (1, 2), {}) == make_key("add", (1, 3), {})
 False
 
 ```
 
-Because arguments must be JSON-serializable to compute a key, `memoize`/`cached`/`async_cached`
-only work on functions whose arguments are JSON-serializable.
+`make_key` supports two serialization strategies, selected with `strategy`:
+
+- `"pickle"` (the default): serializes with `pickle` before hashing. Supports a broader range of
+  argument types (e.g. custom objects, `datetime`s) than `"json"`, at the cost of a key that is
+  only stable within a single Python version, since pickle's format can change across versions.
+- `"json"`: serializes with `json` before hashing, so keys are stable across Python versions and
+  processes, but every argument must be JSON-serializable (`dict`, `list`, `str`, `int`, `float`,
+  `bool`, `None`, and nested combinations thereof).
+
+```pycon
+>>> from persista.cache.utils import make_key
+>>> make_key("add", (1, 2), {}, strategy="json") == make_key(
+...     "add", (1, 2), {}, strategy="json"
+... )
+True
+
+```
+
+By default, an argument that isn't serializable with `strategy` raises an error when the key is
+computed — meaning the decorated function can't be called with that argument at all. Pass
+`ignore_non_serializable=True` to instead silently drop non-serializable positional arguments and
+keyword argument values before computing the key:
+
+```pycon
+>>> import threading
+>>> from persista.cache.utils import make_key
+>>> make_key("add", (1, threading.Lock()), {}, ignore_non_serializable=True) == make_key(
+...     "add", (1,), {}, ignore_non_serializable=True
+... )
+True
+
+```
+
+This is useful for arguments that will never be serializable (e.g. a logger or a client instance)
+but that shouldn't block caching. Note that since the argument is dropped rather than incorporated
+into the key, calls that differ *only* in such an argument are treated as the same call and share
+a cached result — make sure that's the behavior you want before enabling it for a given argument.
 
 ## API Reference
 
