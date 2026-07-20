@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 import pytest
@@ -223,6 +224,50 @@ async def test_memoize_uses_default_ttl_when_not_set(fake_time: list[float]) -> 
     fake_time[0] += 11
     await func(1)
     assert calls == [1, 1]
+
+
+async def test_memoize_strategy_json(cache: AsyncTTLCache) -> None:
+    calls = []
+
+    @cache.memoize(strategy="json")
+    async def func(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert await func(1) == 2
+    assert await func(1) == 2
+    assert calls == [1]
+
+
+async def test_memoize_strategy_json_rejects_non_serializable(cache: AsyncTTLCache) -> None:
+    @cache.memoize(strategy="json")
+    async def func(x: object) -> object:
+        return x
+
+    with pytest.raises(TypeError):
+        await func(object())
+
+
+async def test_memoize_default_strategy_rejects_non_serializable(cache: AsyncTTLCache) -> None:
+    @cache.memoize()
+    async def func(x: object) -> object:
+        return x
+
+    with pytest.raises(TypeError):
+        await func(threading.Lock())
+
+
+async def test_memoize_ignore_non_serializable(cache: AsyncTTLCache) -> None:
+    calls = []
+
+    @cache.memoize(strategy="json", ignore_non_serializable=True)
+    async def func(x: int, _obj: object) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert await func(1, object()) == 2
+    assert await func(1, object()) == 2  # different object, shares the cache entry
+    assert calls == [1]
 
 
 async def test_memoize_kwargs(cache: AsyncTTLCache) -> None:

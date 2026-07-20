@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 import pytest
@@ -221,6 +222,50 @@ def test_memoize_uses_default_ttl_when_not_set(fake_time: list[float]) -> None:
     fake_time[0] += 11
     func(1)
     assert calls == [1, 1]
+
+
+def test_memoize_strategy_json(cache: TTLCache) -> None:
+    calls = []
+
+    @cache.memoize(strategy="json")
+    def func(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert func(1) == 2
+    assert func(1) == 2
+    assert calls == [1]
+
+
+def test_memoize_strategy_json_rejects_non_serializable(cache: TTLCache) -> None:
+    @cache.memoize(strategy="json")
+    def func(x: object) -> object:
+        return x
+
+    with pytest.raises(TypeError):
+        func(object())
+
+
+def test_memoize_default_strategy_rejects_non_serializable(cache: TTLCache) -> None:
+    @cache.memoize()
+    def func(x: object) -> object:
+        return x
+
+    with pytest.raises(TypeError):
+        func(threading.Lock())
+
+
+def test_memoize_ignore_non_serializable(cache: TTLCache) -> None:
+    calls = []
+
+    @cache.memoize(strategy="json", ignore_non_serializable=True)
+    def func(x: int, _obj: object) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert func(1, object()) == 2
+    assert func(1, object()) == 2  # different object, but shares the cache entry
+    assert calls == [1]
 
 
 def test_memoize_kwargs(cache: TTLCache) -> None:

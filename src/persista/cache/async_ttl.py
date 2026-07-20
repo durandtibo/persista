@@ -8,7 +8,7 @@ import functools
 import time
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from persista.cache.utils import make_json_key
+from persista.cache.utils import make_key
 from persista.store.async_in_memory import AsyncInMemoryStore
 
 if TYPE_CHECKING:
@@ -170,26 +170,38 @@ class AsyncTTLCache:
         await self._store.clear()
 
     def memoize(
-        self, ttl: float | None = None
+        self,
+        ttl: float | None = None,
+        strategy: str = "pickle",
+        ignore_non_serializable: bool = False,
     ) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
         """Decorate an async function so its return values are cached.
 
         The cache key is derived from the decorated function's
         qualified name (``__qualname__``) and call arguments, via
-        :func:`~persista.cache.utils.make_json_key`, so calls with equal
-        arguments share a cached result. Call arguments must always
-        be JSON-serializable, regardless of the backing store; the
-        return value must additionally be JSON-serializable if the
-        backing store serializes values (see the class docstring).
-        Because the key is based on ``__qualname__`` rather than
-        object identity, two distinct functions defined with the same
-        qualified name (e.g. two calls to the same factory returning
-        a closure) share their cache entries.
+        :func:`~persista.cache.utils.make_key`, so calls with equal
+        arguments share a cached result. Call arguments must be
+        serializable with ``strategy``, unless
+        ``ignore_non_serializable`` is set; the return value must
+        additionally be JSON-serializable if the backing store
+        serializes values (see the class docstring). Because the key
+        is based on ``__qualname__`` rather than object identity, two
+        distinct functions defined with the same qualified name (e.g.
+        two calls to the same factory returning a closure) share
+        their cache entries.
 
         Args:
             ttl: The time-to-live, in seconds, applied to cached
                 results. Defaults to ``self.default_ttl``. Must be
                 positive.
+            strategy: The serialization strategy used to compute the
+                cache key. Either ``"json"`` or ``"pickle"``. See
+                :func:`~persista.cache.utils.make_key`.
+            ignore_non_serializable: If ``True``, positional arguments
+                and keyword argument values that are not serializable
+                with ``strategy`` are dropped before computing the
+                key, instead of raising an error. See
+                :func:`~persista.cache.utils.make_key`.
 
         Returns:
             A decorator that wraps an async function with caching.
@@ -224,7 +236,13 @@ class AsyncTTLCache:
         def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
             @functools.wraps(func)
             async def wrapper(*args: Any, **kwargs: Any) -> Any:
-                key = make_json_key(func.__qualname__, args, kwargs)
+                key = make_key(
+                    func.__qualname__,
+                    args,
+                    kwargs,
+                    strategy=strategy,
+                    ignore_non_serializable=ignore_non_serializable,
+                )
                 cached = await self.get(key)
                 if cached is not None:
                     return cached
