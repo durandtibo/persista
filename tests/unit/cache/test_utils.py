@@ -6,8 +6,8 @@ import pickle
 import pytest
 
 from persista.cache.utils import (
-    _is_json_serializable,
-    _is_picklable,
+    is_json_serializable,
+    is_picklable,
     make_json_key,
     make_key,
     make_pickle_key,
@@ -243,9 +243,9 @@ def test_make_key_unknown_strategy_raises() -> None:
         make_key("func", (), {}, strategy="unknown")
 
 
-#################################
-#     _is_json_serializable     #
-#################################
+################################
+#     is_json_serializable     #
+################################
 
 
 @pytest.mark.parametrize(
@@ -263,7 +263,7 @@ def test_make_key_unknown_strategy_raises() -> None:
     ],
 )
 def test_is_json_serializable(value: object, expected: bool) -> None:
-    assert _is_json_serializable(value) is expected
+    assert is_json_serializable(value) is expected
 
 
 @pytest.mark.parametrize(
@@ -274,12 +274,12 @@ def test_is_json_serializable(value: object, expected: bool) -> None:
     ],
 )
 def test_is_json_serializable_repeated_calls_are_consistent(value: object) -> None:
-    assert _is_json_serializable(value) is _is_json_serializable(value)
+    assert is_json_serializable(value) is is_json_serializable(value)
 
 
-#########################
-#     _is_picklable     #
-#########################
+########################
+#     is_picklable     #
+########################
 
 
 @pytest.mark.parametrize(
@@ -297,7 +297,7 @@ def test_is_json_serializable_repeated_calls_are_consistent(value: object) -> No
     ],
 )
 def test_is_picklable(value: object, expected: bool) -> None:
-    assert _is_picklable(value) is expected
+    assert is_picklable(value) is expected
 
 
 @pytest.mark.parametrize(
@@ -308,4 +308,4 @@ def test_is_picklable(value: object, expected: bool) -> None:
     ],
 )
 def test_is_picklable_repeated_calls_are_consistent(value: object) -> None:
-    assert _is_picklable(value) is _is_picklable(value)
+    assert is_picklable(value) is is_picklable(value)

@@ -2,7 +2,13 @@ r"""Provide helper functions for caches."""
 
 from __future__ import annotations
 
-__all__ = ["make_json_key", "make_key", "make_pickle_key"]
+__all__ = [
+    "is_json_serializable",
+    "is_picklable",
+    "make_json_key",
+    "make_key",
+    "make_pickle_key",
+]
 
 import json
 import pickle
@@ -12,7 +18,7 @@ from typing import Any
 from coola.hashing import hash_bytes
 
 
-def _is_json_serializable(value: Any) -> bool:
+def is_json_serializable(value: Any) -> bool:
     """Indicate whether a value can be JSON-serialized.
 
     Args:
@@ -24,15 +30,33 @@ def _is_json_serializable(value: Any) -> bool:
     try:
         return _is_json_serializable_cached(value)
     except TypeError:
+        # ``value`` is unhashable, so it cannot go through the lru_cache wrapper.
         return _is_json_serializable_impl(value)
 
 
 @lru_cache(maxsize=1024)
 def _is_json_serializable_cached(value: Any) -> bool:
+    """Return the cached result of ``is_json_serializable`` for a
+    hashable value.
+
+    Args:
+        value: The hashable value to check.
+
+    Returns:
+        ``True`` if ``value`` is JSON-serializable, otherwise ``False``.
+    """
     return _is_json_serializable_impl(value)
 
 
 def _is_json_serializable_impl(value: Any) -> bool:
+    """Check whether a value can be JSON-serialized.
+
+    Args:
+        value: The value to check.
+
+    Returns:
+        ``True`` if ``value`` is JSON-serializable, otherwise ``False``.
+    """
     try:
         json.dumps(value)
     except TypeError:
@@ -93,13 +117,13 @@ def make_json_key(
         ```
     """
     if ignore_non_serializable:
-        args = tuple(a for a in args if _is_json_serializable(a))
-        kwargs = {k: v for k, v in kwargs.items() if _is_json_serializable(v)}
+        args = tuple(a for a in args if is_json_serializable(a))
+        kwargs = {k: v for k, v in kwargs.items() if is_json_serializable(v)}
     raw = json.dumps({"func": func_name, "args": args, "kwargs": kwargs}, sort_keys=True)
     return hash_bytes(raw.encode())
 
 
-def _is_picklable(value: Any) -> bool:
+def is_picklable(value: Any) -> bool:
     """Indicate whether a value can be pickled.
 
     Args:
@@ -111,15 +135,33 @@ def _is_picklable(value: Any) -> bool:
     try:
         return _is_picklable_cached(value)
     except TypeError:
+        # ``value`` is unhashable, so it cannot go through the lru_cache wrapper.
         return _is_picklable_impl(value)
 
 
 @lru_cache(maxsize=1024)
 def _is_picklable_cached(value: Any) -> bool:
+    """Return the cached result of ``is_picklable`` for a hashable
+    value.
+
+    Args:
+        value: The hashable value to check.
+
+    Returns:
+        ``True`` if ``value`` is picklable, otherwise ``False``.
+    """
     return _is_picklable_impl(value)
 
 
 def _is_picklable_impl(value: Any) -> bool:
+    """Check whether a value can be pickled.
+
+    Args:
+        value: The value to check.
+
+    Returns:
+        ``True`` if ``value`` is picklable, otherwise ``False``.
+    """
     try:
         pickle.dumps(value)
     except (pickle.PicklingError, TypeError, AttributeError):
@@ -183,8 +225,8 @@ def make_pickle_key(
         ```
     """
     if ignore_non_serializable:
-        args = tuple(a for a in args if _is_picklable(a))
-        kwargs = {k: v for k, v in kwargs.items() if _is_picklable(v)}
+        args = tuple(a for a in args if is_picklable(a))
+        kwargs = {k: v for k, v in kwargs.items() if is_picklable(v)}
     raw = pickle.dumps((func_name, args, sorted(kwargs.items())))
     return hash_bytes(raw)
 
