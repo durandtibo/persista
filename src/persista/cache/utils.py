@@ -10,22 +10,51 @@ from typing import Any
 from coola.hashing import hash_bytes
 
 
-def make_key(func_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+def _is_json_serializable(value: Any) -> bool:
+    """Indicate whether a value can be JSON-serialized.
+
+    Args:
+        value: The value to check.
+
+    Returns:
+        ``True`` if ``value`` is JSON-serializable, otherwise ``False``.
+    """
+    try:
+        json.dumps(value)
+    except TypeError:
+        return False
+    return True
+
+
+def make_key(
+    func_name: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    ignore_non_serializable: bool = False,
+) -> str:
     """Derive a stable cache key from a function name and its call
     arguments.
 
     ``func_name``, ``args``, and ``kwargs`` are JSON-serialized (with
     ``kwargs`` keys sorted, so key order doesn't affect the result)
     and hashed. ``args`` and the values in ``kwargs`` must be
-    JSON-serializable.
+    JSON-serializable, unless ``ignore_non_serializable`` is set.
 
     Args:
         func_name: The name of the function being cached, typically
             its ``__qualname__``.
         args: The positional arguments the function was called with.
-            Must be JSON-serializable.
+            Must be JSON-serializable, unless ``ignore_non_serializable``
+            is set.
         kwargs: The keyword arguments the function was called with.
-            Must be JSON-serializable.
+            Must be JSON-serializable, unless ``ignore_non_serializable``
+            is set.
+        ignore_non_serializable: If ``True``, positional arguments and
+            keyword argument values that are not JSON-serializable are
+            dropped before computing the key, instead of raising an
+            error. This means calls that only differ in a non-serializable
+            argument (e.g. a logger or a client instance) map to the
+            same key.
 
     Returns:
         A hash of ``func_name``, ``args``, and ``kwargs``, stable
@@ -34,7 +63,8 @@ def make_key(func_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> s
 
     Raises:
         TypeError: If ``args`` or ``kwargs`` contains a value that is
-            not JSON-serializable.
+            not JSON-serializable and ``ignore_non_serializable`` is
+            ``False``.
 
     Example:
         ```pycon
@@ -48,5 +78,8 @@ def make_key(func_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> s
 
         ```
     """
+    if ignore_non_serializable:
+        args = tuple(a for a in args if _is_json_serializable(a))
+        kwargs = {k: v for k, v in kwargs.items() if _is_json_serializable(v)}
     raw = json.dumps({"func": func_name, "args": args, "kwargs": kwargs}, sort_keys=True)
     return hash_bytes(raw.encode())
