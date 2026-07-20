@@ -12,7 +12,7 @@ only-include = ["src"]
 
 [project]
 name = "persista"
-version = "0.0.1"
+version = "0.0.2a0"
 description = "library for persisting and caching data"
 readme = "README.md"
 authors = [
