@@ -26,6 +26,7 @@ __all__ = [
     "OnConflict",
     "PickleLmdbStore",
     "PickleRedisStore",
+    "PickleSQLiteStore",
     "PostgresStore",
     "RedisStore",
     "SQLiteStore",
@@ -60,7 +61,12 @@ from persista.store.in_memory import InMemoryStore
 from persista.store.lmdb import BaseLmdbStore, LmdbStore, PickleLmdbStore
 from persista.store.postgres import BasePostgresStore, PostgresStore, TypedPostgresStore
 from persista.store.redis import BaseRedisStore, PickleRedisStore, RedisStore
-from persista.store.sqlite import BaseSQLiteStore, SQLiteStore, TypedSQLiteStore
+from persista.store.sqlite import (
+    BaseSQLiteStore,
+    PickleSQLiteStore,
+    SQLiteStore,
+    TypedSQLiteStore,
+)
 from persista.store.types import OnConflict
 from persista.store.validation import (
     normalize_on_conflict,
