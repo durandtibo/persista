@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING
 
 import pytest
@@ -173,6 +174,50 @@ async def test_cached_caches_result_async() -> None:
     assert calls == [1]
 
 
+def test_cached_strategy_json() -> None:
+    calls = []
+
+    @cached(strategy="json")
+    def func(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert func(1) == 2
+    assert func(1) == 2
+    assert calls == [1]
+
+
+def test_cached_strategy_json_rejects_non_serializable() -> None:
+    @cached(strategy="json")
+    def func(x: object) -> object:
+        return x
+
+    with pytest.raises(TypeError):
+        func(object())
+
+
+def test_cached_default_strategy_rejects_non_serializable() -> None:
+    @cached()
+    def func(x: object) -> object:
+        return x
+
+    with pytest.raises(TypeError):
+        func(threading.Lock())
+
+
+def test_cached_ignore_non_serializable() -> None:
+    calls = []
+
+    @cached(strategy="json", ignore_non_serializable=True)
+    def func(x: int, _obj: object) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert func(1, object()) == 2
+    assert func(1, object()) == 2  # different object, but shares the cache entry
+    assert calls == [1]
+
+
 ###########################################
 #     Tests for get_async_ttl_cache       #
 ###########################################
@@ -253,6 +298,50 @@ def test_async_cached_preserves_function_metadata() -> None:
 
     assert func.__name__ == "func"
     assert func.__doc__ == "Double x."
+
+
+async def test_async_cached_strategy_json() -> None:
+    calls = []
+
+    @async_cached(strategy="json")
+    async def func(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert await func(1) == 2
+    assert await func(1) == 2
+    assert calls == [1]
+
+
+async def test_async_cached_strategy_json_rejects_non_serializable() -> None:
+    @async_cached(strategy="json")
+    async def func(x: object) -> object:
+        return x
+
+    with pytest.raises(TypeError):
+        await func(object())
+
+
+async def test_async_cached_default_strategy_rejects_non_serializable() -> None:
+    @async_cached()
+    async def func(x: object) -> object:
+        return x
+
+    with pytest.raises(TypeError):
+        await func(threading.Lock())
+
+
+async def test_async_cached_ignore_non_serializable() -> None:
+    calls = []
+
+    @async_cached(strategy="json", ignore_non_serializable=True)
+    async def func(x: int, _obj: object) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert await func(1, object()) == 2
+    assert await func(1, object()) == 2  # different object, shares the cache entry
+    assert calls == [1]
 
 
 async def test_async_cached_uses_shared_default_cache() -> None:

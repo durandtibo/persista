@@ -24,10 +24,13 @@ jobs:
           'aiosqlite',
           'duckdb',
           'faker',
+          'httpx',
           'lmdb',
           'psycopg',
           'redis',
+          'requests',
           'rich',
+          'urllib3',
         ]
 
     steps:
