@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from persista.cache.async_ttl import AsyncTTLCache
 from persista.cache.ttl import TTLCache
-from persista.cache.utils import make_key
+from persista.cache.utils import make_json_key
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -159,7 +159,7 @@ def cached(ttl: int | None = None) -> Callable[[Callable[..., T]], Callable[...,
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 cache = get_ttl_cache()
-                key = make_key(func.__qualname__, args, kwargs)
+                key = make_json_key(func.__qualname__, args, kwargs)
                 result = cache.get(key)
                 if result is not None:
                     return result
@@ -172,7 +172,7 @@ def cached(ttl: int | None = None) -> Callable[[Callable[..., T]], Callable[...,
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> T:
             cache = get_ttl_cache()
-            key = make_key(func.__qualname__, args, kwargs)
+            key = make_json_key(func.__qualname__, args, kwargs)
             result = cache.get(key)
             if result is not None:
                 return result
@@ -232,7 +232,7 @@ def async_cached(
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             cache = get_async_ttl_cache()
-            key = make_key(func.__qualname__, args, kwargs)
+            key = make_json_key(func.__qualname__, args, kwargs)
             result = await cache.get(key)
             if result is not None:
                 return result

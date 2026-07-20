@@ -8,7 +8,7 @@ import functools
 import time
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from persista.cache.utils import make_key
+from persista.cache.utils import make_json_key
 from persista.store.async_in_memory import AsyncInMemoryStore
 
 if TYPE_CHECKING:
@@ -176,7 +176,7 @@ class AsyncTTLCache:
 
         The cache key is derived from the decorated function's
         qualified name (``__qualname__``) and call arguments, via
-        :func:`~persista.cache.utils.make_key`, so calls with equal
+        :func:`~persista.cache.utils.make_json_key`, so calls with equal
         arguments share a cached result. Call arguments must always
         be JSON-serializable, regardless of the backing store; the
         return value must additionally be JSON-serializable if the
@@ -224,7 +224,7 @@ class AsyncTTLCache:
         def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
             @functools.wraps(func)
             async def wrapper(*args: Any, **kwargs: Any) -> Any:
-                key = make_key(func.__qualname__, args, kwargs)
+                key = make_json_key(func.__qualname__, args, kwargs)
                 cached = await self.get(key)
                 if cached is not None:
                     return cached
