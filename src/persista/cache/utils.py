@@ -2,7 +2,7 @@ r"""Provide helper functions for caches."""
 
 from __future__ import annotations
 
-__all__ = ["make_json_key", "make_pickle_key"]
+__all__ = ["make_json_key", "make_key", "make_pickle_key"]
 
 import json
 import pickle
@@ -162,3 +162,70 @@ def make_pickle_key(
         kwargs = {k: v for k, v in kwargs.items() if _is_picklable(v)}
     raw = pickle.dumps((func_name, args, sorted(kwargs.items())))
     return hash_bytes(raw)
+
+
+def make_key(
+    func_name: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    strategy: str = "pickle",
+    ignore_non_serializable: bool = False,
+) -> str:
+    """Derive a stable cache key from a function name and its call
+    arguments, using the given serialization strategy.
+
+    Args:
+        func_name: The name of the function being cached, typically
+            its ``__qualname__``.
+        args: The positional arguments the function was called with.
+            Must be serializable with ``strategy``, unless
+            ``ignore_non_serializable`` is set.
+        kwargs: The keyword arguments the function was called with.
+            Must be serializable with ``strategy``, unless
+            ``ignore_non_serializable`` is set.
+        strategy: The serialization strategy used to compute the key.
+            Either ``"json"`` (see ``make_json_key``) or ``"pickle"``
+            (see ``make_pickle_key``).
+        ignore_non_serializable: If ``True``, positional arguments and
+            keyword argument values that are not serializable with
+            ``strategy`` are dropped before computing the key, instead
+            of raising an error. This means calls that only differ in
+            a non-serializable argument (e.g. a logger or a client
+            instance) map to the same key.
+
+    Returns:
+        A hash of ``func_name``, ``args``, and ``kwargs``, stable
+        across calls with equal arguments regardless of ``kwargs``
+        order.
+
+    Raises:
+        ValueError: If ``strategy`` is not ``"json"`` or ``"pickle"``.
+        TypeError: If ``strategy`` is ``"json"`` and ``args`` or
+            ``kwargs`` contains a value that is not JSON-serializable
+            and ``ignore_non_serializable`` is ``False``.
+        pickle.PicklingError: If ``strategy`` is ``"pickle"`` and
+            ``args`` or ``kwargs`` contains a value that cannot be
+            pickled and ``ignore_non_serializable`` is ``False``.
+
+    Example:
+        ```pycon
+        >>> from persista.cache.utils import make_key
+        >>> make_key("add", (1, 2), {}, strategy="json") == make_key(
+        ...     "add", (1, 2), {}, strategy="json"
+        ... )
+        True
+        >>> make_key("add", (1, 2), {}) == make_key("add", (1, 3), {})
+        False
+
+        ```
+    """
+    if strategy == "json":
+        return make_json_key(
+            func_name, args, kwargs, ignore_non_serializable=ignore_non_serializable
+        )
+    if strategy == "pickle":
+        return make_pickle_key(
+            func_name, args, kwargs, ignore_non_serializable=ignore_non_serializable
+        )
+    msg = f"Unknown strategy: {strategy!r}. Expected 'json' or 'pickle'."
+    raise ValueError(msg)

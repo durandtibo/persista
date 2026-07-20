@@ -5,7 +5,7 @@ import pickle
 
 import pytest
 
-from persista.cache.utils import make_json_key, make_pickle_key
+from persista.cache.utils import make_json_key, make_key, make_pickle_key
 
 logger = logging.getLogger(__name__)
 
@@ -159,3 +159,53 @@ def test_make_pickle_key_ignore_non_serializable_keeps_serializable_args() -> No
 def test_make_pickle_key_ignore_non_serializable_default_false() -> None:
     with pytest.raises((pickle.PicklingError, TypeError, AttributeError)):
         make_pickle_key("func", (), {"obj": lambda x: x})
+
+
+####################
+#     make_key     #
+####################
+
+
+def test_make_key_default_strategy_is_pickle() -> None:
+    assert make_key("func", (1, 2), {}) == make_pickle_key("func", (1, 2), {})
+
+
+def test_make_key_strategy_json() -> None:
+    assert make_key("func", (1, 2), {}, strategy="json") == make_json_key("func", (1, 2), {})
+
+
+def test_make_key_strategy_pickle() -> None:
+    assert make_key("func", (1, 2), {}, strategy="pickle") == make_pickle_key("func", (1, 2), {})
+
+
+def test_make_key_strategy_json_supports_ignore_non_serializable() -> None:
+    class Custom:
+        pass
+
+    assert make_key(
+        "func", (Custom(),), {}, strategy="json", ignore_non_serializable=True
+    ) == make_key("func", (), {}, strategy="json", ignore_non_serializable=True)
+
+
+def test_make_key_strategy_json_non_serializable_raises() -> None:
+    class Custom:
+        pass
+
+    with pytest.raises(TypeError):
+        make_key("func", (Custom(),), {}, strategy="json")
+
+
+def test_make_key_strategy_pickle_supports_non_json_serializable_argument() -> None:
+    assert make_key("func", ({1, 2, 3},), {}, strategy="pickle") == make_key(
+        "func", ({1, 2, 3},), {}, strategy="pickle"
+    )
+
+
+def test_make_key_strategy_pickle_non_picklable_raises() -> None:
+    with pytest.raises((pickle.PicklingError, TypeError, AttributeError)):
+        make_key("func", (lambda x: x,), {}, strategy="pickle")
+
+
+def test_make_key_unknown_strategy_raises() -> None:
+    with pytest.raises(ValueError, match="Unknown strategy"):
+        make_key("func", (), {}, strategy="unknown")
