@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import pickle
+import threading
 from typing import TYPE_CHECKING
 
 import pytest
@@ -253,8 +253,8 @@ async def test_memoize_default_strategy_rejects_non_serializable(cache: AsyncTTL
     async def func(x: object) -> object:
         return x
 
-    with pytest.raises(pickle.PicklingError):
-        await func(lambda: None)
+    with pytest.raises(TypeError):
+        await func(threading.Lock())
 
 
 async def test_memoize_ignore_non_serializable(cache: AsyncTTLCache) -> None:
