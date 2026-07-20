@@ -10,9 +10,9 @@ from persista.cache.utils import make_key, make_pickle_key
 logger = logging.getLogger(__name__)
 
 
-##########################
-#     make_key           #
-##########################
+####################
+#     make_key     #
+####################
 
 
 def test_make_key_returns_string() -> None:
@@ -92,9 +92,9 @@ def test_make_key_ignore_non_serializable_default_false() -> None:
         make_key("func", (), {"obj": Custom()})
 
 
-##########################
-#   make_pickle_key      #
-##########################
+###########################
+#     make_pickle_key     #
+###########################
 
 
 def test_make_pickle_key_returns_string() -> None:
