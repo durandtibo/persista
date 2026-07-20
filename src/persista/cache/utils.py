@@ -6,6 +6,7 @@ __all__ = ["make_json_key", "make_key", "make_pickle_key"]
 
 import json
 import pickle
+from functools import lru_cache
 from typing import Any
 
 from coola.hashing import hash_bytes
@@ -20,6 +21,18 @@ def _is_json_serializable(value: Any) -> bool:
     Returns:
         ``True`` if ``value`` is JSON-serializable, otherwise ``False``.
     """
+    try:
+        return _is_json_serializable_cached(value)
+    except TypeError:
+        return _is_json_serializable_impl(value)
+
+
+@lru_cache(maxsize=1024)
+def _is_json_serializable_cached(value: Any) -> bool:
+    return _is_json_serializable_impl(value)
+
+
+def _is_json_serializable_impl(value: Any) -> bool:
     try:
         json.dumps(value)
     except TypeError:
@@ -95,6 +108,18 @@ def _is_picklable(value: Any) -> bool:
     Returns:
         ``True`` if ``value`` is picklable, otherwise ``False``.
     """
+    try:
+        return _is_picklable_cached(value)
+    except TypeError:
+        return _is_picklable_impl(value)
+
+
+@lru_cache(maxsize=1024)
+def _is_picklable_cached(value: Any) -> bool:
+    return _is_picklable_impl(value)
+
+
+def _is_picklable_impl(value: Any) -> bool:
     try:
         pickle.dumps(value)
     except (pickle.PicklingError, TypeError, AttributeError):
