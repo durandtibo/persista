@@ -1,7 +1,7 @@
-# TTL Caching
+# Caching
 
-:book: This page describes the `persista.cache` package, which provides time-to-live (TTL)
-caching for values and function calls, with both synchronous and asynchronous APIs.
+:book: This page describes the `persista.cache` package, which provides caching for values and
+function calls, with both synchronous and asynchronous APIs.
 
 **Prerequisites:** You'll need to know a bit of Python, and it helps to be familiar with the
 [store user guide](store.md) since caches are backed by a `BaseStore`/`AsyncBaseStore`.
@@ -10,21 +10,21 @@ caching for values and function calls, with both synchronous and asynchronous AP
 
 The `persista.cache` package provides two related ways to cache data:
 
-- `TTLCache` / `AsyncTTLCache`: explicit cache objects with `get`/`set`/`clear` methods, backed by
+- `Cache` / `AsyncTTLCache`: explicit cache objects with `get`/`set`/`clear` methods, backed by
   any `BaseStore`/`AsyncBaseStore` (an in-memory store by default)
 - `cached` / `async_cached`: decorators that cache the result of a function call using a shared
   default cache
 
-Every cached entry has an expiration time. Once a key's TTL has elapsed, `get` behaves as if the
-key were never set.
+An entry can optionally have an expiration time (TTL). Once a key's TTL has elapsed, `get`
+behaves as if the key were never set.
 
-## Using `TTLCache` Directly
+## Using `Cache` Directly
 
-Create a `TTLCache` and use `set`/`get` like a dictionary with expiration:
+Create a `Cache` and use `set`/`get` like a dictionary, optionally with expiration:
 
 ```pycon
->>> from persista.cache import TTLCache
->>> cache = TTLCache(default_ttl=60)
+>>> from persista.cache import Cache
+>>> cache = Cache(default_ttl=60)
 >>> cache.set("greeting", "hello")
 >>> cache.get("greeting")
 'hello'
@@ -33,12 +33,13 @@ True
 
 ```
 
-`default_ttl` (in seconds) is used whenever `set` is called without an explicit `ttl`. Pass `ttl`
-to `set` to override it for a single entry:
+`default_ttl` (in seconds) is used whenever `set` is called without an explicit `ttl`. It
+defaults to `None`, meaning entries never expire unless a `ttl` is given. Pass `ttl` to `set` to
+override it for a single entry; `ttl=0` evicts the entry instead of storing it:
 
 ```pycon
->>> from persista.cache import TTLCache
->>> cache = TTLCache()
+>>> from persista.cache import Cache
+>>> cache = Cache()
 >>> cache.set("greeting", "hello")
 >>> cache.set("short-lived", "value", ttl=30)
 
@@ -47,8 +48,8 @@ to `set` to override it for a single entry:
 `clear` removes every entry:
 
 ```pycon
->>> from persista.cache import TTLCache
->>> cache = TTLCache()
+>>> from persista.cache import Cache
+>>> cache = Cache()
 >>> cache.set("greeting", "hello")
 >>> cache.clear()
 >>> cache.get("greeting") is None
@@ -56,24 +57,45 @@ True
 
 ```
 
-By default, `TTLCache` stores entries in an `InMemoryStore`. Pass any other `BaseStore` to
-persist cached values, e.g. to share a cache across processes with `RedisStore`:
+By default, `Cache` stores entries in an `InMemoryStore`. Pass any other `BaseStore` to persist
+cached values, e.g. to share a cache across processes with `RedisStore`:
 
 ```python
-from persista.cache import TTLCache
+from persista.cache import Cache
 from persista.store import RedisStore
 
-cache = TTLCache(store=RedisStore("redis://localhost:6379/0"), default_ttl=300)
+cache = Cache(store=RedisStore("redis://localhost:6379/0"), default_ttl=300)
 ```
 
-## Memoizing Functions with `TTLCache.memoize`
+## Computing a Value on a Cache Miss with `Cache.get_or_compute`
 
-`TTLCache.memoize` is a decorator that caches a function's return value, keyed on the function
-name and its arguments:
+`get_or_compute` returns the cached value for a key, computing and storing it on a cache miss:
 
 ```pycon
->>> from persista.cache import TTLCache
->>> cache = TTLCache()
+>>> from persista.cache import Cache
+>>> cache = Cache()
+>>> calls = []
+>>> def compute(x):
+...     calls.append(x)
+...     return x * 2
+...
+>>> cache.get_or_compute("key", compute, 4)
+8
+>>> cache.get_or_compute("key", compute, 4)  # served from the cache
+8
+>>> calls
+[4]
+
+```
+
+## Memoizing Functions with `Cache.memoize`
+
+`Cache.memoize` is a decorator that caches a function's return value, keyed on the function name
+and its arguments. It works on both sync and `async def` functions:
+
+```pycon
+>>> from persista.cache import Cache
+>>> cache = Cache()
 >>> calls = []
 >>> @cache.memoize(ttl=60)
 ... def square(x):
@@ -89,16 +111,13 @@ name and its arguments:
 
 ```
 
-`memoize` also works on `async def` functions, in which case it must be used with an
-`AsyncTTLCache` (see below).
-
 `memoize` accepts two options that control how the cache key is computed from a call's arguments,
 via `make_key` (see [Cache Keys](#cache-keys) below):
 
-- `strategy`: either `"pickle"` (the default) or `"json"`. `"pickle"` supports a broader range of
-  argument types, but produces keys that are only stable within a single Python version. `"json"`
-  produces keys that are stable across Python versions and processes, but requires every argument
-  to be JSON-serializable.
+- `strategy`: either `"json"` (the default) or `"pickle"`. `"json"` produces keys that are stable
+  across Python versions and processes, but requires every argument to be JSON-serializable.
+  `"pickle"` supports a broader range of argument types, at the cost of a key that is only stable
+  within a single Python version.
 - `ignore_non_serializable`: if `True`, positional arguments and keyword argument values that
   aren't serializable with `strategy` are silently dropped before computing the key, instead of
   raising an error. This is useful when a function takes an argument that will never be
@@ -106,8 +125,8 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
   differ only in that argument then share the same cache entry.
 
 ```pycon
->>> from persista.cache import TTLCache
->>> cache = TTLCache()
+>>> from persista.cache import Cache
+>>> cache = Cache()
 >>> calls = []
 >>> @cache.memoize(ttl=60, strategy="json", ignore_non_serializable=True)
 ... def greet(name, client=None):
@@ -125,8 +144,8 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
 
 ## Async Caching with `AsyncTTLCache`
 
-`AsyncTTLCache` mirrors `TTLCache`, but every method is a coroutine and it is backed by an
-`AsyncBaseStore` (an `AsyncInMemoryStore` by default):
+`AsyncTTLCache` mirrors `Cache`'s `get`/`set`/`clear`/`memoize` API, but every method is a
+coroutine and it is backed by an `AsyncBaseStore` (an `AsyncInMemoryStore` by default):
 
 ```pycon
 >>> import asyncio
@@ -170,9 +189,9 @@ None
 
 ## Shared Default Caches: `cached` and `async_cached`
 
-For simple cases, `cached` and `async_cached` avoid creating and threading a `TTLCache` instance
-through your code. They use a shared module-level default cache, retrieved with `get_ttl_cache`
-/ `get_async_ttl_cache`:
+For simple cases, `cached` and `async_cached` avoid creating and threading a `Cache` instance
+through your code. They use a shared module-level default cache, retrieved with `get_cache` /
+`get_async_ttl_cache`:
 
 ```pycon
 >>> from persista.cache import cached
@@ -213,7 +232,7 @@ through your code. They use a shared module-level default cache, retrieved with 
 ```
 
 `cached` and `async_cached` accept the same `strategy` and `ignore_non_serializable` options as
-`TTLCache.memoize` (see above), since they compute cache keys the same way:
+`Cache.memoize` (see above), since they compute cache keys the same way:
 
 ```pycon
 >>> from persista.cache import cached
@@ -232,14 +251,14 @@ through your code. They use a shared module-level default cache, retrieved with 
 
 ```
 
-Use `set_ttl_cache` / `set_async_ttl_cache` to replace the shared default cache, for example to
+Use `set_cache` / `set_async_ttl_cache` to replace the shared default cache, for example to
 change its backend or default TTL globally:
 
 ```pycon
->>> from persista.cache import TTLCache
->>> from persista.cache import get_ttl_cache, set_ttl_cache
->>> set_ttl_cache(TTLCache(default_ttl=60))
->>> get_ttl_cache().default_ttl
+>>> from persista.cache import Cache
+>>> from persista.cache import get_cache, set_cache
+>>> set_cache(Cache(default_ttl=60))
+>>> get_cache().default_ttl
 60
 
 ```
@@ -264,12 +283,12 @@ False
 
 `make_key` supports two serialization strategies, selected with `strategy`:
 
-- `"pickle"` (the default): serializes with `pickle` before hashing. Supports a broader range of
-  argument types (e.g. custom objects, `datetime`s) than `"json"`, at the cost of a key that is
-  only stable within a single Python version, since pickle's format can change across versions.
-- `"json"`: serializes with `json` before hashing, so keys are stable across Python versions and
-  processes, but every argument must be JSON-serializable (`dict`, `list`, `str`, `int`, `float`,
-  `bool`, `None`, and nested combinations thereof).
+- `"json"` (the default): serializes with `json` before hashing, so keys are stable across
+  Python versions and processes, but every argument must be JSON-serializable (`dict`, `list`,
+  `str`, `int`, `float`, `bool`, `None`, and nested combinations thereof).
+- `"pickle"`: serializes with `pickle` before hashing. Supports a broader range of argument types
+  (e.g. custom objects, `datetime`s) than `"json"`, at the cost of a key that is only stable
+  within a single Python version, since pickle's format can change across versions.
 
 ```pycon
 >>> from persista.cache.utils import make_key
