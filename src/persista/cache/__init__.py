@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "AsyncTTLCache",
+    "Cache",
     "TTLCache",
     "async_cached",
     "cached",
@@ -17,6 +18,7 @@ __all__ = [
 ]
 
 from persista.cache.async_ttl import AsyncTTLCache
+from persista.cache.cache import Cache
 from persista.cache.interface import (
     async_cached,
     cached,
