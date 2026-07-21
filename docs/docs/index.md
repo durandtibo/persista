@@ -135,9 +135,9 @@ A consistent `BaseStore` / `AsyncBaseStore` interface for storing dict values un
 
 Time-to-live caching for functions and values, with sync and async variants:
 
-- `Cache` and `AsyncTTLCache` for explicit cache instances
+- `Cache` and `AsyncCache` for explicit cache instances
 - `cached` / `async_cached` decorators for caching function calls
-- Shared default caches via `get_cache` / `get_async_ttl_cache`
+- Shared default caches via `get_cache` / `get_async_cache`
 
 [Learn more →](uguide/cache.md)
 

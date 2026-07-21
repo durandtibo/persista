@@ -10,7 +10,7 @@ function calls, with both synchronous and asynchronous APIs.
 
 The `persista.cache` package provides two related ways to cache data:
 
-- `Cache` / `AsyncTTLCache`: explicit cache objects with `get`/`set`/`clear` methods, backed by
+- `Cache` / `AsyncCache`: explicit cache objects with `get`/`set`/`clear` methods, backed by
   any `BaseStore`/`AsyncBaseStore` (an in-memory store by default)
 - `cached` / `async_cached`: decorators that cache the result of a function call using a shared
   default cache
@@ -142,16 +142,16 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
 
 ```
 
-## Async Caching with `AsyncTTLCache`
+## Async Caching with `AsyncCache`
 
-`AsyncTTLCache` mirrors `Cache`'s `get`/`set`/`clear`/`memoize` API, but every method is a
+`AsyncCache` mirrors `Cache`'s `get`/`set`/`clear`/`memoize` API, but every method is a
 coroutine and it is backed by an `AsyncBaseStore` (an `AsyncInMemoryStore` by default):
 
 ```pycon
 >>> import asyncio
->>> from persista.cache import AsyncTTLCache
+>>> from persista.cache import AsyncCache
 >>> async def main():
-...     cache = AsyncTTLCache(default_ttl=60)
+...     cache = AsyncCache(default_ttl=60)
 ...     await cache.set("greeting", "hello")
 ...     print(await cache.get("greeting"))
 ...     await cache.clear()
@@ -163,12 +163,12 @@ None
 
 ```
 
-`AsyncTTLCache.memoize` decorates `async def` functions:
+`AsyncCache.memoize` decorates `async def` functions:
 
 ```pycon
 >>> import asyncio
->>> from persista.cache import AsyncTTLCache
->>> cache = AsyncTTLCache()
+>>> from persista.cache import AsyncCache
+>>> cache = AsyncCache()
 >>> calls = []
 >>> @cache.memoize(ttl=60)
 ... async def square(x):
@@ -191,7 +191,7 @@ None
 
 For simple cases, `cached` and `async_cached` avoid creating and threading a `Cache` instance
 through your code. They use a shared module-level default cache, retrieved with `get_cache` /
-`get_async_ttl_cache`:
+`get_async_cache`:
 
 ```pycon
 >>> from persista.cache import cached
@@ -251,7 +251,7 @@ through your code. They use a shared module-level default cache, retrieved with 
 
 ```
 
-Use `set_cache` / `set_async_ttl_cache` to replace the shared default cache, for example to
+Use `set_cache` / `set_async_cache` to replace the shared default cache, for example to
 change its backend or default TTL globally:
 
 ```pycon
