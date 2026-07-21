@@ -4,7 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "AsyncTTLCache",
-    "`Cache`",
+    "Cache",
     "TTLCache",
     "async_cached",
     "cached",
