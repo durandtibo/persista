@@ -67,6 +67,19 @@ from persista.store import RedisStore
 cache = Cache(store=RedisStore("redis://localhost:6379/0"), default_ttl=300)
 ```
 
+Pass `ignore_none=True` to treat a cached value of `None` as a cache miss rather than a hit, so
+it's recomputed instead of being served back forever — useful when the cached function can
+legitimately return `None` for a value that isn't ready yet:
+
+```pycon
+>>> from persista.cache import Cache
+>>> cache = Cache(ignore_none=True)
+>>> cache.set("key", None)
+>>> cache.get("key") is None  # treated as a miss, not a cached None
+True
+
+```
+
 ## Computing a Value on a Cache Miss with `Cache.get_or_compute`
 
 `get_or_compute` returns the cached value for a key, computing and storing it on a cache miss:
@@ -82,6 +95,30 @@ cache = Cache(store=RedisStore("redis://localhost:6379/0"), default_ttl=300)
 >>> cache.get_or_compute("key", compute, 4)
 8
 >>> cache.get_or_compute("key", compute, 4)  # served from the cache
+8
+>>> calls
+[4]
+
+```
+
+`aget_or_compute` is the async counterpart, for use with an `async def` function. The backing
+store is still accessed synchronously; only the function is awaited:
+
+```pycon
+>>> import asyncio
+>>> from persista.cache import Cache
+>>> cache = Cache()
+>>> calls = []
+>>> async def compute(x):
+...     calls.append(x)
+...     return x * 2
+...
+>>> async def main():
+...     print(await cache.aget_or_compute("key", compute, 4))
+...     print(await cache.aget_or_compute("key", compute, 4))  # cached
+...
+>>> asyncio.run(main())
+8
 8
 >>> calls
 [4]

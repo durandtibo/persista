@@ -112,7 +112,7 @@ solves this with a single, consistent `BaseStore` interface:
 
 ```
 
-See the [user guide](uguide/store.md) for detailed examples.
+See the [user guide](uguide/cache.md) for detailed examples.
 
 ## Features
 
