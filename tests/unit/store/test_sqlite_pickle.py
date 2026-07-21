@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -8,7 +9,7 @@ import pytest
 from persista.store import PickleSQLiteStore
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Iterator
     from pathlib import Path
 
 
@@ -179,3 +180,169 @@ def test_round_trips_custom_objects(store: PickleSQLiteStore) -> None:
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
     store.set("1", {"created_at": now})
     assert store.get("1") == {"created_at": now}
+
+
+# ---------------------------------------------------------------------------
+# Empty-input edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_set_many_empty_is_no_op(store: PickleSQLiteStore) -> None:
+    store.set_many({})
+    assert store.count() == 0
+
+
+def test_get_many_empty_list_returns_empty_list(store: PickleSQLiteStore) -> None:
+    assert store.get_many([]) == []
+
+
+def test_delete_many_empty_list_is_no_op(
+    store: PickleSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    store.delete_many([])
+    assert store.count() == len(items)
+
+
+def test_contains_many_empty_list_returns_empty_lists(store: PickleSQLiteStore) -> None:
+    assert store.contains_many([]) == ([], [])
+
+
+def test_filter_empty_store_returns_empty(store: PickleSQLiteStore) -> None:
+    assert store.filter() == []
+    assert store.filter(author="Alice") == []
+
+
+def test_clear_empty_store_is_no_op(store: PickleSQLiteStore) -> None:
+    store.clear()
+    assert store.count() == 0
+
+
+def test_keys_empty_store_yields_nothing(store: PickleSQLiteStore) -> None:
+    assert list(store.keys()) == []
+
+
+def test_iter_batches_empty_store_yields_nothing(store: PickleSQLiteStore) -> None:
+    assert list(store.iter_batches()) == []
+
+
+# ---------------------------------------------------------------------------
+# set_batches / values (default BaseStore implementations)
+# ---------------------------------------------------------------------------
+
+
+def test_set_batches_writes_all_pairs(
+    store: PickleSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_batches(list(items.items()), batch_size=2)
+    assert store.count() == len(items)
+    assert store.get("2") == items["2"]
+
+
+def test_set_batches_consumes_a_generator(store: PickleSQLiteStore) -> None:
+    def gen() -> Iterator[tuple[str, dict[str, int]]]:
+        for i in range(5):
+            yield str(i), {"v": i}
+
+    store.set_batches(gen(), batch_size=2)
+    assert store.count() == 5
+
+
+def test_values(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]) -> None:
+    store.set_many(items)
+    assert sorted(store.values(), key=lambda v: v["title"]) == sorted(
+        items.values(), key=lambda v: v["title"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# on_conflict validation
+# ---------------------------------------------------------------------------
+
+
+def test_set_on_conflict_invalid_raises(store: PickleSQLiteStore) -> None:
+    with pytest.raises(ValueError, match="Invalid on_conflict value"):
+        store.set("1", {"a": 1}, on_conflict="bogus")
+
+
+# ---------------------------------------------------------------------------
+# columns info
+# ---------------------------------------------------------------------------
+
+
+def test_get_columns_info(store: PickleSQLiteStore) -> None:
+    assert store.get_columns_info() == {"key": "TEXT", "value": "BLOB"}
+
+
+def test_show_columns_info_does_not_raise(store: PickleSQLiteStore) -> None:
+    store.show_columns_info()
+
+
+# ---------------------------------------------------------------------------
+# repr/str
+# ---------------------------------------------------------------------------
+
+
+def test_repr(store: PickleSQLiteStore) -> None:
+    assert repr(store).startswith("PickleSQLiteStore(")
+
+
+def test_str(store: PickleSQLiteStore) -> None:
+    assert str(store).startswith("PickleSQLiteStore(")
+
+
+def test_repr_after_close_does_not_raise(store: PickleSQLiteStore) -> None:
+    store.close()
+    assert repr(store).startswith("PickleSQLiteStore(")
+
+
+# ---------------------------------------------------------------------------
+# context manager
+# ---------------------------------------------------------------------------
+
+
+def test_context_manager_closes_on_normal_exit() -> None:
+    with PickleSQLiteStore(":memory:") as store:
+        store.set("1", {"a": 1})
+        assert store.count() == 1
+    assert store.closed is True
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        store._conn.execute("SELECT 1")
+
+
+def test_context_manager_closes_on_exception() -> None:
+    msg = "boom"
+    with pytest.raises(ValueError, match="boom"), PickleSQLiteStore(":memory:") as store:
+        raise ValueError(msg)
+    assert store.closed is True
+
+
+def test_reenter_after_close_resets_in_memory_store(store: PickleSQLiteStore) -> None:
+    store.set("1", {"a": 1})
+    store.close()
+    with store:
+        assert store.closed is False
+        assert store.count() == 0
+        store.set("1", {"a": 2})
+        assert store.get("1") == {"a": 2}
+
+
+def test_reenter_after_close_reopens_file_backed_store(tmp_path: Path) -> None:
+    path = tmp_path / "reopen.sqlite"
+    store = PickleSQLiteStore.from_path(path)
+    store.set("1", {"a": 1})
+    store.close()
+    with store:
+        assert store.closed is False
+        assert store.get("1") == {"a": 1}
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# _build_filter_condition
+# ---------------------------------------------------------------------------
+
+
+def test_build_filter_condition_raises_not_implemented(store: PickleSQLiteStore) -> None:
+    with pytest.raises(NotImplementedError, match="opaque pickled blobs"):
+        store._build_filter_condition("author")
