@@ -198,8 +198,8 @@ def test_make_pickle_key_picklable_unhashable_argument() -> None:
 ####################
 
 
-def test_make_key_default_strategy_is_pickle() -> None:
-    assert make_key("func", (1, 2), {}) == make_pickle_key("func", (1, 2), {})
+def test_make_key_default_strategy_is_json() -> None:
+    assert make_key("func", (1, 2), {}) == make_json_key("func", (1, 2), {})
 
 
 def test_make_key_strategy_json() -> None:

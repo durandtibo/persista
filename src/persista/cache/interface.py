@@ -118,7 +118,7 @@ def set_async_ttl_cache(cache: AsyncTTLCache) -> None:
 
 def cached(
     ttl: int | None = None,
-    strategy: str = "pickle",
+    strategy: str = "json",
     ignore_non_serializable: bool = False,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Cache a function's return values in the shared default cache.
@@ -215,7 +215,7 @@ def cached(
 
 def async_cached(
     ttl: int | None = None,
-    strategy: str = "pickle",
+    strategy: str = "json",
     ignore_non_serializable: bool = False,
 ) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """Cache an async function's return values in the shared default

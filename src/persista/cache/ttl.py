@@ -158,7 +158,7 @@ class TTLCache:
     def memoize(
         self,
         ttl: float | None = None,
-        strategy: str = "pickle",
+        strategy: str = "json",
         ignore_non_serializable: bool = False,
     ) -> Callable[[Callable[..., T]], Callable[..., T]]:
         """Decorate a function so its return values are cached.
