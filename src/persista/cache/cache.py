@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = ["Cache"]
 
 import functools
+import inspect
 import logging
 import time
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -13,7 +14,7 @@ from persista.cache.utils import make_key
 from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from persista.store.base import BaseStore
 
@@ -232,6 +233,65 @@ class Cache:
         self.set(key, value, ttl=ttl)
         return value
 
+    async def aget_or_compute(
+        self,
+        key: str,
+        fn: Callable[..., Awaitable[T]],
+        *args: Any,
+        ttl: float | None = _UNSET,
+        **kwargs: Any,
+    ) -> T:
+        """Return the cached value for ``key``, computing and storing it
+        on a cache miss.
+
+        This is the async counterpart of :meth:`get_or_compute`, for
+        use with an ``async def`` ``fn``. The backing store is still
+        accessed synchronously, since :class:`~persista.store.base.BaseStore`
+        is a synchronous interface; only ``fn`` is awaited.
+
+        Args:
+            key: The key to look up and, on a miss, store the result
+                under.
+            fn: The async function to call to compute the value when
+                ``key`` is not in the cache.
+            *args: Positional arguments passed to ``fn`` on a miss.
+            ttl: The time-to-live, in seconds, applied when storing a
+                freshly computed value. See :meth:`set`.
+            **kwargs: Keyword arguments passed to ``fn`` on a miss.
+
+        Returns:
+            The cached value on a hit, otherwise the value returned by
+            ``await fn(*args, **kwargs)``.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> calls = []
+            >>> async def compute(x):
+            ...     calls.append(x)
+            ...     return x * 2
+            ...
+            >>> async def main():
+            ...     print(await cache.aget_or_compute("key", compute, 4))
+            ...     print(await cache.aget_or_compute("key", compute, 4))  # cached
+            ...
+            >>> asyncio.run(main())
+            8
+            8
+            >>> calls
+            [4]
+
+            ```
+        """
+        hit, value = self._get(key)
+        if hit:
+            return value
+        value = await fn(*args, **kwargs)
+        self.set(key, value, ttl=ttl)
+        return value
+
     def memoize(
         self,
         ttl: float | None = _UNSET,
@@ -239,6 +299,8 @@ class Cache:
         ignore_non_serializable: bool = False,
     ) -> Callable[[Callable[..., T]], Callable[..., T]]:
         """Decorate a function so its return values are cached.
+
+        Works on both sync and async functions (``async def``).
 
         The cache key is derived from the decorated function's
         qualified name (``__qualname__``) and call arguments, via
@@ -291,6 +353,21 @@ class Cache:
         """
 
         def decorator(func: Callable[..., T]) -> Callable[..., T]:
+            if inspect.iscoroutinefunction(func):
+
+                @functools.wraps(func)
+                async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                    key = make_key(
+                        func.__qualname__,
+                        args,
+                        kwargs,
+                        strategy=strategy,
+                        ignore_non_serializable=ignore_non_serializable,
+                    )
+                    return await self.aget_or_compute(key, func, *args, ttl=ttl, **kwargs)
+
+                return async_wrapper  # pyright: ignore[reportReturnType]
+
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> T:
                 key = make_key(
