@@ -26,6 +26,14 @@ jobs:
       package-name: coola
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).coola) }}
 
+  iden:
+    needs: get-versions
+    uses: ./.github/workflows/test-code-dep.yaml
+    with:
+      package-name: iden
+      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).iden) }}
+
+
   #################################
   #     Optional dependencies     #
   #################################
