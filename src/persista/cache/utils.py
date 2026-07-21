@@ -235,7 +235,7 @@ def make_key(
     func_name: str,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
-    strategy: str = "pickle",
+    strategy: str = "json",
     ignore_non_serializable: bool = False,
 ) -> str:
     """Derive a stable cache key from a function name and its call

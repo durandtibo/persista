@@ -172,7 +172,7 @@ class AsyncTTLCache:
     def memoize(
         self,
         ttl: float | None = None,
-        strategy: str = "pickle",
+        strategy: str = "json",
         ignore_non_serializable: bool = False,
     ) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
         """Decorate an async function so its return values are cached.
