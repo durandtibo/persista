@@ -3,10 +3,11 @@ values as JSON."""
 
 from __future__ import annotations
 
-__all__ = ["BaseSQLiteStore", "SQLiteStore", "TypedSQLiteStore"]
+__all__ = ["BaseSQLiteStore", "PickleSQLiteStore", "SQLiteStore", "TypedSQLiteStore"]
 
 import json
 import logging
+import pickle
 import sqlite3
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
@@ -486,3 +487,85 @@ class TypedSQLiteStore(BaseSQLiteStore):
         known = [value.get(k) for k in self._schema]
         extra = {k: v for k, v in value.items() if k not in self._schema}
         return (key, *known, json.dumps(extra) if extra else None)
+
+
+_CREATE_TABLE_PICKLE = """
+    CREATE TABLE IF NOT EXISTS store (
+        key   TEXT PRIMARY KEY,
+        value BLOB NOT NULL
+    )
+"""
+
+
+class PickleSQLiteStore(BaseSQLiteStore):
+    """A SQLite-backed key-value store that serializes values with
+    ``pickle`` instead of JSON.
+
+    Unlike :class:`SQLiteStore`, this store can persist arbitrary
+    Python objects within a value's fields (tuples, sets, datetimes,
+    custom classes, etc.), not just JSON-compatible types. The
+    tradeoff is that values are opaque binary blobs: SQLite's
+    ``json1`` functions can't see into them, so :meth:`filter` can't
+    push field comparisons down to SQL and instead falls back to
+    scanning and unpickling every row in Python. Since
+    :func:`pickle.loads` can execute arbitrary code, this store must
+    never be pointed at a database file that isn't fully trusted.
+
+    The constructor mirrors :func:`sqlite3.connect` directly. For the
+    common case of opening a file by path (optionally read-only), use
+    :meth:`from_path` instead.
+
+    Args:
+        database: The ``database`` argument passed to
+            ``sqlite3.connect`` (path, ``":memory:"``, or ``file:`` URI).
+        **kwargs: Additional keyword arguments to pass to
+            ``sqlite3.connect``.
+
+    Example:
+        ```pycon
+        >>> from persista.store import PickleSQLiteStore
+        >>> store = PickleSQLiteStore(":memory:")
+        >>> store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
+        >>> store.get("1")
+        {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
+
+        ```
+    """
+
+    def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
+        super().__init__(database, **kwargs)
+
+    def _create_table_sql(self) -> str:
+        return _CREATE_TABLE_PICKLE
+
+    def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
+        return pickle.loads(row[1])  # noqa: S301
+
+    def _build_filter_condition(self, key: str) -> str:
+        msg = (
+            "PickleSQLiteStore stores values as opaque pickled blobs, so field "
+            "filters can't be pushed down to SQL; filter() overrides the base "
+            "implementation instead of relying on this method."
+        )
+        raise NotImplementedError(msg)
+
+    def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        rows = self._conn.execute("SELECT * FROM store").fetchall()
+        values = (self._row_to_value(row) for row in rows)
+        if not field_filters:
+            return list(values)
+        return [
+            value
+            for value in values
+            if all(value.get(name) == expected for name, expected in field_filters.items())
+        ]
+
+    def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        if items:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO store VALUES (?, ?)",
+                [(key, pickle.dumps(value)) for key, value in items.items()],
+            )
+            self._conn.commit()
+
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
