@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from persista.cache.async_ttl import AsyncTTLCache
+from persista.cache.async_cache import AsyncCache
 from persista.store.async_in_memory import AsyncInMemoryStore
 
 if TYPE_CHECKING:
@@ -17,20 +17,20 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-def cache() -> AsyncTTLCache:
-    return AsyncTTLCache()
+def cache() -> AsyncCache:
+    return AsyncCache()
 
 
 @pytest.fixture
 def fake_time(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     # The current time is `clock[0]`; mutate it to simulate time passing.
     clock = [1_000_000.0]
-    monkeypatch.setattr("persista.cache.async_ttl.time.time", lambda: clock[0])
+    monkeypatch.setattr("persista.cache.async_cache.time.time", lambda: clock[0])
     return clock
 
 
 ######################################
-#     Tests for AsyncTTLCache       #
+#     Tests for AsyncCache          #
 ######################################
 
 
@@ -38,73 +38,68 @@ def fake_time(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 
 def test_init_default_store() -> None:
-    cache = AsyncTTLCache()
+    cache = AsyncCache()
     assert isinstance(cache._store, AsyncInMemoryStore)
 
 
 def test_init_custom_store() -> None:
     store = AsyncInMemoryStore()
-    cache = AsyncTTLCache(store=store)
+    cache = AsyncCache(store=store)
     assert cache._store is store
 
 
-def test_init_default_ttl() -> None:
-    assert AsyncTTLCache().default_ttl == 300
+def test_init_default_ttl_is_none() -> None:
+    assert AsyncCache().default_ttl is None
 
 
 def test_init_custom_default_ttl() -> None:
-    assert AsyncTTLCache(default_ttl=60).default_ttl == 60
-
-
-def test_init_default_ttl_zero() -> None:
-    with pytest.raises(ValueError, match=r"default_ttl must be a positive number, got 0"):
-        AsyncTTLCache(default_ttl=0)
+    assert AsyncCache(default_ttl=60).default_ttl == 60
 
 
 def test_init_default_ttl_negative() -> None:
-    with pytest.raises(ValueError, match=r"default_ttl must be a positive number, got -1"):
-        AsyncTTLCache(default_ttl=-1)
+    with pytest.raises(ValueError, match=r"default_ttl must be non-negative, got -1"):
+        AsyncCache(default_ttl=-1)
 
 
 # --- get/set ---
 
 
-async def test_get_missing_key(cache: AsyncTTLCache) -> None:
+async def test_get_missing_key(cache: AsyncCache) -> None:
     assert await cache.get("missing") is None
 
 
-async def test_set_then_get(cache: AsyncTTLCache) -> None:
+async def test_set_then_get(cache: AsyncCache) -> None:
     await cache.set("key", "value")
     assert await cache.get("key") == "value"
 
 
-async def test_set_overwrites(cache: AsyncTTLCache) -> None:
+async def test_set_overwrites(cache: AsyncCache) -> None:
     await cache.set("key", "value1")
     await cache.set("key", "value2")
     assert await cache.get("key") == "value2"
 
 
 @pytest.mark.parametrize("value", [0, "", [], {}, None, False])
-async def test_set_falsy_values(cache: AsyncTTLCache, value: object) -> None:
+async def test_set_falsy_values(cache: AsyncCache, value: object) -> None:
     await cache.set("key", value)
     assert await cache.get("key") == value
 
 
-async def test_get_not_yet_expired(cache: AsyncTTLCache, fake_time: list[float]) -> None:
+async def test_get_not_yet_expired(cache: AsyncCache, fake_time: list[float]) -> None:
     await cache.set("key", "value", ttl=10)
     fake_time[0] += 9
     assert await cache.get("key") == "value"
 
 
 async def test_get_exactly_at_expiry_is_not_expired(
-    cache: AsyncTTLCache, fake_time: list[float]
+    cache: AsyncCache, fake_time: list[float]
 ) -> None:
     await cache.set("key", "value", ttl=10)
     fake_time[0] += 10
     assert await cache.get("key") == "value"
 
 
-async def test_get_expired(cache: AsyncTTLCache, fake_time: list[float]) -> None:
+async def test_get_expired(cache: AsyncCache, fake_time: list[float]) -> None:
     await cache.set("key", "value", ttl=10)
     fake_time[0] += 11
     assert await cache.get("key") is None
@@ -112,41 +107,68 @@ async def test_get_expired(cache: AsyncTTLCache, fake_time: list[float]) -> None
 
 async def test_get_expired_evicts_entry(fake_time: list[float]) -> None:
     store = AsyncInMemoryStore()
-    cache = AsyncTTLCache(store=store)
+    cache = AsyncCache(store=store)
     await cache.set("key", "value", ttl=10)
     fake_time[0] += 11
     await cache.get("key")
     assert await store.get("key") is None
 
 
-async def test_set_uses_default_ttl(fake_time: list[float]) -> None:
-    cache = AsyncTTLCache(default_ttl=10)
+async def test_set_uses_default_ttl_when_not_given(fake_time: list[float]) -> None:
+    cache = AsyncCache(default_ttl=10)
     await cache.set("key", "value")
     fake_time[0] += 11
     assert await cache.get("key") is None
 
 
 async def test_set_ttl_overrides_default(fake_time: list[float]) -> None:
-    cache = AsyncTTLCache(default_ttl=10)
+    cache = AsyncCache(default_ttl=10)
     await cache.set("key", "value", ttl=100)
     fake_time[0] += 11
     assert await cache.get("key") == "value"
 
 
-async def test_set_ttl_zero(cache: AsyncTTLCache) -> None:
-    with pytest.raises(ValueError, match=r"ttl must be a positive number, got 0"):
-        await cache.set("key", "value", ttl=0)
+async def test_default_ttl_none_means_forever_by_default(
+    cache: AsyncCache, fake_time: list[float]
+) -> None:
+    await cache.set("key", "value")
+    fake_time[0] += 1_000_000
+    assert await cache.get("key") == "value"
 
 
-async def test_set_ttl_negative(cache: AsyncTTLCache) -> None:
-    with pytest.raises(ValueError, match=r"ttl must be a positive number, got -1"):
+async def test_set_ttl_none_means_forever(cache: AsyncCache, fake_time: list[float]) -> None:
+    cache.default_ttl = 10
+    await cache.set("key", "value", ttl=None)
+    fake_time[0] += 1_000_000
+    assert await cache.get("key") == "value"
+
+
+async def test_set_ttl_zero_evicts_existing_entry(cache: AsyncCache) -> None:
+    await cache.set("key", "value")
+    await cache.set("key", "other", ttl=0)
+    assert await cache.get("key") is None
+
+
+async def test_set_ttl_negative(cache: AsyncCache) -> None:
+    with pytest.raises(ValueError, match=r"ttl must be non-negative, got -1"):
         await cache.set("key", "value", ttl=-1)
+
+
+async def test_get_cached_none_is_miss_with_ignore_none() -> None:
+    cache = AsyncCache(ignore_none=True)
+    await cache.set("key", None)
+    assert await cache.get("key") is None
+
+
+async def test_get_cached_none_is_hit_without_ignore_none(cache: AsyncCache) -> None:
+    await cache.set("key", None)
+    assert await cache._get("key") == (True, None)
 
 
 # --- clear ---
 
 
-async def test_clear_removes_all_entries(cache: AsyncTTLCache) -> None:
+async def test_clear_removes_all_entries(cache: AsyncCache) -> None:
     await cache.set("key1", "value1")
     await cache.set("key2", "value2")
     await cache.clear()
@@ -154,14 +176,72 @@ async def test_clear_removes_all_entries(cache: AsyncTTLCache) -> None:
     assert await cache.get("key2") is None
 
 
-async def test_clear_empty_cache(cache: AsyncTTLCache) -> None:
+async def test_clear_empty_cache(cache: AsyncCache) -> None:
     await cache.clear()
+
+
+# --- get_or_compute ---
+
+
+async def test_get_or_compute_miss_calls_fn(cache: AsyncCache) -> None:
+    async def fn(x: int) -> int:
+        return x * 2
+
+    assert await cache.get_or_compute("key", fn, 1) == 2
+
+
+async def test_get_or_compute_hit_does_not_call_fn(cache: AsyncCache) -> None:
+    calls = []
+
+    async def fn(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    await cache.get_or_compute("key", fn, 1)
+    assert await cache.get_or_compute("key", fn, 1) == 2
+    assert calls == [1]
+
+
+async def test_get_or_compute_passes_kwargs(cache: AsyncCache) -> None:
+    async def fn(x: int, y: int = 0) -> int:
+        return x + y
+
+    assert await cache.get_or_compute("key", fn, 1, y=2) == 3
+
+
+async def test_get_or_compute_respects_ttl(cache: AsyncCache, fake_time: list[float]) -> None:
+    calls = []
+
+    async def fn(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    await cache.get_or_compute("key", fn, 1, ttl=10)
+    fake_time[0] += 11
+    await cache.get_or_compute("key", fn, 1, ttl=10)
+    assert calls == [1, 1]
+
+
+async def test_get_or_compute_ttl_negative_raises(cache: AsyncCache) -> None:
+    async def fn(x: int) -> int:
+        return x * 2
+
+    with pytest.raises(ValueError, match=r"ttl must be non-negative, got -1"):
+        await cache.get_or_compute("key", fn, 1, ttl=-1)
+
+
+async def test_get_or_compute_different_keys_independent(cache: AsyncCache) -> None:
+    async def fn(x: int) -> int:
+        return x * 2
+
+    assert await cache.get_or_compute("key1", fn, 1) == 2
+    assert await cache.get_or_compute("key2", fn, 2) == 4
 
 
 # --- memoize ---
 
 
-async def test_memoize_caches_result(cache: AsyncTTLCache) -> None:
+async def test_memoize_caches_result(cache: AsyncCache) -> None:
     calls = []
 
     @cache.memoize()
@@ -174,7 +254,7 @@ async def test_memoize_caches_result(cache: AsyncTTLCache) -> None:
     assert calls == [1]
 
 
-async def test_memoize_different_args_not_shared(cache: AsyncTTLCache) -> None:
+async def test_memoize_different_args_not_shared(cache: AsyncCache) -> None:
     calls = []
 
     @cache.memoize()
@@ -187,7 +267,7 @@ async def test_memoize_different_args_not_shared(cache: AsyncTTLCache) -> None:
     assert calls == [1, 2]
 
 
-async def test_memoize_preserves_function_metadata(cache: AsyncTTLCache) -> None:
+async def test_memoize_preserves_function_metadata(cache: AsyncCache) -> None:
     @cache.memoize()
     async def func(x: int) -> int:
         """Double x."""
@@ -197,7 +277,7 @@ async def test_memoize_preserves_function_metadata(cache: AsyncTTLCache) -> None
     assert func.__doc__ == "Double x."
 
 
-async def test_memoize_respects_ttl(cache: AsyncTTLCache, fake_time: list[float]) -> None:
+async def test_memoize_respects_ttl(cache: AsyncCache, fake_time: list[float]) -> None:
     calls = []
 
     @cache.memoize(ttl=10)
@@ -212,7 +292,7 @@ async def test_memoize_respects_ttl(cache: AsyncTTLCache, fake_time: list[float]
 
 
 async def test_memoize_uses_default_ttl_when_not_set(fake_time: list[float]) -> None:
-    cache = AsyncTTLCache(default_ttl=10)
+    cache = AsyncCache(default_ttl=10)
     calls = []
 
     @cache.memoize()
@@ -226,7 +306,7 @@ async def test_memoize_uses_default_ttl_when_not_set(fake_time: list[float]) -> 
     assert calls == [1, 1]
 
 
-async def test_memoize_strategy_json(cache: AsyncTTLCache) -> None:
+async def test_memoize_strategy_json(cache: AsyncCache) -> None:
     calls = []
 
     @cache.memoize(strategy="json")
@@ -239,7 +319,7 @@ async def test_memoize_strategy_json(cache: AsyncTTLCache) -> None:
     assert calls == [1]
 
 
-async def test_memoize_strategy_json_rejects_non_serializable(cache: AsyncTTLCache) -> None:
+async def test_memoize_strategy_json_rejects_non_serializable(cache: AsyncCache) -> None:
     @cache.memoize(strategy="json")
     async def func(x: object) -> object:
         return x
@@ -248,7 +328,7 @@ async def test_memoize_strategy_json_rejects_non_serializable(cache: AsyncTTLCac
         await func(object())
 
 
-async def test_memoize_default_strategy_rejects_non_serializable(cache: AsyncTTLCache) -> None:
+async def test_memoize_default_strategy_rejects_non_serializable(cache: AsyncCache) -> None:
     @cache.memoize()
     async def func(x: object) -> object:
         return x
@@ -257,7 +337,7 @@ async def test_memoize_default_strategy_rejects_non_serializable(cache: AsyncTTL
         await func(threading.Lock())
 
 
-async def test_memoize_ignore_non_serializable(cache: AsyncTTLCache) -> None:
+async def test_memoize_ignore_non_serializable(cache: AsyncCache) -> None:
     calls = []
 
     @cache.memoize(strategy="json", ignore_non_serializable=True)
@@ -270,7 +350,7 @@ async def test_memoize_ignore_non_serializable(cache: AsyncTTLCache) -> None:
     assert calls == [1]
 
 
-async def test_memoize_kwargs(cache: AsyncTTLCache) -> None:
+async def test_memoize_kwargs(cache: AsyncCache) -> None:
     calls = []
 
     @cache.memoize()
@@ -284,8 +364,8 @@ async def test_memoize_kwargs(cache: AsyncTTLCache) -> None:
 
 
 async def test_memoize_two_caches_do_not_share_entries() -> None:
-    cache1 = AsyncTTLCache()
-    cache2 = AsyncTTLCache()
+    cache1 = AsyncCache()
+    cache2 = AsyncCache()
     calls = []
 
     @cache1.memoize()
@@ -303,7 +383,7 @@ async def test_memoize_two_caches_do_not_share_entries() -> None:
     assert calls == [("func1", 1), ("func2", 1)]
 
 
-async def test_memoize_shared_across_functions_with_same_qualname(cache: AsyncTTLCache) -> None:
+async def test_memoize_shared_across_functions_with_same_qualname(cache: AsyncCache) -> None:
     # keys are derived from __qualname__, which is the same for both
     # closures below, so their cached results collide
     calls = []
