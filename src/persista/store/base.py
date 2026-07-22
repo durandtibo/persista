@@ -287,6 +287,34 @@ class BaseStore(ABC):
             open and ready to use.
         """
 
+    @abstractmethod
+    def to_uri(self) -> str:
+        """Return a URI that identifies where this store's data lives.
+
+        Returns:
+            A URI. For a store backed by a file/database, passing
+            this URI to :meth:`from_uri` reconnects to the same
+            data. For a process-local store, the URI carries no
+            reconnection information and :meth:`from_uri` returns a
+            fresh, empty store.
+        """
+
+    @classmethod
+    @abstractmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+        """Reconstruct a store from a URI produced by :meth:`to_uri`.
+
+        Args:
+            uri: A URI produced by :meth:`to_uri` (of a store of this
+                same class).
+            read_only: If ``True`` and this store type supports a
+                read-only connection mode, open it read-only.
+                Ignored by store types with no such mode.
+
+        Returns:
+            A new store instance.
+        """
+
     def __enter__(self) -> Self:
         return self
 
@@ -553,6 +581,34 @@ class AsyncBaseStore(ABC):
         Returns:
             ``True`` if the store has been closed, ``False`` if it is
             open and ready to use.
+        """
+
+    @abstractmethod
+    def to_uri(self) -> str:
+        """Return a URI that identifies where this store's data lives.
+
+        Returns:
+            A URI. For a store backed by a file/database, passing
+            this URI to :meth:`from_uri` reconnects to the same
+            data. For a process-local store, the URI carries no
+            reconnection information and :meth:`from_uri` returns a
+            fresh, empty store.
+        """
+
+    @classmethod
+    @abstractmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+        """Reconstruct a store from a URI produced by :meth:`to_uri`.
+
+        Args:
+            uri: A URI produced by :meth:`to_uri` (of a store of this
+                same class).
+            read_only: If ``True`` and this store type supports a
+                read-only connection mode, open it read-only.
+                Ignored by store types with no such mode.
+
+        Returns:
+            A new store instance.
         """
 
     async def __aenter__(self) -> Self:

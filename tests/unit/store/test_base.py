@@ -96,6 +96,13 @@ class InMemoryTestStore(BaseStore):
     def count(self) -> int:
         return len(self._data)
 
+    def to_uri(self) -> str:
+        return "test-memory://"
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> InMemoryTestStore:  # noqa: ARG003
+        return cls()
+
 
 @pytest.fixture
 def store() -> InMemoryTestStore:
@@ -105,6 +112,29 @@ def store() -> InMemoryTestStore:
 def test_base_store_is_abstract() -> None:
     with pytest.raises(TypeError, match="abstract"):
         BaseStore()
+
+
+def test_base_store_is_abstract_missing_to_uri_from_uri() -> None:
+    class IncompleteStore(BaseStore):
+        def get(self, key): return None
+        def get_many(self, keys): return []
+        def set(self, key, value, on_conflict="overwrite"): pass
+        def set_many(self, items, on_conflict="overwrite"): pass
+        def filter(self, **field_filters): return []
+        def delete(self, key): pass
+        def delete_many(self, keys): pass
+        def clear(self): pass
+        def contains(self, key): return False
+        def contains_many(self, keys): return [], []
+        def keys(self): return iter(())
+        def iter_batches(self, batch_size=32): yield from ()
+        def count(self): return 0
+        def close(self): pass
+        @property
+        def closed(self): return False
+
+    with pytest.raises(TypeError, match="abstract"):
+        IncompleteStore()
 
 
 def test_base_store_values(store: InMemoryTestStore) -> None:

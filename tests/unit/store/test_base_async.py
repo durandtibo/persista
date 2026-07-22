@@ -99,6 +99,13 @@ class AsyncInMemoryStore(AsyncBaseStore):
     async def count(self) -> int:
         return len(self._data)
 
+    def to_uri(self) -> str:
+        return "test-memory://"
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> AsyncInMemoryStore:  # noqa: ARG003
+        return cls()
+
 
 @pytest.fixture
 def store() -> AsyncInMemoryStore:
