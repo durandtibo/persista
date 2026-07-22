@@ -4,7 +4,12 @@ upfront."""
 
 from __future__ import annotations
 
-__all__ = ["async_store_from_uri", "store_from_uri"]
+__all__ = [
+    "async_store_from_uri",
+    "register_async_scheme",
+    "register_scheme",
+    "store_from_uri",
+]
 
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -54,6 +59,34 @@ _ASYNC_SCHEMES: dict[str, type[AsyncBaseStore]] = {
     "redis": AsyncRedisStore,
     "rediss": AsyncRedisStore,
 }
+
+
+def register_scheme(scheme: str, store_cls: type[BaseStore]) -> None:
+    """Register a store class for a URI scheme used by
+    :func:`store_from_uri`.
+
+    Args:
+        scheme: The URI scheme to associate with ``store_cls``, e.g.
+            ``"memory"``. Overwrites any class already registered for
+            this scheme.
+        store_cls: The ``BaseStore`` subclass to dispatch to for
+            ``scheme``. Must implement ``from_uri``.
+    """
+    _SYNC_SCHEMES[scheme] = store_cls
+
+
+def register_async_scheme(scheme: str, store_cls: type[AsyncBaseStore]) -> None:
+    """Register a store class for a URI scheme used by
+    :func:`async_store_from_uri`.
+
+    Args:
+        scheme: The URI scheme to associate with ``store_cls``, e.g.
+            ``"memory"``. Overwrites any class already registered for
+            this scheme.
+        store_cls: The ``AsyncBaseStore`` subclass to dispatch to for
+            ``scheme``. Must implement ``from_uri``.
+    """
+    _ASYNC_SCHEMES[scheme] = store_cls
 
 
 def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
