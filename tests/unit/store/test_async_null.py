@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator, AsyncIterator
+
 import pytest
 
 from persista.store import AsyncNullStore
@@ -62,6 +64,10 @@ async def test_set_many_does_not_increase_count(store: AsyncNullStore) -> None:
 async def test_get_many_returns_none_for_every_key(store: AsyncNullStore) -> None:
     await store.set_many({"1": {"text": "hello"}})
     assert await store.get_many(["1", "2"]) == [None, None]
+
+
+async def test_get_many_preserves_length(store: AsyncNullStore) -> None:
+    assert await store.get_many(["1", "2", "3"]) == [None, None, None]
 
 
 async def test_get_many_empty_list_returns_empty_list(store: AsyncNullStore) -> None:
@@ -147,6 +153,12 @@ async def test_values_yields_nothing(store: AsyncNullStore) -> None:
 async def test_iter_batches_yields_nothing(store: AsyncNullStore) -> None:
     await store.set("1", {"text": "hello"})
     assert [batch async for batch in store.iter_batches()] == []
+
+
+async def test_iter_batches_returns_async_generator(store: AsyncNullStore) -> None:
+    result = store.iter_batches()
+    assert isinstance(result, AsyncGenerator)
+    assert isinstance(result, AsyncIterator)
 
 
 # --- count ---
