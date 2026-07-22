@@ -183,7 +183,7 @@ def cached(
                     strategy=strategy,
                     ignore_non_serializable=ignore_non_serializable,
                 )
-                return await cache.aget_or_compute(key, func, *args, ttl=ttl, **kwargs)
+                return await cache.aget_or_compute(key, func, args, kwargs, ttl=ttl)
 
             return async_wrapper  # pyright: ignore[reportReturnType]
 
@@ -197,7 +197,7 @@ def cached(
                 strategy=strategy,
                 ignore_non_serializable=ignore_non_serializable,
             )
-            return cache.get_or_compute(key, func, *args, ttl=ttl, **kwargs)
+            return cache.get_or_compute(key, func, args, kwargs, ttl=ttl)
 
         return wrapper
 

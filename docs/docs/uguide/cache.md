@@ -92,9 +92,9 @@ True
 ...     calls.append(x)
 ...     return x * 2
 ...
->>> cache.get_or_compute("key", compute, 4)
+>>> cache.get_or_compute("key", compute, (4,), {})
 8
->>> cache.get_or_compute("key", compute, 4)  # served from the cache
+>>> cache.get_or_compute("key", compute, (4,), {})  # served from the cache
 8
 >>> calls
 [4]
@@ -114,8 +114,8 @@ store is still accessed synchronously; only the function is awaited:
 ...     return x * 2
 ...
 >>> async def main():
-...     print(await cache.aget_or_compute("key", compute, 4))
-...     print(await cache.aget_or_compute("key", compute, 4))  # cached
+...     print(await cache.aget_or_compute("key", compute, (4,), {}))
+...     print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
 ...
 >>> asyncio.run(main())
 8
