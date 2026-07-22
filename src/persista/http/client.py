@@ -125,12 +125,12 @@ class HttpClient:
         cacheable_methods: set[str] | frozenset[str] = frozenset({"GET"}),
     ) -> None:
         check_httpx()
+        self._client = client
         self._timeout = timeout
         self._max_retries = max_retries
         self._retry_status_codes = retry_status_codes
         self._cache = cache
         self._cacheable_methods = frozenset(m.upper() for m in cacheable_methods)
-        self._client = client
 
     def request(
         self,
@@ -269,12 +269,12 @@ class AsyncHttpClient:
         cacheable_methods: set[str] | frozenset[str] = frozenset({"GET"}),
     ) -> None:
         check_httpx()
+        self._client = client
         self._timeout = timeout
         self._max_retries = max_retries
         self._retry_status_codes = retry_status_codes
         self._cache = cache
         self._cacheable_methods = frozenset(m.upper() for m in cacheable_methods)
-        self._client = client
 
     async def request(
         self,
