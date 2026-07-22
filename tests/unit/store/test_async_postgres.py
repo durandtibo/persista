@@ -327,6 +327,31 @@ async def test_two_stores_different_tables_are_isolated(
     assert await store_b.count() == 0
 
 
+# --- to_uri/from_uri ---
+
+
+async def test_to_uri_returns_conninfo_unchanged(store: AsyncBasePostgresStore) -> None:
+    assert store.to_uri() == store._conninfo
+
+
+async def test_from_uri_constructs_with_same_conninfo(
+    store_cls: type[AsyncBasePostgresStore],
+) -> None:
+    conninfo = "postgresql://user:pass@localhost/dbname"
+    conn = FakeConnection()
+
+    async def _fake_connect(*_args: Any, **_kwargs: Any) -> FakeConnection:
+        return conn
+
+    new_store = store_cls.from_uri(conninfo)
+    with patch(f"{MODULE}.psycopg.AsyncConnection.connect", side_effect=_fake_connect):
+        await new_store._ensure_schema()
+    conn.store = new_store
+    assert new_store._conninfo == conninfo
+    await new_store.set("1", {"text": "a"})
+    assert await new_store.get("1") == {"text": "a"}
+
+
 # --- repr/str ---
 
 
