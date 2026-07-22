@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
+import duckdb
 import pytest
 
 from persista.store import DuckDBStore, TypedDuckDBStore
@@ -950,6 +951,16 @@ def test_to_uri_from_uri_round_trips_file_data(
         assert reloaded.count() == len(items)
 
 
+def test_to_uri_from_uri_round_trips_in_memory_data(
+    store_cls: type[BaseDuckDBStore], items: dict[str, dict[str, Any]]
+) -> None:
+    with store_cls(":memory:") as store:
+        store.set_many(items)
+        # :memory: never round-trips data -- each connection is a fresh DB.
+        with store_cls.from_uri(store.to_uri()) as reloaded:
+            assert reloaded.count() == 0
+
+
 def test_from_uri_read_only(
     store_path: Path, store_cls: type[BaseDuckDBStore], items: dict[str, dict[str, Any]]
 ) -> None:
@@ -959,3 +970,5 @@ def test_from_uri_read_only(
         uri = store.to_uri()
     with store_cls.from_uri(uri, read_only=True) as reloaded:
         assert reloaded.count() == len(items)
+        with pytest.raises(duckdb.InvalidInputException):
+            reloaded.set("new", {"a": 1})

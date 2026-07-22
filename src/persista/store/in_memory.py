@@ -17,6 +17,8 @@ from persista.store.validation import normalize_on_conflict, validate_batch_size
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator, Mapping
 
+    from typing_extensions import Self
+
     from persista.store.types import OnConflict
 
 
@@ -152,7 +154,7 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
         return "memory://"
 
     @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> InMemoryStore:  # noqa: ARG003
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
         return cls()
 
     def _get_repr_kwargs(self) -> dict[str, Any]:

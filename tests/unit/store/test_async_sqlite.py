@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -1187,8 +1188,6 @@ async def test_to_uri_from_uri_round_trips_file_data(
 async def test_from_uri_read_only_rejects_writes(
     store_path: Path, store_cls: type[AsyncBaseSQLiteStore], items: dict[str, dict[str, Any]]
 ) -> None:
-    import sqlite3
-
     path = store_path / f"to_uri_ro_{store_cls.__name__}.sqlite"
     store = store_cls.from_path(path)
     await store.set_many(items)

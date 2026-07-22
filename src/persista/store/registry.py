@@ -6,6 +6,7 @@ from __future__ import annotations
 
 __all__ = ["async_store_from_uri", "store_from_uri"]
 
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from persista.store.async_in_memory import AsyncInMemoryStore
@@ -21,7 +22,6 @@ from persista.store.null import NullStore
 from persista.store.postgres import PostgresStore
 from persista.store.redis import RedisStore
 from persista.store.sqlite import PickleSQLiteStore, SQLiteStore, TypedSQLiteStore
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from persista.store.base import AsyncBaseStore, BaseStore

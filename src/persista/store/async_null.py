@@ -15,6 +15,8 @@ from persista.utils.asyncio import EmptyAsyncIterator
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
+    from typing_extensions import Self
+
     from persista.store.types import OnConflict
 
 
@@ -114,7 +116,7 @@ class AsyncNullStore(AsyncBaseStore, InlineDisplayMixin):
         return "null://"
 
     @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> AsyncNullStore:  # noqa: ARG003
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
         return cls()
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
