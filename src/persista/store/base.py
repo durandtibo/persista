@@ -13,7 +13,6 @@ from persista.store.validation import validate_batch_size
 
 if TYPE_CHECKING:
     from collections.abc import (
-        AsyncGenerator,
         AsyncIterator,
         Generator,
         Iterable,
@@ -508,7 +507,7 @@ class AsyncBaseStore(ABC):
                 yield value
 
     @abstractmethod
-    def iter_batches(self, batch_size: int = 32) -> AsyncGenerator[dict[str, dict[str, Any]], None]:
+    def iter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
         """Yield key-value pairs in batches, avoiding loading the whole
         store into memory at once.
 

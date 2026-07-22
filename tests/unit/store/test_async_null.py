@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 
@@ -155,10 +155,8 @@ async def test_iter_batches_yields_nothing(store: AsyncNullStore) -> None:
     assert [batch async for batch in store.iter_batches()] == []
 
 
-async def test_iter_batches_returns_async_generator(store: AsyncNullStore) -> None:
-    result = store.iter_batches()
-    assert isinstance(result, AsyncGenerator)
-    assert isinstance(result, AsyncIterator)
+async def test_iter_batches_returns_async_iterator(store: AsyncNullStore) -> None:
+    assert isinstance(store.iter_batches(), AsyncIterator)
 
 
 # --- count ---
