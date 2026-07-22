@@ -197,22 +197,27 @@ class AsyncCache:
         self,
         key: str,
         fn: Callable[..., Awaitable[T]],
-        *args: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
         ttl: float | None = _UNSET,
-        **kwargs: Any,
     ) -> T:
         """Return the cached value for ``key``, computing and storing it
         on a cache miss.
+
+        ``args``/``kwargs`` are passed as a tuple/dict rather than
+        ``*args``/``**kwargs`` so that ``fn``'s own arguments can never
+        collide with this method's parameters (e.g. a ``fn`` that
+        itself takes a ``key`` or ``ttl`` argument).
 
         Args:
             key: The key to look up and, on a miss, store the result
                 under.
             fn: The async function to call to compute the value when
                 ``key`` is not in the cache.
-            *args: Positional arguments passed to ``fn`` on a miss.
+            args: Positional arguments passed to ``fn`` on a miss.
+            kwargs: Keyword arguments passed to ``fn`` on a miss.
             ttl: The time-to-live, in seconds, applied when storing a
                 freshly computed value. See :meth:`set`.
-            **kwargs: Keyword arguments passed to ``fn`` on a miss.
 
         Returns:
             The cached value on a hit, otherwise the value returned by
@@ -229,8 +234,8 @@ class AsyncCache:
             ...     return x * 2
             ...
             >>> async def main():
-            ...     print(await cache.get_or_compute("key", compute, 4))
-            ...     print(await cache.get_or_compute("key", compute, 4))  # cached
+            ...     print(await cache.get_or_compute("key", compute, (4,), {}))
+            ...     print(await cache.get_or_compute("key", compute, (4,), {}))  # cached
             ...
             >>> asyncio.run(main())
             8
@@ -319,7 +324,7 @@ class AsyncCache:
                     strategy=strategy,
                     ignore_non_serializable=ignore_non_serializable,
                 )
-                return await self.get_or_compute(key, func, *args, ttl=ttl, **kwargs)
+                return await self.get_or_compute(key, func, args, kwargs, ttl=ttl)
 
             return wrapper
 

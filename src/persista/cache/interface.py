@@ -273,7 +273,7 @@ def async_cached(
                 strategy=strategy,
                 ignore_non_serializable=ignore_non_serializable,
             )
-            return await cache.get_or_compute(key, func, *args, ttl=ttl, **kwargs)
+            return await cache.get_or_compute(key, func, args, kwargs, ttl=ttl)
 
         return wrapper
 

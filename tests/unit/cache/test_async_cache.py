@@ -187,7 +187,7 @@ async def test_get_or_compute_miss_calls_fn(cache: AsyncCache) -> None:
     async def fn(x: int) -> int:
         return x * 2
 
-    assert await cache.get_or_compute("key", fn, 1) == 2
+    assert await cache.get_or_compute("key", fn, (1,), {}) == 2
 
 
 async def test_get_or_compute_hit_does_not_call_fn(cache: AsyncCache) -> None:
@@ -197,8 +197,8 @@ async def test_get_or_compute_hit_does_not_call_fn(cache: AsyncCache) -> None:
         calls.append(x)
         return x * 2
 
-    await cache.get_or_compute("key", fn, 1)
-    assert await cache.get_or_compute("key", fn, 1) == 2
+    await cache.get_or_compute("key", fn, (1,), {})
+    assert await cache.get_or_compute("key", fn, (1,), {}) == 2
     assert calls == [1]
 
 
@@ -206,7 +206,7 @@ async def test_get_or_compute_passes_kwargs(cache: AsyncCache) -> None:
     async def fn(x: int, y: int = 0) -> int:
         return x + y
 
-    assert await cache.get_or_compute("key", fn, 1, y=2) == 3
+    assert await cache.get_or_compute("key", fn, (1,), {"y": 2}) == 3
 
 
 async def test_get_or_compute_respects_ttl(cache: AsyncCache, fake_time: list[float]) -> None:
@@ -216,9 +216,9 @@ async def test_get_or_compute_respects_ttl(cache: AsyncCache, fake_time: list[fl
         calls.append(x)
         return x * 2
 
-    await cache.get_or_compute("key", fn, 1, ttl=10)
+    await cache.get_or_compute("key", fn, (1,), {}, ttl=10)
     fake_time[0] += 11
-    await cache.get_or_compute("key", fn, 1, ttl=10)
+    await cache.get_or_compute("key", fn, (1,), {}, ttl=10)
     assert calls == [1, 1]
 
 
@@ -227,15 +227,15 @@ async def test_get_or_compute_ttl_negative_raises(cache: AsyncCache) -> None:
         return x * 2
 
     with pytest.raises(ValueError, match=r"ttl must be non-negative, got -1"):
-        await cache.get_or_compute("key", fn, 1, ttl=-1)
+        await cache.get_or_compute("key", fn, (1,), {}, ttl=-1)
 
 
 async def test_get_or_compute_different_keys_independent(cache: AsyncCache) -> None:
     async def fn(x: int) -> int:
         return x * 2
 
-    assert await cache.get_or_compute("key1", fn, 1) == 2
-    assert await cache.get_or_compute("key2", fn, 2) == 4
+    assert await cache.get_or_compute("key1", fn, (1,), {}) == 2
+    assert await cache.get_or_compute("key2", fn, (2,), {}) == 4
 
 
 # --- memoize ---
