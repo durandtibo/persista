@@ -404,10 +404,13 @@ in mini-batches, which is useful when the source data does not fit comfortably i
 | `LmdbStore`     | LMDB                 | Yes       | No             | Yes (`Pickle…`)| No    |
 | `RedisStore`    | Redis                | Yes       | No             | Yes (`Pickle…`)| Yes   |
 | `PostgresStore` | PostgreSQL           | Yes       | Yes (`Typed…`) | No             | Yes   |
+| `NullStore`     | None (discards everything) | No  | No             | N/A            | Yes   |
 
 Use `InMemoryStore` for tests and prototyping, `SQLiteStore`/`DuckDBStore` for local
 single-process persistence without a server, and `RedisStore`/`PostgresStore` when data needs to
-be shared across processes or machines.
+be shared across processes or machines. `NullStore` (and its async counterpart `AsyncNullStore`)
+never actually stores anything -- every `get` is a miss -- which is useful for plugging into
+`Cache`/`AsyncCache` to disable caching entirely without changing any calling code.
 
 ## API Reference
 
