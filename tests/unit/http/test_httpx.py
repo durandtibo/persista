@@ -238,12 +238,12 @@ def test_get_response_raises_when_httpx_not_available(monkeypatch: pytest.Monkey
 
 
 def test_post_response_success_first_try() -> None:
-    handler, calls = _counting_handler([201], json={"id": 1})
+    handler, calls = _counting_handler([201], json={"ok": True})
 
     response = post_response("https://example.com", client=_client(handler), json={"a": 1})
 
     assert response.status_code == 201
-    assert response.json() == {"id": 1}
+    assert response.json() == {"ok": True}
     assert calls.call_count == 1
 
 
@@ -261,14 +261,147 @@ def test_post_response_sends_method_and_body() -> None:
     assert received["body"] == b'{"name":"value"}'
 
 
-def test_post_response_retries_then_succeeds(no_sleep: Mock) -> None:
-    handler, calls = _counting_handler([503, 200], json={"ok": True})
+def test_post_response_passes_headers() -> None:
+    received: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.update(request.headers)
+        return httpx.Response(201)
+
+    post_response("https://example.com", client=_client(handler), headers={"X-Custom": "value"})
+
+    assert received["x-custom"] == "value"
+
+
+def test_post_response_forwards_kwargs_to_client_request() -> None:
+    received_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_params.update(request.url.params)
+        return httpx.Response(201)
+
+    post_response("https://example.com", client=_client(handler), params={"q": "value"})
+
+    assert received_params == {"q": "value"}
+
+
+def test_post_response_provided_client_is_not_closed() -> None:
+    handler, _ = _counting_handler([201])
+    client = _client(handler)
+
+    post_response("https://example.com", client=client)
+
+    assert not client.is_closed
+
+
+def test_post_response_own_client_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handler, _ = _counting_handler([201])
+    client = _client(handler)
+    monkeypatch.setattr(f"{MODULE}.httpx.Client", lambda **_kwargs: client)
+
+    post_response("https://example.com")
+
+    assert client.is_closed
+
+
+def test_post_response_retries_default_status_codes_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 502, 201], json={"ok": True})
+
+    response = post_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert response.status_code == 201
+    assert response.json() == {"ok": True}
+    assert calls.call_count == 3
+    assert no_sleep.call_count == 2
+
+
+def test_post_response_exhausts_retries_raises_http_status_error() -> None:
+    handler, calls = _counting_handler([500, 500, 500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        post_response("https://example.com", client=_client(handler), max_retries=2)
+
+    assert calls.call_count == 3
+
+
+def test_post_response_max_retries_zero_does_not_retry(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        post_response("https://example.com", client=_client(handler), max_retries=0)
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+def test_post_response_status_not_in_retry_set_raises_immediately(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([404])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        post_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+def test_post_response_custom_retry_status_codes() -> None:
+    handler, calls = _counting_handler([418, 201], json={"ok": True})
+
+    response = post_response(
+        "https://example.com",
+        client=_client(handler),
+        max_retries=1,
+        retry_status_codes={418},
+    )
+
+    assert response.status_code == 201
+    assert calls.call_count == 2
+
+
+def test_post_response_retries_on_transport_error_then_succeeds(no_sleep: Mock) -> None:
+    attempts = Mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(201)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        result = attempts()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     response = post_response("https://example.com", client=_client(handler), max_retries=1)
 
-    assert response.status_code == 200
-    assert calls.call_count == 2
+    assert response.status_code == 201
+    assert attempts.call_count == 2
     assert no_sleep.call_count == 1
+
+
+def test_post_response_transport_error_exhausted_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = "boom"
+        raise httpx.ConnectError(message, request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        post_response("https://example.com", client=_client(handler), max_retries=2)
+
+
+def test_post_response_honors_retry_after_header(no_sleep: Mock) -> None:
+    calls = Mock(side_effect=[503, 201])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        headers = {"Retry-After": "5"} if status == 503 else {}
+        return httpx.Response(status, headers=headers, request=request)
+
+    post_response("https://example.com", client=_client(handler), max_retries=1)
+
+    no_sleep.assert_called_once_with(5.0)
+
+
+def test_post_response_exponential_backoff_without_retry_after(no_sleep: Mock) -> None:
+    handler, _ = _counting_handler([503, 503, 503, 201])
+
+    post_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert [call.args[0] for call in no_sleep.call_args_list] == [1.0, 2.0, 4.0]
 
 
 def test_post_response_raises_when_httpx_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -294,6 +427,7 @@ def test_put_response_success_first_try() -> None:
     response = put_response("https://example.com", client=_client(handler), json={"a": 1})
 
     assert response.status_code == 200
+    assert response.json() == {"ok": True}
     assert calls.call_count == 1
 
 
@@ -311,14 +445,147 @@ def test_put_response_sends_method_and_body() -> None:
     assert received["body"] == b'{"name":"value"}'
 
 
-def test_put_response_retries_then_succeeds(no_sleep: Mock) -> None:
-    handler, calls = _counting_handler([503, 200], json={"ok": True})
+def test_put_response_passes_headers() -> None:
+    received: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.update(request.headers)
+        return httpx.Response(200)
+
+    put_response("https://example.com", client=_client(handler), headers={"X-Custom": "value"})
+
+    assert received["x-custom"] == "value"
+
+
+def test_put_response_forwards_kwargs_to_client_request() -> None:
+    received_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_params.update(request.url.params)
+        return httpx.Response(200)
+
+    put_response("https://example.com", client=_client(handler), params={"q": "value"})
+
+    assert received_params == {"q": "value"}
+
+
+def test_put_response_provided_client_is_not_closed() -> None:
+    handler, _ = _counting_handler([200])
+    client = _client(handler)
+
+    put_response("https://example.com", client=client)
+
+    assert not client.is_closed
+
+
+def test_put_response_own_client_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handler, _ = _counting_handler([200])
+    client = _client(handler)
+    monkeypatch.setattr(f"{MODULE}.httpx.Client", lambda **_kwargs: client)
+
+    put_response("https://example.com")
+
+    assert client.is_closed
+
+
+def test_put_response_retries_default_status_codes_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 502, 200], json={"ok": True})
+
+    response = put_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls.call_count == 3
+    assert no_sleep.call_count == 2
+
+
+def test_put_response_exhausts_retries_raises_http_status_error() -> None:
+    handler, calls = _counting_handler([500, 500, 500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        put_response("https://example.com", client=_client(handler), max_retries=2)
+
+    assert calls.call_count == 3
+
+
+def test_put_response_max_retries_zero_does_not_retry(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        put_response("https://example.com", client=_client(handler), max_retries=0)
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+def test_put_response_status_not_in_retry_set_raises_immediately(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([404])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        put_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+def test_put_response_custom_retry_status_codes() -> None:
+    handler, calls = _counting_handler([418, 200], json={"ok": True})
+
+    response = put_response(
+        "https://example.com",
+        client=_client(handler),
+        max_retries=1,
+        retry_status_codes={418},
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+
+
+def test_put_response_retries_on_transport_error_then_succeeds(no_sleep: Mock) -> None:
+    attempts = Mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(200)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        result = attempts()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     response = put_response("https://example.com", client=_client(handler), max_retries=1)
 
     assert response.status_code == 200
-    assert calls.call_count == 2
+    assert attempts.call_count == 2
     assert no_sleep.call_count == 1
+
+
+def test_put_response_transport_error_exhausted_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = "boom"
+        raise httpx.ConnectError(message, request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        put_response("https://example.com", client=_client(handler), max_retries=2)
+
+
+def test_put_response_honors_retry_after_header(no_sleep: Mock) -> None:
+    calls = Mock(side_effect=[503, 200])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        headers = {"Retry-After": "5"} if status == 503 else {}
+        return httpx.Response(status, headers=headers, request=request)
+
+    put_response("https://example.com", client=_client(handler), max_retries=1)
+
+    no_sleep.assert_called_once_with(5.0)
+
+
+def test_put_response_exponential_backoff_without_retry_after(no_sleep: Mock) -> None:
+    handler, _ = _counting_handler([503, 503, 503, 200])
+
+    put_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert [call.args[0] for call in no_sleep.call_args_list] == [1.0, 2.0, 4.0]
 
 
 def test_put_response_raises_when_httpx_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -344,6 +611,7 @@ def test_patch_response_success_first_try() -> None:
     response = patch_response("https://example.com", client=_client(handler), json={"a": 1})
 
     assert response.status_code == 200
+    assert response.json() == {"ok": True}
     assert calls.call_count == 1
 
 
@@ -361,14 +629,147 @@ def test_patch_response_sends_method_and_body() -> None:
     assert received["body"] == b'{"name":"value"}'
 
 
-def test_patch_response_retries_then_succeeds(no_sleep: Mock) -> None:
-    handler, calls = _counting_handler([503, 200], json={"ok": True})
+def test_patch_response_passes_headers() -> None:
+    received: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.update(request.headers)
+        return httpx.Response(200)
+
+    patch_response("https://example.com", client=_client(handler), headers={"X-Custom": "value"})
+
+    assert received["x-custom"] == "value"
+
+
+def test_patch_response_forwards_kwargs_to_client_request() -> None:
+    received_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_params.update(request.url.params)
+        return httpx.Response(200)
+
+    patch_response("https://example.com", client=_client(handler), params={"q": "value"})
+
+    assert received_params == {"q": "value"}
+
+
+def test_patch_response_provided_client_is_not_closed() -> None:
+    handler, _ = _counting_handler([200])
+    client = _client(handler)
+
+    patch_response("https://example.com", client=client)
+
+    assert not client.is_closed
+
+
+def test_patch_response_own_client_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handler, _ = _counting_handler([200])
+    client = _client(handler)
+    monkeypatch.setattr(f"{MODULE}.httpx.Client", lambda **_kwargs: client)
+
+    patch_response("https://example.com")
+
+    assert client.is_closed
+
+
+def test_patch_response_retries_default_status_codes_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 502, 200], json={"ok": True})
+
+    response = patch_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls.call_count == 3
+    assert no_sleep.call_count == 2
+
+
+def test_patch_response_exhausts_retries_raises_http_status_error() -> None:
+    handler, calls = _counting_handler([500, 500, 500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        patch_response("https://example.com", client=_client(handler), max_retries=2)
+
+    assert calls.call_count == 3
+
+
+def test_patch_response_max_retries_zero_does_not_retry(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        patch_response("https://example.com", client=_client(handler), max_retries=0)
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+def test_patch_response_status_not_in_retry_set_raises_immediately(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([404])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        patch_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+def test_patch_response_custom_retry_status_codes() -> None:
+    handler, calls = _counting_handler([418, 200], json={"ok": True})
+
+    response = patch_response(
+        "https://example.com",
+        client=_client(handler),
+        max_retries=1,
+        retry_status_codes={418},
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+
+
+def test_patch_response_retries_on_transport_error_then_succeeds(no_sleep: Mock) -> None:
+    attempts = Mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(200)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        result = attempts()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     response = patch_response("https://example.com", client=_client(handler), max_retries=1)
 
     assert response.status_code == 200
-    assert calls.call_count == 2
+    assert attempts.call_count == 2
     assert no_sleep.call_count == 1
+
+
+def test_patch_response_transport_error_exhausted_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = "boom"
+        raise httpx.ConnectError(message, request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        patch_response("https://example.com", client=_client(handler), max_retries=2)
+
+
+def test_patch_response_honors_retry_after_header(no_sleep: Mock) -> None:
+    calls = Mock(side_effect=[503, 200])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        headers = {"Retry-After": "5"} if status == 503 else {}
+        return httpx.Response(status, headers=headers, request=request)
+
+    patch_response("https://example.com", client=_client(handler), max_retries=1)
+
+    no_sleep.assert_called_once_with(5.0)
+
+
+def test_patch_response_exponential_backoff_without_retry_after(no_sleep: Mock) -> None:
+    handler, _ = _counting_handler([503, 503, 503, 200])
+
+    patch_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert [call.args[0] for call in no_sleep.call_args_list] == [1.0, 2.0, 4.0]
 
 
 def test_patch_response_raises_when_httpx_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -409,14 +810,146 @@ def test_delete_response_sends_method() -> None:
     assert received["method"] == "DELETE"
 
 
-def test_delete_response_retries_then_succeeds(no_sleep: Mock) -> None:
-    handler, calls = _counting_handler([503, 204])
+def test_delete_response_passes_headers() -> None:
+    received: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.update(request.headers)
+        return httpx.Response(204)
+
+    delete_response("https://example.com", client=_client(handler), headers={"X-Custom": "value"})
+
+    assert received["x-custom"] == "value"
+
+
+def test_delete_response_forwards_kwargs_to_client_request() -> None:
+    received_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_params.update(request.url.params)
+        return httpx.Response(204)
+
+    delete_response("https://example.com", client=_client(handler), params={"q": "value"})
+
+    assert received_params == {"q": "value"}
+
+
+def test_delete_response_provided_client_is_not_closed() -> None:
+    handler, _ = _counting_handler([204])
+    client = _client(handler)
+
+    delete_response("https://example.com", client=client)
+
+    assert not client.is_closed
+
+
+def test_delete_response_own_client_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handler, _ = _counting_handler([204])
+    client = _client(handler)
+    monkeypatch.setattr(f"{MODULE}.httpx.Client", lambda **_kwargs: client)
+
+    delete_response("https://example.com")
+
+    assert client.is_closed
+
+
+def test_delete_response_retries_default_status_codes_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 502, 204])
+
+    response = delete_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert response.status_code == 204
+    assert calls.call_count == 3
+    assert no_sleep.call_count == 2
+
+
+def test_delete_response_exhausts_retries_raises_http_status_error() -> None:
+    handler, calls = _counting_handler([500, 500, 500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        delete_response("https://example.com", client=_client(handler), max_retries=2)
+
+    assert calls.call_count == 3
+
+
+def test_delete_response_max_retries_zero_does_not_retry(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        delete_response("https://example.com", client=_client(handler), max_retries=0)
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+def test_delete_response_status_not_in_retry_set_raises_immediately(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([404])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        delete_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+def test_delete_response_custom_retry_status_codes() -> None:
+    handler, calls = _counting_handler([418, 204])
+
+    response = delete_response(
+        "https://example.com",
+        client=_client(handler),
+        max_retries=1,
+        retry_status_codes={418},
+    )
+
+    assert response.status_code == 204
+    assert calls.call_count == 2
+
+
+def test_delete_response_retries_on_transport_error_then_succeeds(no_sleep: Mock) -> None:
+    attempts = Mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(204)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        result = attempts()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     response = delete_response("https://example.com", client=_client(handler), max_retries=1)
 
     assert response.status_code == 204
-    assert calls.call_count == 2
+    assert attempts.call_count == 2
     assert no_sleep.call_count == 1
+
+
+def test_delete_response_transport_error_exhausted_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = "boom"
+        raise httpx.ConnectError(message, request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        delete_response("https://example.com", client=_client(handler), max_retries=2)
+
+
+def test_delete_response_honors_retry_after_header(no_sleep: Mock) -> None:
+    calls = Mock(side_effect=[503, 204])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        headers = {"Retry-After": "5"} if status == 503 else {}
+        return httpx.Response(status, headers=headers, request=request)
+
+    delete_response("https://example.com", client=_client(handler), max_retries=1)
+
+    no_sleep.assert_called_once_with(5.0)
+
+
+def test_delete_response_exponential_backoff_without_retry_after(no_sleep: Mock) -> None:
+    handler, _ = _counting_handler([503, 503, 503, 204])
+
+    delete_response("https://example.com", client=_client(handler), max_retries=3)
+
+    assert [call.args[0] for call in no_sleep.call_args_list] == [1.0, 2.0, 4.0]
 
 
 def test_delete_response_raises_when_httpx_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -687,14 +1220,14 @@ async def test_get_response_async_raises_when_httpx_not_available(
 
 
 async def test_post_response_async_success_first_try() -> None:
-    handler, calls = _counting_handler([201], json={"id": 1})
+    handler, calls = _counting_handler([201], json={"ok": True})
 
     response = await post_response_async(
         "https://example.com", client=_async_client(handler), json={"a": 1}
     )
 
     assert response.status_code == 201
-    assert response.json() == {"id": 1}
+    assert response.json() == {"ok": True}
     assert calls.call_count == 1
 
 
@@ -714,16 +1247,167 @@ async def test_post_response_async_sends_method_and_body() -> None:
     assert received["body"] == b'{"name":"value"}'
 
 
-async def test_post_response_async_retries_then_succeeds(no_sleep: Mock) -> None:
-    handler, calls = _counting_handler([503, 200], json={"ok": True})
+async def test_post_response_async_passes_headers() -> None:
+    received: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.update(request.headers)
+        return httpx.Response(201)
+
+    await post_response_async(
+        "https://example.com", client=_async_client(handler), headers={"X-Custom": "value"}
+    )
+
+    assert received["x-custom"] == "value"
+
+
+async def test_post_response_async_forwards_kwargs_to_client_request() -> None:
+    received_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_params.update(request.url.params)
+        return httpx.Response(201)
+
+    await post_response_async(
+        "https://example.com", client=_async_client(handler), params={"q": "value"}
+    )
+
+    assert received_params == {"q": "value"}
+
+
+async def test_post_response_async_provided_client_is_not_closed() -> None:
+    handler, _ = _counting_handler([201])
+    client = _async_client(handler)
+
+    await post_response_async("https://example.com", client=client)
+
+    assert not client.is_closed
+
+
+async def test_post_response_async_own_client_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handler, _ = _counting_handler([201])
+    client = _async_client(handler)
+    monkeypatch.setattr(f"{MODULE}.httpx.AsyncClient", lambda **_kwargs: client)
+
+    await post_response_async("https://example.com")
+
+    assert client.is_closed
+
+
+async def test_post_response_async_retries_default_status_codes_then_succeeds(
+    no_sleep: Mock,
+) -> None:
+    handler, calls = _counting_handler([503, 502, 201], json={"ok": True})
+
+    response = await post_response_async(
+        "https://example.com", client=_async_client(handler), max_retries=3
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {"ok": True}
+    assert calls.call_count == 3
+    assert no_sleep.call_count == 2
+
+
+async def test_post_response_async_exhausts_retries_raises_http_status_error() -> None:
+    handler, calls = _counting_handler([500, 500, 500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await post_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=2
+        )
+
+    assert calls.call_count == 3
+
+
+async def test_post_response_async_max_retries_zero_does_not_retry(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await post_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=0
+        )
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+async def test_post_response_async_status_not_in_retry_set_raises_immediately(
+    no_sleep: Mock,
+) -> None:
+    handler, calls = _counting_handler([404])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await post_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=3
+        )
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+async def test_post_response_async_custom_retry_status_codes() -> None:
+    handler, calls = _counting_handler([418, 201], json={"ok": True})
+
+    response = await post_response_async(
+        "https://example.com",
+        client=_async_client(handler),
+        max_retries=1,
+        retry_status_codes={418},
+    )
+
+    assert response.status_code == 201
+    assert calls.call_count == 2
+
+
+async def test_post_response_async_retries_on_transport_error_then_succeeds(no_sleep: Mock) -> None:
+    attempts = Mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(201)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        result = attempts()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     response = await post_response_async(
         "https://example.com", client=_async_client(handler), max_retries=1
     )
 
-    assert response.status_code == 200
-    assert calls.call_count == 2
+    assert response.status_code == 201
+    assert attempts.call_count == 2
     assert no_sleep.call_count == 1
+
+
+async def test_post_response_async_transport_error_exhausted_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = "boom"
+        raise httpx.ConnectError(message, request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        await post_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=2
+        )
+
+
+async def test_post_response_async_honors_retry_after_header(no_sleep: Mock) -> None:
+    calls = Mock(side_effect=[503, 201])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        headers = {"Retry-After": "5"} if status == 503 else {}
+        return httpx.Response(status, headers=headers, request=request)
+
+    await post_response_async("https://example.com", client=_async_client(handler), max_retries=1)
+
+    no_sleep.assert_called_once_with(5.0)
+
+
+async def test_post_response_async_exponential_backoff_without_retry_after(no_sleep: Mock) -> None:
+    handler, _ = _counting_handler([503, 503, 503, 201])
+
+    await post_response_async("https://example.com", client=_async_client(handler), max_retries=3)
+
+    assert [call.args[0] for call in no_sleep.call_args_list] == [1.0, 2.0, 4.0]
 
 
 async def test_post_response_async_raises_when_httpx_not_available(
@@ -753,6 +1437,7 @@ async def test_put_response_async_success_first_try() -> None:
     )
 
     assert response.status_code == 200
+    assert response.json() == {"ok": True}
     assert calls.call_count == 1
 
 
@@ -772,16 +1457,167 @@ async def test_put_response_async_sends_method_and_body() -> None:
     assert received["body"] == b'{"name":"value"}'
 
 
-async def test_put_response_async_retries_then_succeeds(no_sleep: Mock) -> None:
-    handler, calls = _counting_handler([503, 200], json={"ok": True})
+async def test_put_response_async_passes_headers() -> None:
+    received: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.update(request.headers)
+        return httpx.Response(200)
+
+    await put_response_async(
+        "https://example.com", client=_async_client(handler), headers={"X-Custom": "value"}
+    )
+
+    assert received["x-custom"] == "value"
+
+
+async def test_put_response_async_forwards_kwargs_to_client_request() -> None:
+    received_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_params.update(request.url.params)
+        return httpx.Response(200)
+
+    await put_response_async(
+        "https://example.com", client=_async_client(handler), params={"q": "value"}
+    )
+
+    assert received_params == {"q": "value"}
+
+
+async def test_put_response_async_provided_client_is_not_closed() -> None:
+    handler, _ = _counting_handler([200])
+    client = _async_client(handler)
+
+    await put_response_async("https://example.com", client=client)
+
+    assert not client.is_closed
+
+
+async def test_put_response_async_own_client_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handler, _ = _counting_handler([200])
+    client = _async_client(handler)
+    monkeypatch.setattr(f"{MODULE}.httpx.AsyncClient", lambda **_kwargs: client)
+
+    await put_response_async("https://example.com")
+
+    assert client.is_closed
+
+
+async def test_put_response_async_retries_default_status_codes_then_succeeds(
+    no_sleep: Mock,
+) -> None:
+    handler, calls = _counting_handler([503, 502, 200], json={"ok": True})
+
+    response = await put_response_async(
+        "https://example.com", client=_async_client(handler), max_retries=3
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls.call_count == 3
+    assert no_sleep.call_count == 2
+
+
+async def test_put_response_async_exhausts_retries_raises_http_status_error() -> None:
+    handler, calls = _counting_handler([500, 500, 500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await put_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=2
+        )
+
+    assert calls.call_count == 3
+
+
+async def test_put_response_async_max_retries_zero_does_not_retry(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await put_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=0
+        )
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+async def test_put_response_async_status_not_in_retry_set_raises_immediately(
+    no_sleep: Mock,
+) -> None:
+    handler, calls = _counting_handler([404])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await put_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=3
+        )
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+async def test_put_response_async_custom_retry_status_codes() -> None:
+    handler, calls = _counting_handler([418, 200], json={"ok": True})
+
+    response = await put_response_async(
+        "https://example.com",
+        client=_async_client(handler),
+        max_retries=1,
+        retry_status_codes={418},
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+
+
+async def test_put_response_async_retries_on_transport_error_then_succeeds(no_sleep: Mock) -> None:
+    attempts = Mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(200)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        result = attempts()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     response = await put_response_async(
         "https://example.com", client=_async_client(handler), max_retries=1
     )
 
     assert response.status_code == 200
-    assert calls.call_count == 2
+    assert attempts.call_count == 2
     assert no_sleep.call_count == 1
+
+
+async def test_put_response_async_transport_error_exhausted_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = "boom"
+        raise httpx.ConnectError(message, request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        await put_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=2
+        )
+
+
+async def test_put_response_async_honors_retry_after_header(no_sleep: Mock) -> None:
+    calls = Mock(side_effect=[503, 200])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        headers = {"Retry-After": "5"} if status == 503 else {}
+        return httpx.Response(status, headers=headers, request=request)
+
+    await put_response_async("https://example.com", client=_async_client(handler), max_retries=1)
+
+    no_sleep.assert_called_once_with(5.0)
+
+
+async def test_put_response_async_exponential_backoff_without_retry_after(no_sleep: Mock) -> None:
+    handler, _ = _counting_handler([503, 503, 503, 200])
+
+    await put_response_async("https://example.com", client=_async_client(handler), max_retries=3)
+
+    assert [call.args[0] for call in no_sleep.call_args_list] == [1.0, 2.0, 4.0]
 
 
 async def test_put_response_async_raises_when_httpx_not_available(
@@ -811,6 +1647,7 @@ async def test_patch_response_async_success_first_try() -> None:
     )
 
     assert response.status_code == 200
+    assert response.json() == {"ok": True}
     assert calls.call_count == 1
 
 
@@ -830,16 +1667,169 @@ async def test_patch_response_async_sends_method_and_body() -> None:
     assert received["body"] == b'{"name":"value"}'
 
 
-async def test_patch_response_async_retries_then_succeeds(no_sleep: Mock) -> None:
-    handler, calls = _counting_handler([503, 200], json={"ok": True})
+async def test_patch_response_async_passes_headers() -> None:
+    received: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.update(request.headers)
+        return httpx.Response(200)
+
+    await patch_response_async(
+        "https://example.com", client=_async_client(handler), headers={"X-Custom": "value"}
+    )
+
+    assert received["x-custom"] == "value"
+
+
+async def test_patch_response_async_forwards_kwargs_to_client_request() -> None:
+    received_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_params.update(request.url.params)
+        return httpx.Response(200)
+
+    await patch_response_async(
+        "https://example.com", client=_async_client(handler), params={"q": "value"}
+    )
+
+    assert received_params == {"q": "value"}
+
+
+async def test_patch_response_async_provided_client_is_not_closed() -> None:
+    handler, _ = _counting_handler([200])
+    client = _async_client(handler)
+
+    await patch_response_async("https://example.com", client=client)
+
+    assert not client.is_closed
+
+
+async def test_patch_response_async_own_client_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handler, _ = _counting_handler([200])
+    client = _async_client(handler)
+    monkeypatch.setattr(f"{MODULE}.httpx.AsyncClient", lambda **_kwargs: client)
+
+    await patch_response_async("https://example.com")
+
+    assert client.is_closed
+
+
+async def test_patch_response_async_retries_default_status_codes_then_succeeds(
+    no_sleep: Mock,
+) -> None:
+    handler, calls = _counting_handler([503, 502, 200], json={"ok": True})
+
+    response = await patch_response_async(
+        "https://example.com", client=_async_client(handler), max_retries=3
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert calls.call_count == 3
+    assert no_sleep.call_count == 2
+
+
+async def test_patch_response_async_exhausts_retries_raises_http_status_error() -> None:
+    handler, calls = _counting_handler([500, 500, 500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await patch_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=2
+        )
+
+    assert calls.call_count == 3
+
+
+async def test_patch_response_async_max_retries_zero_does_not_retry(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await patch_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=0
+        )
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+async def test_patch_response_async_status_not_in_retry_set_raises_immediately(
+    no_sleep: Mock,
+) -> None:
+    handler, calls = _counting_handler([404])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await patch_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=3
+        )
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+async def test_patch_response_async_custom_retry_status_codes() -> None:
+    handler, calls = _counting_handler([418, 200], json={"ok": True})
+
+    response = await patch_response_async(
+        "https://example.com",
+        client=_async_client(handler),
+        max_retries=1,
+        retry_status_codes={418},
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+
+
+async def test_patch_response_async_retries_on_transport_error_then_succeeds(
+    no_sleep: Mock,
+) -> None:
+    attempts = Mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(200)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        result = attempts()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     response = await patch_response_async(
         "https://example.com", client=_async_client(handler), max_retries=1
     )
 
     assert response.status_code == 200
-    assert calls.call_count == 2
+    assert attempts.call_count == 2
     assert no_sleep.call_count == 1
+
+
+async def test_patch_response_async_transport_error_exhausted_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = "boom"
+        raise httpx.ConnectError(message, request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        await patch_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=2
+        )
+
+
+async def test_patch_response_async_honors_retry_after_header(no_sleep: Mock) -> None:
+    calls = Mock(side_effect=[503, 200])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        headers = {"Retry-After": "5"} if status == 503 else {}
+        return httpx.Response(status, headers=headers, request=request)
+
+    await patch_response_async("https://example.com", client=_async_client(handler), max_retries=1)
+
+    no_sleep.assert_called_once_with(5.0)
+
+
+async def test_patch_response_async_exponential_backoff_without_retry_after(no_sleep: Mock) -> None:
+    handler, _ = _counting_handler([503, 503, 503, 200])
+
+    await patch_response_async("https://example.com", client=_async_client(handler), max_retries=3)
+
+    assert [call.args[0] for call in no_sleep.call_args_list] == [1.0, 2.0, 4.0]
 
 
 async def test_patch_response_async_raises_when_httpx_not_available(
@@ -882,16 +1872,170 @@ async def test_delete_response_async_sends_method() -> None:
     assert received["method"] == "DELETE"
 
 
-async def test_delete_response_async_retries_then_succeeds(no_sleep: Mock) -> None:
-    handler, calls = _counting_handler([503, 204])
+async def test_delete_response_async_passes_headers() -> None:
+    received: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.update(request.headers)
+        return httpx.Response(204)
+
+    await delete_response_async(
+        "https://example.com", client=_async_client(handler), headers={"X-Custom": "value"}
+    )
+
+    assert received["x-custom"] == "value"
+
+
+async def test_delete_response_async_forwards_kwargs_to_client_request() -> None:
+    received_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_params.update(request.url.params)
+        return httpx.Response(204)
+
+    await delete_response_async(
+        "https://example.com", client=_async_client(handler), params={"q": "value"}
+    )
+
+    assert received_params == {"q": "value"}
+
+
+async def test_delete_response_async_provided_client_is_not_closed() -> None:
+    handler, _ = _counting_handler([204])
+    client = _async_client(handler)
+
+    await delete_response_async("https://example.com", client=client)
+
+    assert not client.is_closed
+
+
+async def test_delete_response_async_own_client_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    handler, _ = _counting_handler([204])
+    client = _async_client(handler)
+    monkeypatch.setattr(f"{MODULE}.httpx.AsyncClient", lambda **_kwargs: client)
+
+    await delete_response_async("https://example.com")
+
+    assert client.is_closed
+
+
+async def test_delete_response_async_retries_default_status_codes_then_succeeds(
+    no_sleep: Mock,
+) -> None:
+    handler, calls = _counting_handler([503, 502, 204])
+
+    response = await delete_response_async(
+        "https://example.com", client=_async_client(handler), max_retries=3
+    )
+
+    assert response.status_code == 204
+    assert calls.call_count == 3
+    assert no_sleep.call_count == 2
+
+
+async def test_delete_response_async_exhausts_retries_raises_http_status_error() -> None:
+    handler, calls = _counting_handler([500, 500, 500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await delete_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=2
+        )
+
+    assert calls.call_count == 3
+
+
+async def test_delete_response_async_max_retries_zero_does_not_retry(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([500])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await delete_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=0
+        )
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+async def test_delete_response_async_status_not_in_retry_set_raises_immediately(
+    no_sleep: Mock,
+) -> None:
+    handler, calls = _counting_handler([404])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await delete_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=3
+        )
+
+    assert calls.call_count == 1
+    no_sleep.assert_not_called()
+
+
+async def test_delete_response_async_custom_retry_status_codes() -> None:
+    handler, calls = _counting_handler([418, 204])
+
+    response = await delete_response_async(
+        "https://example.com",
+        client=_async_client(handler),
+        max_retries=1,
+        retry_status_codes={418},
+    )
+
+    assert response.status_code == 204
+    assert calls.call_count == 2
+
+
+async def test_delete_response_async_retries_on_transport_error_then_succeeds(
+    no_sleep: Mock,
+) -> None:
+    attempts = Mock(side_effect=[httpx.ConnectError("boom"), httpx.Response(204)])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        result = attempts()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     response = await delete_response_async(
         "https://example.com", client=_async_client(handler), max_retries=1
     )
 
     assert response.status_code == 204
-    assert calls.call_count == 2
+    assert attempts.call_count == 2
     assert no_sleep.call_count == 1
+
+
+async def test_delete_response_async_transport_error_exhausted_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = "boom"
+        raise httpx.ConnectError(message, request=request)
+
+    with pytest.raises(httpx.ConnectError):
+        await delete_response_async(
+            "https://example.com", client=_async_client(handler), max_retries=2
+        )
+
+
+async def test_delete_response_async_honors_retry_after_header(no_sleep: Mock) -> None:
+    calls = Mock(side_effect=[503, 204])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = calls()
+        headers = {"Retry-After": "5"} if status == 503 else {}
+        return httpx.Response(status, headers=headers, request=request)
+
+    await delete_response_async("https://example.com", client=_async_client(handler), max_retries=1)
+
+    no_sleep.assert_called_once_with(5.0)
+
+
+async def test_delete_response_async_exponential_backoff_without_retry_after(
+    no_sleep: Mock,
+) -> None:
+    handler, _ = _counting_handler([503, 503, 503, 204])
+
+    await delete_response_async("https://example.com", client=_async_client(handler), max_retries=3)
+
+    assert [call.args[0] for call in no_sleep.call_args_list] == [1.0, 2.0, 4.0]
 
 
 async def test_delete_response_async_raises_when_httpx_not_available(
