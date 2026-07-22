@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from persista.http.client import AsyncHttpClient, HttpClient
+from persista.http.httpx import AsyncHttpClient, HttpClient
 from persista.testing.fixtures import httpx_available
 from persista.utils.imports import is_httpx_available
 
