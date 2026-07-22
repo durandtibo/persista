@@ -51,7 +51,7 @@ def create_session(
 
     Example:
         ```pycon
-        >>> from persista.utils.http_requests import create_session
+        >>> from persista.http.requests import create_session
         >>> session = create_session(max_retries=5)
 
         ```
@@ -128,7 +128,7 @@ def fetch_response(
 
     Example:
         ```pycon
-        >>> from persista.utils.http_requests import fetch_response
+        >>> from persista.http.requests import fetch_response
         >>> html = fetch_response(  # doctest: +SKIP
         ...     "https://jsonplaceholder.typicode.com/todos/1",
         ...     timeout=10,

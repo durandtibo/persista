@@ -6,7 +6,7 @@ from persista.testing.fixtures import requests_available, requests_not_available
 from persista.utils.imports import is_requests_available
 
 if is_requests_available():
-    from persista.utils.http_requests import fetch_response
+    from persista.http.requests import fetch_response
 
 REMOTE_URL = "https://jsonplaceholder.typicode.com/todos/1"
 

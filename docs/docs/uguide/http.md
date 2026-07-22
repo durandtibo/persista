@@ -27,7 +27,7 @@ Both retry on connection errors and on a configurable set of HTTP status codes (
 `requests.Response`, retrying up to `max_retries` times with exponential backoff:
 
 ```python
-from persista.utils.http_requests import fetch_response
+from persista.http.requests import fetch_response
 
 response = fetch_response(
     "https://jsonplaceholder.typicode.com/todos/1",
@@ -42,7 +42,7 @@ response.json()
 existing `requests.Session` (otherwise a temporary session is created and closed automatically):
 
 ```pycon
->>> from persista.utils.http_requests import create_session
+>>> from persista.http.requests import create_session
 >>> session = create_session(max_retries=5)
 
 ```
@@ -57,7 +57,7 @@ behavior.
 `httpx.Response`:
 
 ```python
-from persista.utils.http_httpx import fetch_response
+from persista.http.httpx import fetch_response
 
 response = fetch_response(
     "https://jsonplaceholder.typicode.com/todos/1",
@@ -77,7 +77,7 @@ each attempt (`2 ** (attempt - 1)` seconds).
 ```python
 import asyncio
 
-from persista.utils.http_httpx import fetch_response_async
+from persista.http.httpx import fetch_response_async
 
 
 async def main():

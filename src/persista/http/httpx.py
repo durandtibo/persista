@@ -64,7 +64,7 @@ def fetch_response(
 
     Example:
         ```pycon
-        >>> from persista.utils.http_httpx import fetch_response
+        >>> from persista.http.httpx import fetch_response
         >>> response = fetch_response(  # doctest: +SKIP
         ...     "https://jsonplaceholder.typicode.com/todos/1",
         ...     timeout=10,
@@ -172,7 +172,7 @@ async def fetch_response_async(
     Example:
         ```pycon
         >>> import asyncio
-        >>> from persista.utils.http_httpx import fetch_response_async
+        >>> from persista.http.httpx import fetch_response_async
         >>> response = asyncio.run(  # doctest: +SKIP
         ...     fetch_response_async(
         ...         "https://jsonplaceholder.typicode.com/todos/1",
