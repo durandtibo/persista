@@ -156,5 +156,12 @@ class AsyncInMemoryStore(AsyncBaseStore, InlineDisplayMixin):
     async def count(self) -> int:
         return len(self._data)
 
+    def to_uri(self) -> str:
+        return "memory://"
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> AsyncInMemoryStore:  # noqa: ARG003
+        return cls()
+
     def _get_repr_kwargs(self) -> dict[str, Any]:
         return {"count": len(self._data)}
