@@ -8,6 +8,7 @@ __all__ = [
     "AsyncBaseSQLiteStore",
     "AsyncBaseStore",
     "AsyncInMemoryStore",
+    "AsyncNullStore",
     "AsyncPickleRedisStore",
     "AsyncPostgresStore",
     "AsyncRedisStore",
@@ -25,6 +26,7 @@ __all__ = [
     "InMemoryStore",
     "JsonFileStore",
     "LmdbStore",
+    "NullStore",
     "OnConflict",
     "PickleFileStore",
     "PickleLmdbStore",
@@ -43,6 +45,7 @@ __all__ = [
 ]
 
 from persista.store.async_in_memory import AsyncInMemoryStore
+from persista.store.async_null import AsyncNullStore
 from persista.store.async_postgres import (
     AsyncBasePostgresStore,
     AsyncPostgresStore,
@@ -63,6 +66,7 @@ from persista.store.duckdb import BaseDuckDBStore, DuckDBStore, TypedDuckDBStore
 from persista.store.file import BaseFileStore, JsonFileStore, PickleFileStore
 from persista.store.in_memory import InMemoryStore
 from persista.store.lmdb import BaseLmdbStore, LmdbStore, PickleLmdbStore
+from persista.store.null import NullStore
 from persista.store.postgres import BasePostgresStore, PostgresStore, TypedPostgresStore
 from persista.store.redis import BaseRedisStore, PickleRedisStore, RedisStore
 from persista.store.sqlite import (
