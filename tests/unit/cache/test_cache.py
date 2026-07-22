@@ -124,6 +124,38 @@ def test_get_cached_none_is_miss_with_ignore_none() -> None:
     assert value is None
 
 
+# --- contains ---
+
+
+def test_contains_missing_key(cache: Cache) -> None:
+    assert cache.contains("missing") is False
+
+
+def test_contains_existing_key(cache: Cache) -> None:
+    cache.set("key", "value")
+    assert cache.contains("key") is True
+
+
+def test_contains_expired_key(cache: Cache, fake_time: list[float]) -> None:
+    cache.set("key", "value", ttl=10)
+    fake_time[0] += 11
+    assert cache.contains("key") is False
+
+
+# --- delete ---
+
+
+def test_delete_existing_key(cache: Cache) -> None:
+    cache.set("key", "value")
+    cache.delete("key")
+    assert cache.get("key") is None
+
+
+def test_delete_missing_key(cache: Cache) -> None:
+    cache.delete("missing")
+    assert cache.get("missing") is None
+
+
 # --- clear ---
 
 
