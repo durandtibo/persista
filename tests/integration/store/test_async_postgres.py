@@ -728,6 +728,27 @@ async def test_context_manager_usable_for_reads_and_writes(
         assert await store.count() == 1
 
 
+# --- to_uri / from_uri ---
+
+
+async def test_to_uri_from_uri_round_trips_data(
+    store_cls: type[AsyncBasePostgresStore], conninfo: str
+) -> None:
+    # `to_uri()` only encodes `conninfo`, not `table`, so a round trip lands
+    # on the default "store" table; a custom `table` isn't round-trippable.
+    async with store_cls(conninfo) as store:
+        await store.set("1", {"text": "hello", "author": "Alice"})
+        uri = store.to_uri()
+        try:
+            async with store_cls.from_uri(uri) as reloaded:
+                assert await reloaded.get("1") == {"text": "hello", "author": "Alice"}
+        finally:
+            async with await psycopg.AsyncConnection.connect(conninfo) as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("DROP TABLE IF EXISTS store")
+                await conn.commit()
+
+
 #######################################################
 #     TypedPostgresStore-specific schema behavior     #
 #######################################################

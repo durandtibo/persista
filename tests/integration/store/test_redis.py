@@ -470,6 +470,23 @@ def test_context_manager_usable_for_reads_and_writes(store_cls: type[BaseRedisSt
         store.delete_many(list(store.keys()))
 
 
+# --- to_uri / from_uri ---
+
+
+@redis_available
+@redis_server_available
+def test_to_uri_from_uri_round_trips_data(store_cls: type[BaseRedisStore]) -> None:
+    with store_cls(REDIS_URL) as store:
+        store.delete_many(list(store.keys()))
+        store.set("1", {"text": "hello", "author": "Alice"})
+        uri = store.to_uri()
+        try:
+            with store_cls.from_uri(uri) as reloaded:
+                assert reloaded.get("1") == {"text": "hello", "author": "Alice"}
+        finally:
+            store.delete_many(list(store.keys()))
+
+
 @redis_available
 @redis_server_available
 def test_context_manager_multiple_open_close(store_cls: type[BaseRedisStore]) -> None:

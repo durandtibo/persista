@@ -493,6 +493,23 @@ async def test_context_manager_usable_for_reads_and_writes(
         await store.delete_many([key async for key in store.keys()])  # noqa: SIM118
 
 
+# --- to_uri / from_uri ---
+
+
+@redis_available
+@redis_server_available
+async def test_to_uri_from_uri_round_trips_data(store_cls: type[AsyncBaseRedisStore]) -> None:
+    async with store_cls(REDIS_URL) as store:
+        await store.delete_many([key async for key in store.keys()])  # noqa: SIM118
+        await store.set("1", {"text": "hello", "author": "Alice"})
+        uri = store.to_uri()
+        try:
+            async with store_cls.from_uri(uri) as reloaded:
+                assert await reloaded.get("1") == {"text": "hello", "author": "Alice"}
+        finally:
+            await store.delete_many([key async for key in store.keys()])  # noqa: SIM118
+
+
 @redis_available
 @redis_server_available
 async def test_context_manager_multiple_open_close(
