@@ -370,7 +370,9 @@ def test_to_uri_from_uri_round_trips_file_data(
         assert reloaded.count() == len(items)
 
 
-def test_from_uri_read_only_rejects_writes(tmp_path: Path, items: dict[str, dict[str, Any]]) -> None:
+def test_from_uri_read_only_rejects_writes(
+    tmp_path: Path, items: dict[str, dict[str, Any]]
+) -> None:
     path = tmp_path / "to_uri_ro.sqlite"
     with PickleSQLiteStore.from_path(path) as store:
         store.set_many(items)

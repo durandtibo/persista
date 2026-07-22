@@ -14,8 +14,7 @@ if TYPE_CHECKING:
 
 pytest.importorskip("lmdb")
 
-import lmdb  # noqa: E402
-
+import lmdb
 
 # ---------------------------------------------------------------------------
 # Fixtures

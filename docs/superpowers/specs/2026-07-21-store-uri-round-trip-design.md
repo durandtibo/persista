@@ -67,6 +67,7 @@ Two small helpers used by the path-based families:
 def encode_path_uri(scheme: str, path: str) -> str:
     """scheme + a percent-encoded path/identifier, no netloc."""
 
+
 def decode_path_uri(uri: str, *, expected_scheme: str) -> str:
     """Validate the scheme, return the decoded path/identifier."""
 ```
@@ -81,6 +82,7 @@ Add two new abstract members mirrored on both classes:
 ```python
 @abstractmethod
 def to_uri(self) -> str: ...
+
 
 @classmethod
 @abstractmethod
@@ -124,6 +126,7 @@ using `cls`, which naturally becomes the leaf class through inheritance).
 def to_uri(self) -> str:
     return "memory://"  # or "null://"
 
+
 @classmethod
 def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
     return cls()
@@ -137,6 +140,7 @@ call; nothing meaningful to decode.
 ```python
 _SYNC_SCHEMES: dict[str, type[BaseStore]] = {...}
 _ASYNC_SCHEMES: dict[str, type[AsyncBaseStore]] = {...}
+
 
 def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore: ...
 def async_store_from_uri(uri: str, *, read_only: bool = False) -> AsyncBaseStore: ...

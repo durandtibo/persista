@@ -13,7 +13,6 @@ from persista.store.async_null import AsyncNullStore
 from persista.store.async_postgres import AsyncPostgresStore
 from persista.store.async_redis import AsyncRedisStore
 from persista.store.async_sqlite import AsyncSQLiteStore, AsyncTypedSQLiteStore
-from persista.store.base import AsyncBaseStore, BaseStore
 from persista.store.duckdb import DuckDBStore, TypedDuckDBStore
 from persista.store.file import JsonFileStore, PickleFileStore
 from persista.store.in_memory import InMemoryStore
@@ -22,6 +21,10 @@ from persista.store.null import NullStore
 from persista.store.postgres import PostgresStore
 from persista.store.redis import RedisStore
 from persista.store.sqlite import PickleSQLiteStore, SQLiteStore, TypedSQLiteStore
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from persista.store.base import AsyncBaseStore, BaseStore
 
 _SYNC_SCHEMES: dict[str, type[BaseStore]] = {
     "memory": InMemoryStore,
@@ -84,8 +87,8 @@ def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
 
 
 def async_store_from_uri(uri: str, *, read_only: bool = False) -> AsyncBaseStore:
-    """Reconstruct an :class:`~persista.store.base.AsyncBaseStore` from a
-    URI.
+    """Reconstruct an :class:`~persista.store.base.AsyncBaseStore` from
+    a URI.
 
     Mirrors :func:`store_from_uri`, dispatching to the async store
     classes instead.

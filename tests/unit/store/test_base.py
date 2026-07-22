@@ -116,22 +116,51 @@ def test_base_store_is_abstract() -> None:
 
 def test_base_store_is_abstract_missing_to_uri_from_uri() -> None:
     class IncompleteStore(BaseStore):
-        def get(self, key): return None
-        def get_many(self, keys): return []
-        def set(self, key, value, on_conflict="overwrite"): pass
-        def set_many(self, items, on_conflict="overwrite"): pass
-        def filter(self, **field_filters): return []
-        def delete(self, key): pass
-        def delete_many(self, keys): pass
-        def clear(self): pass
-        def contains(self, key): return False
-        def contains_many(self, keys): return [], []
-        def keys(self): return iter(())
-        def iter_batches(self, batch_size=32): yield from ()
-        def count(self): return 0
-        def close(self): pass
+        def get(self, key) -> None:
+            return None
+
+        def get_many(self, keys):
+            return []
+
+        def set(self, key, value, on_conflict="overwrite") -> None:
+            pass
+
+        def set_many(self, items, on_conflict="overwrite") -> None:
+            pass
+
+        def filter(self, **field_filters):
+            return []
+
+        def delete(self, key) -> None:
+            pass
+
+        def delete_many(self, keys) -> None:
+            pass
+
+        def clear(self) -> None:
+            pass
+
+        def contains(self, key) -> bool:
+            return False
+
+        def contains_many(self, keys):
+            return [], []
+
+        def keys(self):
+            return iter(())
+
+        def iter_batches(self, batch_size=32):
+            yield from ()
+
+        def count(self) -> int:
+            return 0
+
+        def close(self) -> None:
+            pass
+
         @property
-        def closed(self): return False
+        def closed(self) -> bool:
+            return False
 
     with pytest.raises(TypeError, match="abstract"):
         IncompleteStore()

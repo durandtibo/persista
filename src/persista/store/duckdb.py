@@ -14,12 +14,12 @@ from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
+from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
     normalize_on_conflict,
     validate_batch_size,
     validate_field_name,
 )
-from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.utils.duckdb import prepare_duckdb_path
 from persista.utils.imports import check_duckdb, is_duckdb_available
 

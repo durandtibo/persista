@@ -66,7 +66,10 @@ def test_decode_rejects_wrong_scheme() -> None:
 
 def test_encode_decode_round_trip_path_with_special_chars() -> None:
     uri = encode_path_uri("file+pickle", "/tmp/a dir/with?special#chars.db")
-    assert decode_path_uri(uri, expected_scheme="file+pickle") == "/tmp/a dir/with?special#chars.db"
+    assert (
+        decode_path_uri(uri, expected_scheme="file+pickle")
+        == "/tmp/a dir/with?special#chars.db"
+    )
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -156,22 +159,51 @@ Add to `tests/unit/store/test_base.py` (after the existing `test_base_store_is_a
 ```python
 def test_base_store_is_abstract_missing_to_uri_from_uri() -> None:
     class IncompleteStore(BaseStore):
-        def get(self, key): return None
-        def get_many(self, keys): return []
-        def set(self, key, value, on_conflict="overwrite"): pass
-        def set_many(self, items, on_conflict="overwrite"): pass
-        def filter(self, **field_filters): return []
-        def delete(self, key): pass
-        def delete_many(self, keys): pass
-        def clear(self): pass
-        def contains(self, key): return False
-        def contains_many(self, keys): return [], []
-        def keys(self): return iter(())
-        def iter_batches(self, batch_size=32): yield from ()
-        def count(self): return 0
-        def close(self): pass
+        def get(self, key):
+            return None
+
+        def get_many(self, keys):
+            return []
+
+        def set(self, key, value, on_conflict="overwrite"):
+            pass
+
+        def set_many(self, items, on_conflict="overwrite"):
+            pass
+
+        def filter(self, **field_filters):
+            return []
+
+        def delete(self, key):
+            pass
+
+        def delete_many(self, keys):
+            pass
+
+        def clear(self):
+            pass
+
+        def contains(self, key):
+            return False
+
+        def contains_many(self, keys):
+            return [], []
+
+        def keys(self):
+            return iter(())
+
+        def iter_batches(self, batch_size=32):
+            yield from ()
+
+        def count(self):
+            return 0
+
+        def close(self):
+            pass
+
         @property
-        def closed(self): return False
+        def closed(self):
+            return False
 
     with pytest.raises(TypeError, match="abstract"):
         IncompleteStore()
@@ -187,65 +219,67 @@ Expected: FAIL (no `TypeError` raised, since `to_uri`/`from_uri` don't exist yet
 In `src/persista/store/base.py`, add to `BaseStore` right after the `closed` property (before `__enter__`):
 
 ```python
-    @abstractmethod
-    def to_uri(self) -> str:
-        """Return a URI that identifies where this store's data lives.
+@abstractmethod
+def to_uri(self) -> str:
+    """Return a URI that identifies where this store's data lives.
 
-        Returns:
-            A URI. For a store backed by a file/database, passing
-            this URI to :meth:`from_uri` reconnects to the same
-            data. For a process-local store, the URI carries no
-            reconnection information and :meth:`from_uri` returns a
-            fresh, empty store.
-        """
+    Returns:
+        A URI. For a store backed by a file/database, passing
+        this URI to :meth:`from_uri` reconnects to the same
+        data. For a process-local store, the URI carries no
+        reconnection information and :meth:`from_uri` returns a
+        fresh, empty store.
+    """
 
-    @classmethod
-    @abstractmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
-        """Reconstruct a store from a URI produced by :meth:`to_uri`.
 
-        Args:
-            uri: A URI produced by :meth:`to_uri` (of a store of this
-                same class).
-            read_only: If ``True`` and this store type supports a
-                read-only connection mode, open it read-only.
-                Ignored by store types with no such mode.
+@classmethod
+@abstractmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+    """Reconstruct a store from a URI produced by :meth:`to_uri`.
 
-        Returns:
-            A new store instance.
-        """
+    Args:
+        uri: A URI produced by :meth:`to_uri` (of a store of this
+            same class).
+        read_only: If ``True`` and this store type supports a
+            read-only connection mode, open it read-only.
+            Ignored by store types with no such mode.
+
+    Returns:
+        A new store instance.
+    """
 ```
 
 Add the mirrored pair to `AsyncBaseStore` in the same relative position (after its `closed` property, before `__aenter__`). Note `from_uri` stays synchronous (not `async def`) even on `AsyncBaseStore`, since building a store is instantiating a client that connects lazily/on first use, not performing I/O:
 
 ```python
-    @abstractmethod
-    def to_uri(self) -> str:
-        """Return a URI that identifies where this store's data lives.
+@abstractmethod
+def to_uri(self) -> str:
+    """Return a URI that identifies where this store's data lives.
 
-        Returns:
-            A URI. For a store backed by a file/database, passing
-            this URI to :meth:`from_uri` reconnects to the same
-            data. For a process-local store, the URI carries no
-            reconnection information and :meth:`from_uri` returns a
-            fresh, empty store.
-        """
+    Returns:
+        A URI. For a store backed by a file/database, passing
+        this URI to :meth:`from_uri` reconnects to the same
+        data. For a process-local store, the URI carries no
+        reconnection information and :meth:`from_uri` returns a
+        fresh, empty store.
+    """
 
-    @classmethod
-    @abstractmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
-        """Reconstruct a store from a URI produced by :meth:`to_uri`.
 
-        Args:
-            uri: A URI produced by :meth:`to_uri` (of a store of this
-                same class).
-            read_only: If ``True`` and this store type supports a
-                read-only connection mode, open it read-only.
-                Ignored by store types with no such mode.
+@classmethod
+@abstractmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+    """Reconstruct a store from a URI produced by :meth:`to_uri`.
 
-        Returns:
-            A new store instance.
-        """
+    Args:
+        uri: A URI produced by :meth:`to_uri` (of a store of this
+            same class).
+        read_only: If ``True`` and this store type supports a
+            read-only connection mode, open it read-only.
+            Ignored by store types with no such mode.
+
+    Returns:
+        A new store instance.
+    """
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -258,12 +292,15 @@ Expected: PASS
 `InMemoryTestStore` in `tests/unit/store/test_base.py` and `AsyncInMemoryStore` in `tests/unit/store/test_base_async.py` are concrete subclasses instantiated by fixtures — they'll now fail to instantiate (`TypeError: abstract`). Add to `InMemoryTestStore` (sync, in `test_base.py`):
 
 ```python
-    def to_uri(self) -> str:
-        return "test-memory://"
+def to_uri(self) -> str:
+    return "test-memory://"
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> InMemoryTestStore:  # noqa: ARG003
-        return cls()
+
+@classmethod
+def from_uri(
+    cls, uri: str, *, read_only: bool = False
+) -> InMemoryTestStore:  # noqa: ARG003
+    return cls()
 ```
 
 Add the same pair (without `async`, per the note above) to `AsyncInMemoryStore` in `test_base_async.py`, adjusting the return type annotation to `AsyncInMemoryStore`.
@@ -337,12 +374,15 @@ Expected: FAIL with `AttributeError: 'InMemoryStore' object has no attribute 'to
 Add after the `count` method:
 
 ```python
-    def to_uri(self) -> str:
-        return "memory://"
+def to_uri(self) -> str:
+    return "memory://"
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> InMemoryStore:  # noqa: ARG003
-        return cls()
+
+@classmethod
+def from_uri(
+    cls, uri: str, *, read_only: bool = False
+) -> InMemoryStore:  # noqa: ARG003
+    return cls()
 ```
 
 Add `from __future__ import annotations` is already present; add `if TYPE_CHECKING: from typing import Self` is not needed since the return type is the concrete class name directly (already how `InMemoryStore` docstrings reference the class).
@@ -352,12 +392,15 @@ Add `from __future__ import annotations` is already present; add `if TYPE_CHECKI
 Add after the `count` method:
 
 ```python
-    def to_uri(self) -> str:
-        return "memory://"
+def to_uri(self) -> str:
+    return "memory://"
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> AsyncInMemoryStore:  # noqa: ARG003
-        return cls()
+
+@classmethod
+def from_uri(
+    cls, uri: str, *, read_only: bool = False
+) -> AsyncInMemoryStore:  # noqa: ARG003
+    return cls()
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -412,12 +455,13 @@ Expected: FAIL with `AttributeError`
 Add after the `count` method:
 
 ```python
-    def to_uri(self) -> str:
-        return "null://"
+def to_uri(self) -> str:
+    return "null://"
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> NullStore:  # noqa: ARG003
-        return cls()
+
+@classmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> NullStore:  # noqa: ARG003
+    return cls()
 ```
 
 - [ ] **Step 4: Implement in `src/persista/store/async_null.py`**
@@ -425,12 +469,15 @@ Add after the `count` method:
 Add after the `count` method:
 
 ```python
-    def to_uri(self) -> str:
-        return "null://"
+def to_uri(self) -> str:
+    return "null://"
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> AsyncNullStore:  # noqa: ARG003
-        return cls()
+
+@classmethod
+def from_uri(
+    cls, uri: str, *, read_only: bool = False
+) -> AsyncNullStore:  # noqa: ARG003
+    return cls()
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -462,7 +509,9 @@ git commit -m "Add to_uri/from_uri to NullStore and AsyncNullStore"
 Add to `tests/unit/store/test_file.py`:
 
 ```python
-def test_to_uri_round_trips_path(tmp_path: Path, store_cls: type[BaseFileStore]) -> None:
+def test_to_uri_round_trips_path(
+    tmp_path: Path, store_cls: type[BaseFileStore]
+) -> None:
     store = store_cls(tmp_path / "db")
     reloaded = store_cls.from_uri(store.to_uri())
     assert reloaded.path == store.path
@@ -504,28 +553,29 @@ from persista.store.uri import decode_path_uri, encode_path_uri
 Add to `BaseFileStore`, after the existing `extension` abstract property:
 
 ```python
-    @property
-    @abstractmethod
-    def scheme(self) -> str:
-        """URI scheme used by :meth:`to_uri`/:meth:`from_uri`."""
+@property
+@abstractmethod
+def scheme(self) -> str:
+    """URI scheme used by :meth:`to_uri`/:meth:`from_uri`."""
 ```
 
 Add to `BaseFileStore`, after `count` (before `_get_repr_kwargs`):
 
 ```python
-    def to_uri(self) -> str:
-        return encode_path_uri(self.scheme, str(self._path))
+def to_uri(self) -> str:
+    return encode_path_uri(self.scheme, str(self._path))
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
-        return cls(decode_path_uri(uri, expected_scheme=cls.scheme))
+
+@classmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
+    return cls(decode_path_uri(uri, expected_scheme=cls.scheme))
 ```
 
 `cls.scheme` needs to work as a plain class attribute access on the class itself (not just an instance), so change `scheme` from a `@property` to a plain class attribute in the two leaf classes (matches how `extension` is used purely on instances elsewhere, but `from_uri` needs it on the class). Update the abstract declaration to a class-level annotation instead of a property:
 
 ```python
-    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
-    scheme: str
+#: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
+scheme: str
 ```
 
 (Remove the `@property`/`@abstractmethod` pair added above and use this plain annotation instead — it documents the contract without forcing a property, and lets `JsonFileStore.scheme = "file+json"` be a simple class attribute.)
@@ -533,13 +583,13 @@ Add to `BaseFileStore`, after `count` (before `_get_repr_kwargs`):
 Add to `JsonFileStore`, at the top of the class body (before `extension`):
 
 ```python
-    scheme = "file+json"
+scheme = "file+json"
 ```
 
 Add to `PickleFileStore`, at the top of the class body (before `extension`):
 
 ```python
-    scheme = "file+pickle"
+scheme = "file+pickle"
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -624,32 +674,33 @@ from persista.store.uri import decode_path_uri, encode_path_uri
 Add to `BaseSQLiteStore`, as a class attribute right after `_key_column`:
 
 ```python
-    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
-    _scheme: str = "sqlite"
+#: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
+_scheme: str = "sqlite"
 ```
 
 Add to `BaseSQLiteStore`, after `from_path` (before `close`):
 
 ```python
-    def to_uri(self) -> str:
-        return encode_path_uri(self._scheme, str(self._database))
+def to_uri(self) -> str:
+    return encode_path_uri(self._scheme, str(self._database))
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
-        path = decode_path_uri(uri, expected_scheme=cls._scheme)
-        return cls.from_path(path, read_only=read_only)
+
+@classmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+    path = decode_path_uri(uri, expected_scheme=cls._scheme)
+    return cls.from_path(path, read_only=read_only)
 ```
 
 Add `_scheme = "sqlite"` is already the default via the base class attribute, so `SQLiteStore` needs no override. Add to `PickleSQLiteStore`, at the top of the class body (before `__init__`):
 
 ```python
-    _scheme = "sqlite+pickle"
+_scheme = "sqlite+pickle"
 ```
 
 Add to `TypedSQLiteStore`, at the top of the class body (after `_key_column = _KEY_COLUMN`):
 
 ```python
-    _scheme = "sqlite+typed"
+_scheme = "sqlite+typed"
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -716,26 +767,27 @@ from persista.store.uri import decode_path_uri, encode_path_uri
 Add to `AsyncBaseSQLiteStore`, as a class attribute right after `_key_column`:
 
 ```python
-    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
-    _scheme: str = "sqlite"
+#: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
+_scheme: str = "sqlite"
 ```
 
 Add to `AsyncBaseSQLiteStore`, after `from_path` (before `close`):
 
 ```python
-    def to_uri(self) -> str:
-        return encode_path_uri(self._scheme, str(self._database))
+def to_uri(self) -> str:
+    return encode_path_uri(self._scheme, str(self._database))
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
-        path = decode_path_uri(uri, expected_scheme=cls._scheme)
-        return cls.from_path(path, read_only=read_only)
+
+@classmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+    path = decode_path_uri(uri, expected_scheme=cls._scheme)
+    return cls.from_path(path, read_only=read_only)
 ```
 
 Add to `AsyncTypedSQLiteStore`, at the top of the class body (after `_key_column = _KEY_COLUMN`):
 
 ```python
-    _scheme = "sqlite+typed"
+_scheme = "sqlite+typed"
 ```
 
 (`AsyncSQLiteStore` needs no override, inheriting `_scheme = "sqlite"`.)
@@ -807,26 +859,27 @@ from persista.store.uri import decode_path_uri, encode_path_uri
 Add to `BaseDuckDBStore`, as a class attribute right after `_key_column`:
 
 ```python
-    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
-    _scheme: str = "duckdb"
+#: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
+_scheme: str = "duckdb"
 ```
 
 Add to `BaseDuckDBStore`, after `show_columns_info` (before `_get_repr_kwargs`):
 
 ```python
-    def to_uri(self) -> str:
-        return encode_path_uri(self._scheme, str(self._path))
+def to_uri(self) -> str:
+    return encode_path_uri(self._scheme, str(self._path))
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
-        path = decode_path_uri(uri, expected_scheme=cls._scheme)
-        return cls(path, read_only=read_only)
+
+@classmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+    path = decode_path_uri(uri, expected_scheme=cls._scheme)
+    return cls(path, read_only=read_only)
 ```
 
 Add to `TypedDuckDBStore`, at the top of the class body (after `_key_column = _KEY_COLUMN`):
 
 ```python
-    _scheme = "duckdb+typed"
+_scheme = "duckdb+typed"
 ```
 
 (`DuckDBStore` needs no override, inheriting `_scheme = "duckdb"`.)
@@ -902,26 +955,27 @@ from persista.store.uri import decode_path_uri, encode_path_uri
 Add to `BaseLmdbStore`, as a class attribute right before `__init__`:
 
 ```python
-    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
-    _scheme: str = "lmdb"
+#: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
+_scheme: str = "lmdb"
 ```
 
 Add to `BaseLmdbStore`, after `count` (before `_get_repr_kwargs`):
 
 ```python
-    def to_uri(self) -> str:
-        return encode_path_uri(self._scheme, self._path)
+def to_uri(self) -> str:
+    return encode_path_uri(self._scheme, self._path)
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
-        path = decode_path_uri(uri, expected_scheme=cls._scheme)
-        return cls(path, readonly=read_only)
+
+@classmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+    path = decode_path_uri(uri, expected_scheme=cls._scheme)
+    return cls(path, readonly=read_only)
 ```
 
 Add to `PickleLmdbStore`, at the top of the class body (before `_encode`):
 
 ```python
-    _scheme = "lmdb+pickle"
+_scheme = "lmdb+pickle"
 ```
 
 (`LmdbStore` needs no override, inheriting `_scheme = "lmdb"`.)
@@ -958,7 +1012,9 @@ def test_to_uri_returns_conninfo_unchanged(store: BasePostgresStore) -> None:
     assert store.to_uri() == store._conninfo  # noqa: SLF001
 
 
-def test_from_uri_constructs_with_same_conninfo(store_cls: type[BasePostgresStore]) -> None:
+def test_from_uri_constructs_with_same_conninfo(
+    store_cls: type[BasePostgresStore],
+) -> None:
     # Reuses the same `psycopg.connect` mock/monkeypatch active for `store_cls`
     # in this test module -- check how the fixture patches the connect call
     # and apply the same patching here rather than hitting a real server.
@@ -985,12 +1041,13 @@ Expected: FAIL with `AttributeError: 'PostgresStore' object has no attribute 'to
 Add to `BasePostgresStore`, after `close`/`closed` (before `get`, or anywhere convenient in that class):
 
 ```python
-    def to_uri(self) -> str:
-        return self._conninfo
+def to_uri(self) -> str:
+    return self._conninfo
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
-        return cls(uri)
+
+@classmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
+    return cls(uri)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -1025,7 +1082,9 @@ def test_to_uri_returns_conninfo_unchanged(store: AsyncBasePostgresStore) -> Non
     assert store.to_uri() == store._conninfo  # noqa: SLF001
 
 
-def test_from_uri_constructs_with_same_conninfo(store_cls: type[AsyncBasePostgresStore]) -> None:
+def test_from_uri_constructs_with_same_conninfo(
+    store_cls: type[AsyncBasePostgresStore],
+) -> None:
     conninfo = "postgresql://user:pass@localhost/dbname"
     new_store = store_cls.from_uri(conninfo)
     assert new_store._conninfo == conninfo  # noqa: SLF001
@@ -1041,12 +1100,13 @@ Expected: FAIL with `AttributeError`
 Add to `AsyncBasePostgresStore`, after `close`/`closed`:
 
 ```python
-    def to_uri(self) -> str:
-        return self._conninfo
+def to_uri(self) -> str:
+    return self._conninfo
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
-        return cls(uri)
+
+@classmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
+    return cls(uri)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1109,12 +1169,13 @@ Expected: FAIL with `AttributeError`
 Add to `BaseRedisStore`, after `close`/`closed`:
 
 ```python
-    def to_uri(self) -> str:
-        return self._url
+def to_uri(self) -> str:
+    return self._url
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
-        return cls(uri)
+
+@classmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
+    return cls(uri)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -1154,12 +1215,13 @@ Expected: FAIL with `AttributeError`
 Add to `AsyncBaseRedisStore`, after `close`/`closed`:
 
 ```python
-    def to_uri(self) -> str:
-        return self._url
+def to_uri(self) -> str:
+    return self._url
 
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
-        return cls(uri)
+
+@classmethod
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
+    return cls(uri)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
