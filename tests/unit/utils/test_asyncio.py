@@ -4,9 +4,9 @@ import pytest
 
 from persista.utils.asyncio import EmptyAsyncIterator
 
-#######################################
+########################################
 #     Tests for EmptyAsyncIterator     #
-#######################################
+########################################
 
 
 async def test_empty_async_iterator_yields_nothing() -> None:
