@@ -22,6 +22,7 @@ from persista.store.validation import (
     validate_batch_size,
     validate_field_name,
 )
+from persista.utils.path import prepare_store_path
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator, Mapping
@@ -149,6 +150,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         elif read_only:
             uri = f"file:{path}?mode=ro"
         else:
+            path = prepare_store_path(path)
             uri = f"file:{path}?mode=rwc"
         store = cls(uri, uri=True, **kwargs)
         store._path_for_uri = path

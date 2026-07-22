@@ -145,7 +145,8 @@ Time-to-live caching for functions and values, with sync and async variants:
 
 Helpers to fetch HTTP responses with automatic retries, built on top of `requests` or `httpx`:
 
-- `fetch_response` (sync, `requests`) and `fetch_response_async` (async, `httpx`)
+- `fetch_response` (sync, `requests`), `get_response`/`send_request` (sync, `httpx`), and
+  `get_response_async`/`send_request_async` (async, `httpx`)
 
 [Learn more →](uguide/http.md)
 

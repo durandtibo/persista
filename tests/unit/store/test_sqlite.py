@@ -118,6 +118,18 @@ def test_from_path_creates_file_backed_store(
         assert path.exists()
 
 
+def test_from_path_creates_missing_parent_directories(
+    store_path: Path, store_cls: type[BaseSQLiteStore]
+) -> None:
+    path = store_path / "nested" / store_cls.__name__ / "dirs" / "from_path.sqlite"
+    assert not path.parent.exists()
+
+    with store_cls.from_path(path) as store:
+        store.set("1", {"text": "hello"})
+        assert store.count() == 1
+        assert path.exists()
+
+
 def test_from_path_memory_uses_shared_cache_uri(store_cls: type[BaseSQLiteStore]) -> None:
     with store_cls.from_path(":memory:") as store:
         assert store.count() == 0

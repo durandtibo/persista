@@ -20,8 +20,8 @@ from persista.store.validation import (
     validate_batch_size,
     validate_field_name,
 )
-from persista.utils.duckdb import prepare_duckdb_path
 from persista.utils.imports import check_duckdb, is_duckdb_available
+from persista.utils.path import prepare_store_path
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator, Mapping
@@ -62,7 +62,7 @@ class BaseDuckDBStore(BaseStore, MultilineDisplayMixin):
 
     def __init__(self, path: Path | str, **kwargs: Any) -> None:
         check_duckdb()
-        self._path = prepare_duckdb_path(path)
+        self._path = prepare_store_path(path)
         self._kwargs = kwargs
         self._closed = False
         self._conn = duckdb.connect(str(self._path), **kwargs)
