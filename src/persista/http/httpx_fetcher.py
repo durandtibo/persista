@@ -32,6 +32,7 @@ class BaseFetcher(ABC):
         max_retries: int = 3,
         headers: dict[str, str] | None = None,
         retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+        **kwargs,
     ) -> httpx.Response:
         """Fetch a URL with automatic retries and timeout.
 
@@ -44,6 +45,8 @@ class BaseFetcher(ABC):
                 ``None`` to send no custom headers.
             retry_status_codes: The HTTP status codes that trigger a
                 retry.
+            **kwargs: Additional keyword arguments forwarded to
+                :meth:`httpx.Client.get`.
 
         Returns:
             The :class:`httpx.Response` object for the completed
@@ -70,6 +73,7 @@ class Fetcher(BaseFetcher):
         max_retries: int = 3,
         headers: dict[str, str] | None = None,
         retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+        **kwargs,
     ) -> httpx.Response:
         return fetch_response(
             url=url,
@@ -78,6 +82,7 @@ class Fetcher(BaseFetcher):
             headers=headers,
             retry_status_codes=retry_status_codes,
             client=self._client,
+            **kwargs,
         )
 
 
@@ -118,18 +123,19 @@ class CachedFetcher(BaseFetcher):
         max_retries: int = 3,
         headers: dict[str, str] | None = None,
         retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+        **kwargs,
     ) -> httpx.Response:
-        kwargs = {
+        call_kwargs = {
             "url": url,
             "timeout": timeout,
             "max_retries": max_retries,
             "headers": headers,
             "retry_status_codes": retry_status_codes,
-        }
+        } | kwargs
         key = make_key(
             "",
             args=(),
-            kwargs=kwargs | {"retry_status_codes": sorted(retry_status_codes)},
+            kwargs=call_kwargs | {"retry_status_codes": sorted(retry_status_codes)},
             strategy=self._strategy,
             ignore_non_serializable=self._ignore_non_serializable,
         )
@@ -137,5 +143,5 @@ class CachedFetcher(BaseFetcher):
             key,
             fn=fetch_response,
             args=(),
-            kwargs=kwargs | {"client": self._client},
+            kwargs=call_kwargs | {"client": self._client},
         )
