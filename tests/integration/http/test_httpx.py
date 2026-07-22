@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from persista.http.httpx import fetch_response, fetch_response_async
 from persista.testing.fixtures import httpx_available, httpx_not_available
-from persista.utils.http_httpx import fetch_response, fetch_response_async
 
 REMOTE_URL = "https://jsonplaceholder.typicode.com/todos/1"
 
