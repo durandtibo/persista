@@ -703,6 +703,26 @@ def test_context_manager_usable_for_reads_and_writes(
         assert store.count() == 1
 
 
+# --- to_uri / from_uri ---
+
+
+def test_to_uri_from_uri_round_trips_data(
+    store_cls: type[BasePostgresStore], conninfo: str
+) -> None:
+    # `to_uri()` only encodes `conninfo`, not `table`, so a round trip lands
+    # on the default "store" table; a custom `table` isn't round-trippable.
+    with store_cls(conninfo) as store:
+        store.set("1", {"text": "hello", "author": "Alice"})
+        uri = store.to_uri()
+        try:
+            with store_cls.from_uri(uri) as reloaded:
+                assert reloaded.get("1") == {"text": "hello", "author": "Alice"}
+        finally:
+            with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
+                cur.execute("DROP TABLE IF EXISTS store")
+                conn.commit()
+
+
 #######################################################
 #     TypedPostgresStore-specific schema behavior     #
 #######################################################
