@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import Mock
 
 import pytest
@@ -24,7 +24,7 @@ MODULE = "persista.http.httpx"
 def no_sleep(monkeypatch: pytest.MonkeyPatch) -> Mock:
     mock = Mock()
 
-    async def fake_async_sleep(*args: object, **kwargs: object) -> None:
+    async def fake_async_sleep(*args: Any, **kwargs: Any) -> None:
         mock(*args, **kwargs)
 
     monkeypatch.setattr(f"{MODULE}.time.sleep", mock)
@@ -77,6 +77,18 @@ def test_fetch_response_passes_headers() -> None:
     fetch_response("https://example.com", client=_client(handler), headers={"X-Custom": "value"})
 
     assert received["x-custom"] == "value"
+
+
+def test_fetch_response_forwards_kwargs_to_client_get() -> None:
+    received_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_params.update(request.url.params)
+        return httpx.Response(200)
+
+    fetch_response("https://example.com", client=_client(handler), params={"q": "value"})
+
+    assert received_params == {"q": "value"}
 
 
 def test_fetch_response_provided_client_is_not_closed() -> None:
@@ -237,6 +249,20 @@ async def test_fetch_response_async_passes_headers() -> None:
     )
 
     assert received["x-custom"] == "value"
+
+
+async def test_fetch_response_async_forwards_kwargs_to_client_get() -> None:
+    received_params: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received_params.update(request.url.params)
+        return httpx.Response(200)
+
+    await fetch_response_async(
+        "https://example.com", client=_async_client(handler), params={"q": "value"}
+    )
+
+    assert received_params == {"q": "value"}
 
 
 async def test_fetch_response_async_provided_client_is_not_closed() -> None:

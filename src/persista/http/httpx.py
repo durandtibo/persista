@@ -9,6 +9,7 @@ __all__ = ["fetch_response", "fetch_response_async"]
 import asyncio
 import logging
 import time
+from typing import Any
 
 from persista.utils.imports import check_httpx, is_httpx_available
 
@@ -27,6 +28,7 @@ def fetch_response(
     headers: dict[str, str] | None = None,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
     client: httpx.Client | None = None,
+    **kwargs: Any,
 ) -> httpx.Response:
     """Fetch a URL with automatic retries and timeout.
 
@@ -51,6 +53,8 @@ def fetch_response(
             Defaults to ``{429, 500, 502, 503, 504}``.
         client: An optional :class:`httpx.Client` to reuse. When ``None``,
             a new client is created and closed after the request completes.
+        **kwargs: Additional keyword arguments forwarded to
+            :meth:`httpx.Client.get`.
 
     Returns:
         The :class:`httpx.Response` object for the completed request.
@@ -84,7 +88,7 @@ def fetch_response(
         while True:
             try:
                 start = time.perf_counter()
-                response = active_client.get(url, headers=headers, timeout=timeout)
+                response = active_client.get(url, headers=headers, timeout=timeout, **kwargs)
                 elapsed = time.perf_counter() - start
                 logger.debug(
                     "Response received: HTTP %d (%d bytes) in %.2fs",
@@ -133,6 +137,7 @@ async def fetch_response_async(
     headers: dict[str, str] | None = None,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
     client: httpx.AsyncClient | None = None,
+    **kwargs: Any,
 ) -> httpx.Response:
     """Fetch a URL asynchronously with automatic retries and timeout.
 
@@ -158,6 +163,8 @@ async def fetch_response_async(
         client: An optional :class:`httpx.AsyncClient` to reuse. When
             ``None``, a new client is created and closed after the request
             completes.
+        **kwargs: Additional keyword arguments forwarded to
+            :meth:`httpx.AsyncClient.get`.
 
     Returns:
         The :class:`httpx.Response` object for the completed request.
@@ -194,7 +201,7 @@ async def fetch_response_async(
         while True:
             try:
                 start = time.perf_counter()
-                response = await active_client.get(url, headers=headers, timeout=timeout)
+                response = await active_client.get(url, headers=headers, timeout=timeout, **kwargs)
                 elapsed = time.perf_counter() - start
                 logger.debug(
                     "Response received: HTTP %d (%d bytes) in %.2fs",
