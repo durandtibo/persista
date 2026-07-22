@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
-import duckdb
 import pytest
 
 from persista.store import DuckDBStore, TypedDuckDBStore

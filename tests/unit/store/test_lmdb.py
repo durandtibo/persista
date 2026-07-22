@@ -12,9 +12,8 @@ if TYPE_CHECKING:
 
     from persista.store import BaseLmdbStore
 
-pytest.importorskip("lmdb")
+lmdb = pytest.importorskip("lmdb")
 
-import lmdb
 
 # ---------------------------------------------------------------------------
 # Fixtures

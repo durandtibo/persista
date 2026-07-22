@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from persista.store import (
@@ -12,6 +14,9 @@ from persista.store import (
     store_from_uri,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 def test_store_from_uri_memory() -> None:
     store = store_from_uri("memory://")
@@ -23,7 +28,7 @@ def test_store_from_uri_null() -> None:
     assert isinstance(store, NullStore)
 
 
-def test_store_from_uri_file_json(tmp_path) -> None:
+def test_store_from_uri_file_json(tmp_path: Path) -> None:
     original = JsonFileStore(tmp_path / "db")
     original.set("1", {"a": 1})
     store = store_from_uri(original.to_uri())

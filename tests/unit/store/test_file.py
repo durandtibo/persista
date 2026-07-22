@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Generator, Iterator
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -9,6 +8,8 @@ import pytest
 from persista.store import JsonFileStore, PickleFileStore
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from persista.store import BaseFileStore
 
 
@@ -749,9 +750,9 @@ def test_to_uri_from_uri_preserves_data(
     assert reloaded.get("1") == items["1"]
 
 
-def test_json_file_store_scheme() -> None:
-    assert JsonFileStore(Path("/tmp/x")).scheme == "file+json"
+def test_json_file_store_scheme(tmp_path: Path) -> None:
+    assert JsonFileStore(tmp_path / "x").scheme == "file+json"
 
 
-def test_pickle_file_store_scheme() -> None:
-    assert PickleFileStore(Path("/tmp/x")).scheme == "file+pickle"
+def test_pickle_file_store_scheme(tmp_path: Path) -> None:
+    assert PickleFileStore(tmp_path / "x").scheme == "file+pickle"

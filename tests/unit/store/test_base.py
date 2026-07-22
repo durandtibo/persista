@@ -116,40 +116,50 @@ def test_base_store_is_abstract() -> None:
 
 def test_base_store_is_abstract_missing_to_uri_from_uri() -> None:
     class IncompleteStore(BaseStore):
-        def get(self, key) -> None:
+        def get(self, key: str) -> dict[str, Any] | None:  # noqa: ARG002
             return None
 
-        def get_many(self, keys):
+        def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:  # noqa: ARG002
             return []
 
-        def set(self, key, value, on_conflict="overwrite") -> None:
+        def set(
+            self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+        ) -> None:
             pass
 
-        def set_many(self, items, on_conflict="overwrite") -> None:
+        def set_many(
+            self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        ) -> None:
             pass
 
-        def filter(self, **field_filters):
+        def filter(self, **field_filters: Any) -> list[dict[str, Any]]:  # noqa: ARG002
             return []
 
-        def delete(self, key) -> None:
+        def delete(self, key: str) -> None:
             pass
 
-        def delete_many(self, keys) -> None:
+        def delete_many(self, keys: list[str]) -> None:
             pass
 
         def clear(self) -> None:
             pass
 
-        def contains(self, key) -> bool:
+        def contains(self, key: str) -> bool:  # noqa: ARG002
             return False
 
-        def contains_many(self, keys):
+        def contains_many(
+            self,
+            keys: list[str],  # noqa: ARG002
+        ) -> tuple[list[str], list[str]]:
             return [], []
 
-        def keys(self):
+        def keys(self) -> Iterator[str]:
             return iter(())
 
-        def iter_batches(self, batch_size=32):
+        def iter_batches(
+            self,
+            batch_size: int = 32,  # noqa: ARG002
+        ) -> Generator[dict[str, dict[str, Any]], None, None]:
             yield from ()
 
         def count(self) -> int:
