@@ -13,7 +13,7 @@ __all__ = [
 ]
 
 import re
-from typing import cast, get_args
+from typing import get_args
 
 from persista.store.types import OnConflict
 
@@ -39,7 +39,7 @@ def normalize_on_conflict(on_conflict: str) -> OnConflict:
     """
     normalized = on_conflict.lower().strip()
     validate_on_conflict(normalized)
-    return cast("OnConflict", normalized)
+    return normalized
 
 
 def validate_on_conflict(on_conflict: str) -> None:

@@ -45,6 +45,21 @@ override it for a single entry; `ttl=0` evicts the entry instead of storing it:
 
 ```
 
+`contains` checks whether a key is present and unexpired, without returning its value; `delete`
+removes a single entry (unlike `set` with `ttl=0`, it doesn't require a value to be given):
+
+```pycon
+>>> from persista.cache import Cache
+>>> cache = Cache()
+>>> cache.set("greeting", "hello")
+>>> cache.contains("greeting")
+True
+>>> cache.delete("greeting")
+>>> cache.contains("greeting")
+False
+
+```
+
 `clear` removes every entry:
 
 ```pycon
@@ -181,8 +196,9 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
 
 ## Async Caching with `AsyncCache`
 
-`AsyncCache` mirrors `Cache`'s `get`/`set`/`clear`/`memoize` API, but every method is a
-coroutine and it is backed by an `AsyncBaseStore` (an `AsyncInMemoryStore` by default):
+`AsyncCache` mirrors `Cache`'s `get`/`set`/`contains`/`delete`/`clear`/`memoize` API, but every
+method is a coroutine and it is backed by an `AsyncBaseStore` (an `AsyncInMemoryStore` by
+default):
 
 ```pycon
 >>> import asyncio
@@ -197,6 +213,32 @@ coroutine and it is backed by an `AsyncBaseStore` (an `AsyncInMemoryStore` by de
 >>> asyncio.run(main())
 hello
 None
+
+```
+
+One difference from `Cache`: `AsyncCache.get_or_compute` accepts either a sync or an `async def`
+function directly — awaiting it only if the result is awaitable — so there's no separate
+`aget_or_compute`. The backing store is still always accessed with `await`, since
+`AsyncBaseStore` is an async interface:
+
+```pycon
+>>> import asyncio
+>>> from persista.cache import AsyncCache
+>>> cache = AsyncCache()
+>>> calls = []
+>>> def compute(x):  # a plain sync function works too
+...     calls.append(x)
+...     return x * 2
+...
+>>> async def main():
+...     print(await cache.get_or_compute("key", compute, (4,), {}))
+...     print(await cache.get_or_compute("key", compute, (4,), {}))  # cached
+...
+>>> asyncio.run(main())
+8
+8
+>>> calls
+[4]
 
 ```
 
