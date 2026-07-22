@@ -19,6 +19,7 @@ from persista.store.validation import (
     validate_batch_size,
     validate_field_name,
 )
+from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.utils.duckdb import prepare_duckdb_path
 from persista.utils.imports import check_duckdb, is_duckdb_available
 
@@ -55,6 +56,9 @@ class BaseDuckDBStore(BaseStore, MultilineDisplayMixin):
     #: Name of the column holding the key. Subclasses with a
     #: different key column name should override this.
     _key_column: str = "key"
+
+    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
+    _scheme: str = "duckdb"
 
     def __init__(self, path: Path | str, **kwargs: Any) -> None:
         check_duckdb()
@@ -224,6 +228,14 @@ class BaseDuckDBStore(BaseStore, MultilineDisplayMixin):
         """
         self._conn.sql("DESCRIBE store").show()
 
+    def to_uri(self) -> str:
+        return encode_path_uri(self._scheme, str(self._path))
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+        path = decode_path_uri(uri, expected_scheme=cls._scheme)
+        return cls(path, read_only=read_only)
+
     def _get_repr_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"path": self._path, "closed": self._closed}
         if not self._closed:
@@ -369,9 +381,18 @@ class TypedDuckDBStore(BaseDuckDBStore):
         1
 
         ```
+
+    Note:
+        :meth:`from_uri` reconstructs the store with an empty
+        ``value_schema``, so value fields that were stored in typed
+        columns won't appear in :meth:`get`/:meth:`filter` results
+        until the caller re-supplies the original ``value_schema`` to
+        a fresh construction; the data itself isn't lost in the
+        database, just not visible through the reconstructed store.
     """
 
     _key_column = _KEY_COLUMN
+    _scheme = "duckdb+typed"
 
     def __init__(
         self,
