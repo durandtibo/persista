@@ -8,7 +8,7 @@ import functools
 import inspect
 import logging
 import time
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from persista.cache.cache import _UNSET
 from persista.cache.utils import make_key
@@ -317,7 +317,7 @@ class AsyncCache:
         if hit:
             return value
         result = fn(*args, **kwargs)
-        value = cast("T", await result if inspect.isawaitable(result) else result)
+        value = await result if inspect.isawaitable(result) else result
         await self.set(key, value, ttl=ttl)
         return value
 
