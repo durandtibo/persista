@@ -1,7 +1,7 @@
 # HTTP Fetch Utilities
 
-:book: This page describes the HTTP helpers in `persista.utils.http_requests` and
-`persista.utils.http_httpx`, which fetch a URL with automatic retries on top of
+:book: This page describes the HTTP helpers in `persista.http.requests` and
+`persista.http.httpx`, which fetch a URL with automatic retries on top of
 [`requests`](https://requests.readthedocs.io/) or [`httpx`](https://www.python-httpx.org/).
 
 **Prerequisites:** You'll need to know a bit of Python. Depending on which helper you use, you
@@ -14,16 +14,16 @@ Fetching data from an HTTP API often needs retry logic for transient failures (r
 server errors). `persista` provides two equivalent helpers so you can use whichever HTTP client
 your project already depends on:
 
-- `persista.utils.http_requests.fetch_response`: synchronous, built on `requests`
-- `persista.utils.http_httpx.fetch_response`: synchronous, built on `httpx`
-- `persista.utils.http_httpx.fetch_response_async`: asynchronous, built on `httpx`
+- `persista.http.requests.fetch_response`: synchronous, built on `requests`
+- `persista.http.httpx.fetch_response`: synchronous, built on `httpx`
+- `persista.http.httpx.fetch_response_async`: asynchronous, built on `httpx`
 
 Both retry on connection errors and on a configurable set of HTTP status codes (`429`, `500`,
 `502`, `503`, `504` by default), and raise an exception if the final attempt still fails.
 
 ## Fetching with `requests`
 
-`fetch_response` (in `persista.utils.http_requests`) fetches a URL and returns a
+`fetch_response` (in `persista.http.requests`) fetches a URL and returns a
 `requests.Response`, retrying up to `max_retries` times with exponential backoff:
 
 ```python
@@ -53,7 +53,7 @@ behavior.
 
 ## Fetching with `httpx`
 
-`fetch_response` (in `persista.utils.http_httpx`) is the `httpx` equivalent, returning an
+`fetch_response` (in `persista.http.httpx`) is the `httpx` equivalent, returning an
 `httpx.Response`:
 
 ```python
