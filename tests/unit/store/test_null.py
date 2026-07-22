@@ -112,7 +112,7 @@ def test_delete_many_is_silent(store: NullStore) -> None:
 
 def test_contains_always_false(store: NullStore) -> None:
     store.set("1", {"text": "hello"})
-    assert store.contains("1") is False
+    assert not store.contains("1")
 
 
 # --- contains_many ---

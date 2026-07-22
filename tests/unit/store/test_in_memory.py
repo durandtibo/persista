@@ -393,18 +393,18 @@ def test_contains_true_when_key_present(
     store: InMemoryStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
-    assert store.contains("1") is True
+    assert store.contains("1")
 
 
 def test_contains_false_when_key_missing(
     store: InMemoryStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
-    assert store.contains("99") is False
+    assert not store.contains("99")
 
 
 def test_contains_false_when_store_empty(store: InMemoryStore) -> None:
-    assert store.contains("1") is False
+    assert not store.contains("1")
 
 
 # --- contains_many ---

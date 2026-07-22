@@ -111,8 +111,8 @@ def test_clear(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]) -> No
 
 def test_contains(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    assert store.contains("1") is True
-    assert store.contains("missing") is False
+    assert store.contains("1")
+    assert not store.contains("missing")
 
 
 def test_contains_many(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]) -> None:
@@ -137,9 +137,9 @@ def test_iter_batches(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]
 
 
 def test_close_and_closed(store: PickleSQLiteStore) -> None:
-    assert store.closed is False
+    assert not store.closed
     store.close()
-    assert store.closed is True
+    assert store.closed
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +311,7 @@ def test_context_manager_closes_on_normal_exit() -> None:
     with PickleSQLiteStore(":memory:") as store:
         store.set("1", {"a": 1})
         assert store.count() == 1
-    assert store.closed is True
+    assert store.closed
     with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
         store._conn.execute("SELECT 1")
 
@@ -320,14 +320,14 @@ def test_context_manager_closes_on_exception() -> None:
     msg = "boom"
     with pytest.raises(ValueError, match="boom"), PickleSQLiteStore(":memory:") as store:
         raise ValueError(msg)
-    assert store.closed is True
+    assert store.closed
 
 
 def test_reenter_after_close_resets_in_memory_store(store: PickleSQLiteStore) -> None:
     store.set("1", {"a": 1})
     store.close()
     with store:
-        assert store.closed is False
+        assert not store.closed
         assert store.count() == 0
         store.set("1", {"a": 2})
         assert store.get("1") == {"a": 2}
@@ -339,7 +339,7 @@ def test_reenter_after_close_reopens_file_backed_store(tmp_path: Path) -> None:
     store.set("1", {"a": 1})
     store.close()
     with store:
-        assert store.closed is False
+        assert not store.closed
         assert store.get("1") == {"a": 1}
     store.close()
 
