@@ -143,7 +143,7 @@ def test_get_or_compute_miss_calls_fn(cache: Cache) -> None:
         calls.append(x)
         return x * 2
 
-    assert cache.get_or_compute("key", fn, 1) == 2
+    assert cache.get_or_compute("key", fn, (1,), {}) == 2
     assert calls == [1]
 
 
@@ -154,8 +154,8 @@ def test_get_or_compute_hit_does_not_call_fn(cache: Cache) -> None:
         calls.append(x)
         return x * 2
 
-    cache.get_or_compute("key", fn, 1)
-    assert cache.get_or_compute("key", fn, 1) == 2
+    cache.get_or_compute("key", fn, (1,), {})
+    assert cache.get_or_compute("key", fn, (1,), {}) == 2
     assert calls == [1]
 
 
@@ -163,7 +163,7 @@ def test_get_or_compute_passes_kwargs(cache: Cache) -> None:
     def fn(x: int, y: int = 0) -> int:
         return x + y
 
-    assert cache.get_or_compute("key", fn, 1, y=2) == 3
+    assert cache.get_or_compute("key", fn, (1,), {"y": 2}) == 3
 
 
 def test_get_or_compute_respects_ttl(cache: Cache, fake_time: list[float]) -> None:
@@ -173,9 +173,9 @@ def test_get_or_compute_respects_ttl(cache: Cache, fake_time: list[float]) -> No
         calls.append(x)
         return x * 2
 
-    cache.get_or_compute("key", fn, 1, ttl=10)
+    cache.get_or_compute("key", fn, (1,), {}, ttl=10)
     fake_time[0] += 11
-    cache.get_or_compute("key", fn, 1, ttl=10)
+    cache.get_or_compute("key", fn, (1,), {}, ttl=10)
     assert calls == [1, 1]
 
 
@@ -186,8 +186,8 @@ def test_get_or_compute_ttl_zero_recomputes_every_call(cache: Cache) -> None:
         calls.append(x)
         return x * 2
 
-    cache.get_or_compute("key", fn, 1, ttl=0)
-    cache.get_or_compute("key", fn, 1, ttl=0)
+    cache.get_or_compute("key", fn, (1,), {}, ttl=0)
+    cache.get_or_compute("key", fn, (1,), {}, ttl=0)
     assert calls == [1, 1]
 
 
@@ -199,9 +199,9 @@ def test_get_or_compute_uses_default_ttl_when_not_set(fake_time: list[float]) ->
         calls.append(x)
         return x * 2
 
-    cache.get_or_compute("key", fn, 1)
+    cache.get_or_compute("key", fn, (1,), {})
     fake_time[0] += 11
-    cache.get_or_compute("key", fn, 1)
+    cache.get_or_compute("key", fn, (1,), {})
     assert calls == [1, 1]
 
 
@@ -210,7 +210,7 @@ def test_get_or_compute_ttl_negative_raises(cache: Cache) -> None:
         return x * 2
 
     with pytest.raises(ValueError, match=r"ttl must be non-negative, got -1"):
-        cache.get_or_compute("key", fn, 1, ttl=-1)
+        cache.get_or_compute("key", fn, (1,), {}, ttl=-1)
 
 
 # --- aget_or_compute ---
@@ -223,7 +223,7 @@ async def test_aget_or_compute_miss_calls_fn(cache: Cache) -> None:
         calls.append(x)
         return x * 2
 
-    assert await cache.aget_or_compute("key", fn, 1) == 2
+    assert await cache.aget_or_compute("key", fn, (1,), {}) == 2
     assert calls == [1]
 
 
@@ -234,8 +234,8 @@ async def test_aget_or_compute_hit_does_not_call_fn(cache: Cache) -> None:
         calls.append(x)
         return x * 2
 
-    await cache.aget_or_compute("key", fn, 1)
-    assert await cache.aget_or_compute("key", fn, 1) == 2
+    await cache.aget_or_compute("key", fn, (1,), {})
+    assert await cache.aget_or_compute("key", fn, (1,), {}) == 2
     assert calls == [1]
 
 
@@ -243,7 +243,7 @@ async def test_aget_or_compute_passes_kwargs(cache: Cache) -> None:
     async def fn(x: int, y: int = 0) -> int:
         return x + y
 
-    assert await cache.aget_or_compute("key", fn, 1, y=2) == 3
+    assert await cache.aget_or_compute("key", fn, (1,), {"y": 2}) == 3
 
 
 async def test_aget_or_compute_respects_ttl(cache: Cache, fake_time: list[float]) -> None:
@@ -253,9 +253,9 @@ async def test_aget_or_compute_respects_ttl(cache: Cache, fake_time: list[float]
         calls.append(x)
         return x * 2
 
-    await cache.aget_or_compute("key", fn, 1, ttl=10)
+    await cache.aget_or_compute("key", fn, (1,), {}, ttl=10)
     fake_time[0] += 11
-    await cache.aget_or_compute("key", fn, 1, ttl=10)
+    await cache.aget_or_compute("key", fn, (1,), {}, ttl=10)
     assert calls == [1, 1]
 
 
@@ -266,8 +266,8 @@ async def test_aget_or_compute_ttl_zero_recomputes_every_call(cache: Cache) -> N
         calls.append(x)
         return x * 2
 
-    await cache.aget_or_compute("key", fn, 1, ttl=0)
-    await cache.aget_or_compute("key", fn, 1, ttl=0)
+    await cache.aget_or_compute("key", fn, (1,), {}, ttl=0)
+    await cache.aget_or_compute("key", fn, (1,), {}, ttl=0)
     assert calls == [1, 1]
 
 
@@ -279,9 +279,9 @@ async def test_aget_or_compute_uses_default_ttl_when_not_set(fake_time: list[flo
         calls.append(x)
         return x * 2
 
-    await cache.aget_or_compute("key", fn, 1)
+    await cache.aget_or_compute("key", fn, (1,), {})
     fake_time[0] += 11
-    await cache.aget_or_compute("key", fn, 1)
+    await cache.aget_or_compute("key", fn, (1,), {})
     assert calls == [1, 1]
 
 
@@ -290,7 +290,7 @@ async def test_aget_or_compute_ttl_negative_raises(cache: Cache) -> None:
         return x * 2
 
     with pytest.raises(ValueError, match=r"ttl must be non-negative, got -1"):
-        await cache.aget_or_compute("key", fn, 1, ttl=-1)
+        await cache.aget_or_compute("key", fn, (1,), {}, ttl=-1)
 
 
 async def test_aget_or_compute_different_keys_independent(cache: Cache) -> None:
@@ -300,8 +300,8 @@ async def test_aget_or_compute_different_keys_independent(cache: Cache) -> None:
         calls.append(x)
         return x * 2
 
-    assert await cache.aget_or_compute("key1", fn, 1) == 2
-    assert await cache.aget_or_compute("key2", fn, 2) == 4
+    assert await cache.aget_or_compute("key1", fn, (1,), {}) == 2
+    assert await cache.aget_or_compute("key2", fn, (2,), {}) == 4
     assert calls == [1, 2]
 
 

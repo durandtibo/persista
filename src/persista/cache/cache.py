@@ -187,9 +187,9 @@ class Cache:
         self,
         key: str,
         fn: Callable[..., T],
-        *args: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
         ttl: float | None = _UNSET,
-        **kwargs: Any,
     ) -> T:
         """Return the cached value for ``key``, computing and storing it
         on a cache miss.
@@ -199,10 +199,10 @@ class Cache:
                 under.
             fn: The function to call to compute the value when
                 ``key`` is not in the cache.
-            *args: Positional arguments passed to ``fn`` on a miss.
+            args: Positional arguments passed to ``fn`` on a miss.
+            kwargs: Keyword arguments passed to ``fn`` on a miss.
             ttl: The time-to-live, in seconds, applied when storing a
                 freshly computed value. See :meth:`set`.
-            **kwargs: Keyword arguments passed to ``fn`` on a miss.
 
         Returns:
             The cached value on a hit, otherwise the value returned by
@@ -217,9 +217,9 @@ class Cache:
             ...     calls.append(x)
             ...     return x * 2
             ...
-            >>> cache.get_or_compute("key", compute, 4)
+            >>> cache.get_or_compute("key", compute, (4,), {})
             8
-            >>> cache.get_or_compute("key", compute, 4)  # served from the cache
+            >>> cache.get_or_compute("key", compute, (4,), {})  # served from the cache
             8
             >>> calls
             [4]
@@ -237,9 +237,9 @@ class Cache:
         self,
         key: str,
         fn: Callable[..., Awaitable[T]],
-        *args: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
         ttl: float | None = _UNSET,
-        **kwargs: Any,
     ) -> T:
         """Return the cached value for ``key``, computing and storing it
         on a cache miss.
@@ -254,10 +254,10 @@ class Cache:
                 under.
             fn: The async function to call to compute the value when
                 ``key`` is not in the cache.
-            *args: Positional arguments passed to ``fn`` on a miss.
+            args: Positional arguments passed to ``fn`` on a miss.
+            kwargs: Keyword arguments passed to ``fn`` on a miss.
             ttl: The time-to-live, in seconds, applied when storing a
                 freshly computed value. See :meth:`set`.
-            **kwargs: Keyword arguments passed to ``fn`` on a miss.
 
         Returns:
             The cached value on a hit, otherwise the value returned by
@@ -274,8 +274,8 @@ class Cache:
             ...     return x * 2
             ...
             >>> async def main():
-            ...     print(await cache.aget_or_compute("key", compute, 4))
-            ...     print(await cache.aget_or_compute("key", compute, 4))  # cached
+            ...     print(await cache.aget_or_compute("key", compute, (4,), {}))
+            ...     print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
             ...
             >>> asyncio.run(main())
             8
@@ -364,7 +364,9 @@ class Cache:
                         strategy=strategy,
                         ignore_non_serializable=ignore_non_serializable,
                     )
-                    return await self.aget_or_compute(key, func, *args, ttl=ttl, **kwargs)
+                    return await self.aget_or_compute(
+                        key=key, fn=func, args=args, kwargs=kwargs, ttl=ttl
+                    )
 
                 return async_wrapper
 
@@ -377,7 +379,7 @@ class Cache:
                     strategy=strategy,
                     ignore_non_serializable=ignore_non_serializable,
                 )
-                return self.get_or_compute(key, func, *args, ttl=ttl, **kwargs)
+                return self.get_or_compute(key=key, fn=func, args=args, kwargs=kwargs, ttl=ttl)
 
             return wrapper
 
