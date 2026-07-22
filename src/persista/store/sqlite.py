@@ -560,9 +560,9 @@ class PickleSQLiteStore(BaseSQLiteStore):
         ```pycon
         >>> from persista.store import PickleSQLiteStore
         >>> store = PickleSQLiteStore(":memory:")
-        >>> store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
+        >>> store.set("1", {"title": "Intro to Python", "tags": ["python", "intro"]})
         >>> store.get("1")
-        {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
+        {'title': 'Intro to Python', 'tags': ['python', 'intro']}
 
         ```
     """
