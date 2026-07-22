@@ -302,6 +302,27 @@ def test_two_stores_different_tables_are_isolated(store_cls: type[BasePostgresSt
     assert store_b.count() == 0
 
 
+# --- to_uri/from_uri ---
+
+
+def test_to_uri_returns_conninfo_unchanged(store: BasePostgresStore) -> None:
+    assert store.to_uri() == store._conninfo
+
+
+def test_from_uri_constructs_with_same_conninfo(store_cls: type[BasePostgresStore]) -> None:
+    conninfo = "postgresql://user:pass@localhost/dbname"
+    with patch(f"{MODULE}.psycopg.connect", return_value=FakeConnection()):
+        new_store = store_cls.from_uri(conninfo)
+    assert new_store._conninfo == conninfo
+
+
+def test_from_uri_ignores_read_only(store_cls: type[BasePostgresStore]) -> None:
+    conninfo = "postgresql://user:pass@localhost/dbname"
+    with patch(f"{MODULE}.psycopg.connect", return_value=FakeConnection()):
+        new_store = store_cls.from_uri(conninfo, read_only=True)
+    assert new_store._conninfo == conninfo
+
+
 # --- repr/str ---
 
 
