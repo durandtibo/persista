@@ -165,6 +165,38 @@ async def test_get_cached_none_is_hit_without_ignore_none(cache: AsyncCache) -> 
     assert await cache._get("key") == (True, None)
 
 
+# --- contains ---
+
+
+async def test_contains_missing_key(cache: AsyncCache) -> None:
+    assert await cache.contains("missing") is False
+
+
+async def test_contains_existing_key(cache: AsyncCache) -> None:
+    await cache.set("key", "value")
+    assert await cache.contains("key") is True
+
+
+async def test_contains_expired_key(cache: AsyncCache, fake_time: list[float]) -> None:
+    await cache.set("key", "value", ttl=10)
+    fake_time[0] += 11
+    assert await cache.contains("key") is False
+
+
+# --- delete ---
+
+
+async def test_delete_existing_key(cache: AsyncCache) -> None:
+    await cache.set("key", "value")
+    await cache.delete("key")
+    assert await cache.get("key") is None
+
+
+async def test_delete_missing_key(cache: AsyncCache) -> None:
+    await cache.delete("missing")
+    assert await cache.get("missing") is None
+
+
 # --- clear ---
 
 

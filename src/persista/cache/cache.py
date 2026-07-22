@@ -183,6 +183,55 @@ class Cache:
         expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
         self._store.set(key, {"value": value, "expires_at": expires_at})
 
+    def contains(self, key: str) -> bool:
+        """Indicate whether a key is present and unexpired.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            ``True`` if ``key`` has an entry in the cache that has not
+            expired, otherwise ``False``. If the entry has expired,
+            it is evicted from the backing store as a side effect of
+            this call, as in :meth:`get`.
+
+        Example:
+            ```pycon
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> cache.set("greeting", "hello")
+            >>> cache.contains("greeting")
+            True
+            >>> cache.contains("missing")
+            False
+
+            ```
+        """
+        hit, _ = self._get(key)
+        return hit
+
+    def delete(self, key: str) -> None:
+        """Remove a single entry from the cache, if present.
+
+        Unlike :meth:`set` with ``ttl=0``, this does not require a
+        value to be given.
+
+        Args:
+            key: The key to remove.
+
+        Example:
+            ```pycon
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> cache.set("greeting", "hello")
+            >>> cache.delete("greeting")
+            >>> cache.get("greeting") is None
+            True
+
+            ```
+        """
+        self._store.delete(key)
+
     def get_or_compute(
         self,
         key: str,

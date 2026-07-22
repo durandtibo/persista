@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = ["AsyncCache"]
 
 import functools
+import logging
 import time
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -18,6 +19,8 @@ if TYPE_CHECKING:
     from persista.store.base import AsyncBaseStore
 
 T = TypeVar("T")
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class AsyncCache:
@@ -142,7 +145,9 @@ class AsyncCache:
             return False, None
         value = entry["value"]
         if self._ignore_none and value is None:
+            logger.debug("Ignoring cached None: %s", key)
             return False, None
+        logger.debug("Cache hit: %s", key)
         return True, value
 
     async def set(self, key: str, value: Any, ttl: float | None = _UNSET) -> None:
@@ -192,6 +197,63 @@ class AsyncCache:
             return
         expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
         await self._store.set(key, {"value": value, "expires_at": expires_at})
+
+    async def contains(self, key: str) -> bool:
+        """Indicate whether a key is present and unexpired.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            ``True`` if ``key`` has an entry in the cache that has not
+            expired, otherwise ``False``. If the entry has expired,
+            it is evicted from the backing store as a side effect of
+            this call, as in :meth:`get`.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache import AsyncCache
+            >>> async def main():
+            ...     cache = AsyncCache()
+            ...     await cache.set("greeting", "hello")
+            ...     print(await cache.contains("greeting"))
+            ...     print(await cache.contains("missing"))
+            ...
+            >>> asyncio.run(main())
+            True
+            False
+
+            ```
+        """
+        hit, _ = await self._get(key)
+        return hit
+
+    async def delete(self, key: str) -> None:
+        """Remove a single entry from the cache, if present.
+
+        Unlike :meth:`set` with ``ttl=0``, this does not require a
+        value to be given.
+
+        Args:
+            key: The key to remove.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache import AsyncCache
+            >>> async def main():
+            ...     cache = AsyncCache()
+            ...     await cache.set("greeting", "hello")
+            ...     await cache.delete("greeting")
+            ...     print(await cache.get("greeting"))
+            ...
+            >>> asyncio.run(main())
+            None
+
+            ```
+        """
+        await self._store.delete(key)
 
     async def get_or_compute(
         self,
