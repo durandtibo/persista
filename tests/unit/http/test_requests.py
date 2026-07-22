@@ -4,12 +4,12 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from persista.utils.http_requests import create_session, fetch_response
+from persista.http.requests import create_session, fetch_response
 
 requests = pytest.importorskip("requests")
 
 
-MODULE = "persista.utils.http_requests"
+MODULE = "persista.http.requests"
 
 
 ############################

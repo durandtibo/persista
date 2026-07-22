@@ -1,5 +1,5 @@
 ::: persista.utils
 ::: persista.utils.duckdb
-::: persista.utils.http_httpx
-::: persista.utils.http_requests
+::: persista.http.httpx
+::: persista.http.requests
 ::: persista.utils.imports

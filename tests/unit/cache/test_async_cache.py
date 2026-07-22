@@ -165,6 +165,38 @@ async def test_get_cached_none_is_hit_without_ignore_none(cache: AsyncCache) -> 
     assert await cache._get("key") == (True, None)
 
 
+# --- contains ---
+
+
+async def test_contains_missing_key(cache: AsyncCache) -> None:
+    assert await cache.contains("missing") is False
+
+
+async def test_contains_existing_key(cache: AsyncCache) -> None:
+    await cache.set("key", "value")
+    assert await cache.contains("key") is True
+
+
+async def test_contains_expired_key(cache: AsyncCache, fake_time: list[float]) -> None:
+    await cache.set("key", "value", ttl=10)
+    fake_time[0] += 11
+    assert await cache.contains("key") is False
+
+
+# --- delete ---
+
+
+async def test_delete_existing_key(cache: AsyncCache) -> None:
+    await cache.set("key", "value")
+    await cache.delete("key")
+    assert await cache.get("key") is None
+
+
+async def test_delete_missing_key(cache: AsyncCache) -> None:
+    await cache.delete("missing")
+    assert await cache.get("missing") is None
+
+
 # --- clear ---
 
 
@@ -187,7 +219,7 @@ async def test_get_or_compute_miss_calls_fn(cache: AsyncCache) -> None:
     async def fn(x: int) -> int:
         return x * 2
 
-    assert await cache.get_or_compute("key", fn, 1) == 2
+    assert await cache.get_or_compute("key", fn, (1,), {}) == 2
 
 
 async def test_get_or_compute_hit_does_not_call_fn(cache: AsyncCache) -> None:
@@ -197,8 +229,8 @@ async def test_get_or_compute_hit_does_not_call_fn(cache: AsyncCache) -> None:
         calls.append(x)
         return x * 2
 
-    await cache.get_or_compute("key", fn, 1)
-    assert await cache.get_or_compute("key", fn, 1) == 2
+    await cache.get_or_compute("key", fn, (1,), {})
+    assert await cache.get_or_compute("key", fn, (1,), {}) == 2
     assert calls == [1]
 
 
@@ -206,7 +238,7 @@ async def test_get_or_compute_passes_kwargs(cache: AsyncCache) -> None:
     async def fn(x: int, y: int = 0) -> int:
         return x + y
 
-    assert await cache.get_or_compute("key", fn, 1, y=2) == 3
+    assert await cache.get_or_compute("key", fn, (1,), {"y": 2}) == 3
 
 
 async def test_get_or_compute_respects_ttl(cache: AsyncCache, fake_time: list[float]) -> None:
@@ -216,9 +248,9 @@ async def test_get_or_compute_respects_ttl(cache: AsyncCache, fake_time: list[fl
         calls.append(x)
         return x * 2
 
-    await cache.get_or_compute("key", fn, 1, ttl=10)
+    await cache.get_or_compute("key", fn, (1,), {}, ttl=10)
     fake_time[0] += 11
-    await cache.get_or_compute("key", fn, 1, ttl=10)
+    await cache.get_or_compute("key", fn, (1,), {}, ttl=10)
     assert calls == [1, 1]
 
 
@@ -227,15 +259,34 @@ async def test_get_or_compute_ttl_negative_raises(cache: AsyncCache) -> None:
         return x * 2
 
     with pytest.raises(ValueError, match=r"ttl must be non-negative, got -1"):
-        await cache.get_or_compute("key", fn, 1, ttl=-1)
+        await cache.get_or_compute("key", fn, (1,), {}, ttl=-1)
 
 
 async def test_get_or_compute_different_keys_independent(cache: AsyncCache) -> None:
     async def fn(x: int) -> int:
         return x * 2
 
-    assert await cache.get_or_compute("key1", fn, 1) == 2
-    assert await cache.get_or_compute("key2", fn, 2) == 4
+    assert await cache.get_or_compute("key1", fn, (1,), {}) == 2
+    assert await cache.get_or_compute("key2", fn, (2,), {}) == 4
+
+
+async def test_get_or_compute_sync_fn_miss_calls_fn(cache: AsyncCache) -> None:
+    def fn(x: int) -> int:
+        return x * 2
+
+    assert await cache.get_or_compute("key", fn, (1,), {}) == 2
+
+
+async def test_get_or_compute_sync_fn_hit_does_not_call_fn(cache: AsyncCache) -> None:
+    calls = []
+
+    def fn(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    await cache.get_or_compute("key", fn, (1,), {})
+    assert await cache.get_or_compute("key", fn, (1,), {}) == 2
+    assert calls == [1]
 
 
 # --- memoize ---
@@ -246,6 +297,19 @@ async def test_memoize_caches_result(cache: AsyncCache) -> None:
 
     @cache.memoize()
     async def func(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert await func(1) == 2
+    assert await func(1) == 2
+    assert calls == [1]
+
+
+async def test_memoize_caches_result_sync_func(cache: AsyncCache) -> None:
+    calls = []
+
+    @cache.memoize()
+    def func(x: int) -> int:
         calls.append(x)
         return x * 2
 

@@ -21,6 +21,7 @@ from persista.store.validation import (
     validate_field_name,
 )
 from persista.utils.imports import check_aiosqlite, is_aiosqlite_available
+from persista.utils.path import prepare_store_path
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Mapping
@@ -171,6 +172,7 @@ class AsyncBaseSQLiteStore(AsyncBaseStore, MultilineDisplayMixin):
         elif read_only:
             uri = f"file:{path}?mode=ro"
         else:
+            path = prepare_store_path(path)
             uri = f"file:{path}?mode=rwc"
         store = cls(uri, uri=True, **kwargs)
         store._path_for_uri = path

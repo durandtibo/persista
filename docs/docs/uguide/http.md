@@ -1,7 +1,7 @@
 # HTTP Fetch Utilities
 
-:book: This page describes the HTTP helpers in `persista.utils.http_requests` and
-`persista.utils.http_httpx`, which fetch a URL with automatic retries on top of
+:book: This page describes the HTTP helpers in `persista.http.requests` and
+`persista.http.httpx`, which fetch a URL with automatic retries on top of
 [`requests`](https://requests.readthedocs.io/) or [`httpx`](https://www.python-httpx.org/).
 
 **Prerequisites:** You'll need to know a bit of Python. Depending on which helper you use, you
@@ -14,20 +14,22 @@ Fetching data from an HTTP API often needs retry logic for transient failures (r
 server errors). `persista` provides two equivalent helpers so you can use whichever HTTP client
 your project already depends on:
 
-- `persista.utils.http_requests.fetch_response`: synchronous, built on `requests`
-- `persista.utils.http_httpx.fetch_response`: synchronous, built on `httpx`
-- `persista.utils.http_httpx.fetch_response_async`: asynchronous, built on `httpx`
+- `persista.http.requests.fetch_response`: synchronous, built on `requests`
+- `persista.http.httpx.get_response`: synchronous `GET`, built on `httpx`
+- `persista.http.httpx.get_response_async`: asynchronous `GET`, built on `httpx`
+- `persista.http.httpx.send_request`: synchronous, any HTTP method, built on `httpx`
+- `persista.http.httpx.send_request_async`: asynchronous, any HTTP method, built on `httpx`
 
 Both retry on connection errors and on a configurable set of HTTP status codes (`429`, `500`,
 `502`, `503`, `504` by default), and raise an exception if the final attempt still fails.
 
 ## Fetching with `requests`
 
-`fetch_response` (in `persista.utils.http_requests`) fetches a URL and returns a
+`fetch_response` (in `persista.http.requests`) fetches a URL and returns a
 `requests.Response`, retrying up to `max_retries` times with exponential backoff:
 
 ```python
-from persista.utils.http_requests import fetch_response
+from persista.http.requests import fetch_response
 
 response = fetch_response(
     "https://jsonplaceholder.typicode.com/todos/1",
@@ -42,7 +44,7 @@ response.json()
 existing `requests.Session` (otherwise a temporary session is created and closed automatically):
 
 ```pycon
->>> from persista.utils.http_requests import create_session
+>>> from persista.http.requests import create_session
 >>> session = create_session(max_retries=5)
 
 ```
@@ -53,13 +55,13 @@ behavior.
 
 ## Fetching with `httpx`
 
-`fetch_response` (in `persista.utils.http_httpx`) is the `httpx` equivalent, returning an
-`httpx.Response`:
+`get_response` (in `persista.http.httpx`) is the `httpx` equivalent for `GET` requests, returning
+an `httpx.Response`:
 
 ```python
-from persista.utils.http_httpx import fetch_response
+from persista.http.httpx.method import get_response
 
-response = fetch_response(
+response = get_response(
     "https://jsonplaceholder.typicode.com/todos/1",
     timeout=10,
     max_retries=5,
@@ -70,19 +72,44 @@ response.json()
 If the server returns a `Retry-After` header, it is honored; otherwise the wait time doubles with
 each attempt (`2 ** (attempt - 1)` seconds).
 
+For other HTTP methods, use `send_request`, which takes the method as its first argument:
+
+```python
+from persista.http.httpx.method import send_request
+
+response = send_request(
+    "POST",
+    "https://jsonplaceholder.typicode.com/todos",
+    json={"title": "example"},
+    timeout=10,
+    max_retries=5,
+)
+response.json()
+```
+
+`get_response` is in fact a thin wrapper around `send_request` for the `GET` case.
+
 ### Async Fetching
 
-`fetch_response_async` is the coroutine version, for use with an `httpx.AsyncClient`:
+`get_response_async` and `send_request_async` are the coroutine versions, for use with an
+`httpx.AsyncClient`:
 
 ```python
 import asyncio
 
-from persista.utils.http_httpx import fetch_response_async
+from persista.http.httpx.method import get_response_async, send_request_async
 
 
 async def main():
-    response = await fetch_response_async(
+    response = await get_response_async(
         "https://jsonplaceholder.typicode.com/todos/1",
+        timeout=10,
+        max_retries=5,
+    )
+    await send_request_async(
+        "POST",
+        "https://jsonplaceholder.typicode.com/todos",
+        json={"title": "example"},
         timeout=10,
         max_retries=5,
     )
@@ -92,7 +119,7 @@ async def main():
 asyncio.run(main())
 ```
 
-Both `fetch_response` and `fetch_response_async` accept a `client` argument to reuse an existing
+All four functions accept a `client` argument to reuse an existing
 `httpx.Client`/`httpx.AsyncClient`, and `retry_status_codes` to customize which status codes
 trigger a retry.
 

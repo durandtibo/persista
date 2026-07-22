@@ -5,6 +5,8 @@ from __future__ import annotations
 __all__ = ["AsyncCache"]
 
 import functools
+import inspect
+import logging
 import time
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -18,6 +20,8 @@ if TYPE_CHECKING:
     from persista.store.base import AsyncBaseStore
 
 T = TypeVar("T")
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class AsyncCache:
@@ -142,7 +146,9 @@ class AsyncCache:
             return False, None
         value = entry["value"]
         if self._ignore_none and value is None:
+            logger.debug("Ignoring cached None: %s", key)
             return False, None
+        logger.debug("Cache hit: %s", key)
         return True, value
 
     async def set(self, key: str, value: Any, ttl: float | None = _UNSET) -> None:
@@ -193,30 +199,97 @@ class AsyncCache:
         expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
         await self._store.set(key, {"value": value, "expires_at": expires_at})
 
+    async def contains(self, key: str) -> bool:
+        """Indicate whether a key is present and unexpired.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            ``True`` if ``key`` has an entry in the cache that has not
+            expired, otherwise ``False``. If the entry has expired,
+            it is evicted from the backing store as a side effect of
+            this call, as in :meth:`get`.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache import AsyncCache
+            >>> async def main():
+            ...     cache = AsyncCache()
+            ...     await cache.set("greeting", "hello")
+            ...     print(await cache.contains("greeting"))
+            ...     print(await cache.contains("missing"))
+            ...
+            >>> asyncio.run(main())
+            True
+            False
+
+            ```
+        """
+        hit, _ = await self._get(key)
+        return hit
+
+    async def delete(self, key: str) -> None:
+        """Remove a single entry from the cache, if present.
+
+        Unlike :meth:`set` with ``ttl=0``, this does not require a
+        value to be given.
+
+        Args:
+            key: The key to remove.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache import AsyncCache
+            >>> async def main():
+            ...     cache = AsyncCache()
+            ...     await cache.set("greeting", "hello")
+            ...     await cache.delete("greeting")
+            ...     print(await cache.get("greeting"))
+            ...
+            >>> asyncio.run(main())
+            None
+
+            ```
+        """
+        await self._store.delete(key)
+
     async def get_or_compute(
         self,
         key: str,
-        fn: Callable[..., Awaitable[T]],
-        *args: Any,
+        fn: Callable[..., T] | Callable[..., Awaitable[T]],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
         ttl: float | None = _UNSET,
-        **kwargs: Any,
     ) -> T:
         """Return the cached value for ``key``, computing and storing it
         on a cache miss.
 
+        ``fn`` may be a regular sync function or an ``async def``
+        function; either way, the backing store is always accessed
+        through ``await`` since :class:`~persista.store.base.AsyncBaseStore`
+        is an async interface.
+
+        ``args``/``kwargs`` are passed as a tuple/dict rather than
+        ``*args``/``**kwargs`` so that ``fn``'s own arguments can never
+        collide with this method's parameters (e.g. a ``fn`` that
+        itself takes a ``key`` or ``ttl`` argument).
+
         Args:
             key: The key to look up and, on a miss, store the result
                 under.
-            fn: The async function to call to compute the value when
-                ``key`` is not in the cache.
-            *args: Positional arguments passed to ``fn`` on a miss.
+            fn: The sync or async function to call to compute the
+                value when ``key`` is not in the cache.
+            args: Positional arguments passed to ``fn`` on a miss.
+            kwargs: Keyword arguments passed to ``fn`` on a miss.
             ttl: The time-to-live, in seconds, applied when storing a
                 freshly computed value. See :meth:`set`.
-            **kwargs: Keyword arguments passed to ``fn`` on a miss.
 
         Returns:
             The cached value on a hit, otherwise the value returned by
-            ``await fn(*args, **kwargs)``.
+            ``fn(*args, **kwargs)`` (awaited if ``fn`` is async).
 
         Example:
             ```pycon
@@ -229,8 +302,8 @@ class AsyncCache:
             ...     return x * 2
             ...
             >>> async def main():
-            ...     print(await cache.get_or_compute("key", compute, 4))
-            ...     print(await cache.get_or_compute("key", compute, 4))  # cached
+            ...     print(await cache.get_or_compute("key", compute, (4,), {}))
+            ...     print(await cache.get_or_compute("key", compute, (4,), {}))  # cached
             ...
             >>> asyncio.run(main())
             8
@@ -243,7 +316,8 @@ class AsyncCache:
         hit, value = await self._get(key)
         if hit:
             return value
-        value = await fn(*args, **kwargs)
+        result = fn(*args, **kwargs)
+        value = await result if inspect.isawaitable(result) else result
         await self.set(key, value, ttl=ttl)
         return value
 
@@ -252,8 +326,12 @@ class AsyncCache:
         ttl: float | None = _UNSET,
         strategy: str = "json",
         ignore_non_serializable: bool = False,
-    ) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
-        """Decorate an async function so its return values are cached.
+    ) -> Callable[[Callable[..., T] | Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
+        """Decorate a function so its return values are cached.
+
+        Works on both sync and async functions (``async def``); the
+        wrapped function is always a coroutine function, since the
+        backing store is only accessible through ``await``.
 
         The cache key is derived from the decorated function's
         qualified name (``__qualname__``) and call arguments, via
@@ -280,7 +358,8 @@ class AsyncCache:
                 key, instead of raising an error.
 
         Returns:
-            A decorator that wraps an async function with caching.
+            A decorator that wraps a sync or async function with
+            caching, always returning a coroutine function.
 
         Raises:
             ValueError: If ``ttl`` is negative.
@@ -309,7 +388,9 @@ class AsyncCache:
             ```
         """
 
-        def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
+        def decorator(
+            func: Callable[..., T] | Callable[..., Awaitable[T]],
+        ) -> Callable[..., Awaitable[T]]:
             @functools.wraps(func)
             async def wrapper(*args: Any, **kwargs: Any) -> Any:
                 key = make_key(
@@ -319,7 +400,7 @@ class AsyncCache:
                     strategy=strategy,
                     ignore_non_serializable=ignore_non_serializable,
                 )
-                return await self.get_or_compute(key, func, *args, ttl=ttl, **kwargs)
+                return await self.get_or_compute(key, func, args, kwargs, ttl=ttl)
 
             return wrapper
 

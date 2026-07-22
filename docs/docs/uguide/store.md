@@ -154,7 +154,7 @@ from pathlib import Path
 
 from persista.store import SQLiteStore
 
-store = SQLiteStore(Path("data.sqlite"))
+store = SQLiteStore(Path("tmp/data.sqlite"))
 ```
 
 ### DuckDB
@@ -402,10 +402,10 @@ class from that URI:
 
 ```pycon
 >>> from persista.store import SQLiteStore
->>> store = SQLiteStore("data.sqlite")
+>>> store = SQLiteStore("tmp/data.sqlite")
 >>> uri = store.to_uri()
 >>> uri
-'sqlite:data.sqlite'
+'sqlite:tmp/data.sqlite'
 >>> reloaded = SQLiteStore.from_uri(uri)
 >>> store.close()
 >>> reloaded.close()
