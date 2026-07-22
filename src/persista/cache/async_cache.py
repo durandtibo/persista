@@ -5,9 +5,10 @@ from __future__ import annotations
 __all__ = ["AsyncCache"]
 
 import functools
+import inspect
 import logging
 import time
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from persista.cache.cache import _UNSET
 from persista.cache.utils import make_key
@@ -258,13 +259,18 @@ class AsyncCache:
     async def get_or_compute(
         self,
         key: str,
-        fn: Callable[..., Awaitable[T]],
+        fn: Callable[..., T] | Callable[..., Awaitable[T]],
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
         ttl: float | None = _UNSET,
     ) -> T:
         """Return the cached value for ``key``, computing and storing it
         on a cache miss.
+
+        ``fn`` may be a regular sync function or an ``async def``
+        function; either way, the backing store is always accessed
+        through ``await`` since :class:`~persista.store.base.AsyncBaseStore`
+        is an async interface.
 
         ``args``/``kwargs`` are passed as a tuple/dict rather than
         ``*args``/``**kwargs`` so that ``fn``'s own arguments can never
@@ -274,8 +280,8 @@ class AsyncCache:
         Args:
             key: The key to look up and, on a miss, store the result
                 under.
-            fn: The async function to call to compute the value when
-                ``key`` is not in the cache.
+            fn: The sync or async function to call to compute the
+                value when ``key`` is not in the cache.
             args: Positional arguments passed to ``fn`` on a miss.
             kwargs: Keyword arguments passed to ``fn`` on a miss.
             ttl: The time-to-live, in seconds, applied when storing a
@@ -283,7 +289,7 @@ class AsyncCache:
 
         Returns:
             The cached value on a hit, otherwise the value returned by
-            ``await fn(*args, **kwargs)``.
+            ``fn(*args, **kwargs)`` (awaited if ``fn`` is async).
 
         Example:
             ```pycon
@@ -310,7 +316,8 @@ class AsyncCache:
         hit, value = await self._get(key)
         if hit:
             return value
-        value = await fn(*args, **kwargs)
+        result = fn(*args, **kwargs)
+        value = cast("T", await result if inspect.isawaitable(result) else result)
         await self.set(key, value, ttl=ttl)
         return value
 
@@ -319,8 +326,12 @@ class AsyncCache:
         ttl: float | None = _UNSET,
         strategy: str = "json",
         ignore_non_serializable: bool = False,
-    ) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
-        """Decorate an async function so its return values are cached.
+    ) -> Callable[[Callable[..., T] | Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
+        """Decorate a function so its return values are cached.
+
+        Works on both sync and async functions (``async def``); the
+        wrapped function is always a coroutine function, since the
+        backing store is only accessible through ``await``.
 
         The cache key is derived from the decorated function's
         qualified name (``__qualname__``) and call arguments, via
@@ -347,7 +358,8 @@ class AsyncCache:
                 key, instead of raising an error.
 
         Returns:
-            A decorator that wraps an async function with caching.
+            A decorator that wraps a sync or async function with
+            caching, always returning a coroutine function.
 
         Raises:
             ValueError: If ``ttl`` is negative.
@@ -376,7 +388,9 @@ class AsyncCache:
             ```
         """
 
-        def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
+        def decorator(
+            func: Callable[..., T] | Callable[..., Awaitable[T]],
+        ) -> Callable[..., Awaitable[T]]:
             @functools.wraps(func)
             async def wrapper(*args: Any, **kwargs: Any) -> Any:
                 key = make_key(
