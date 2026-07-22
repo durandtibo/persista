@@ -687,3 +687,15 @@ async def test_context_manager_usable_for_reads_and_writes() -> None:
         assert result[0]["text"] == "hello"
         await store.delete("1")
         assert await store.count() == 1
+
+
+# --- to_uri/from_uri ---
+
+
+async def test_to_uri_returns_memory_scheme(store: AsyncInMemoryStore) -> None:
+    assert store.to_uri() == "memory://"
+
+
+async def test_from_uri_returns_empty_store() -> None:
+    store = AsyncInMemoryStore.from_uri("memory://")
+    assert await store.count() == 0

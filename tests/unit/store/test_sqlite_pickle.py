@@ -352,3 +352,32 @@ def test_reenter_after_close_reopens_file_backed_store(tmp_path: Path) -> None:
 def test_build_filter_condition_raises_not_implemented(store: PickleSQLiteStore) -> None:
     with pytest.raises(NotImplementedError, match="opaque pickled blobs"):
         store._build_filter_condition("author")
+
+
+# ---------------------------------------------------------------------------
+# to_uri / from_uri
+# ---------------------------------------------------------------------------
+
+
+def test_to_uri_from_uri_round_trips_file_data(
+    tmp_path: Path, items: dict[str, dict[str, Any]]
+) -> None:
+    path = tmp_path / "to_uri.sqlite"
+    with PickleSQLiteStore.from_path(path) as store:
+        store.set_many(items)
+        uri = store.to_uri()
+    with PickleSQLiteStore.from_uri(uri) as reloaded:
+        assert reloaded.count() == len(items)
+
+
+def test_from_uri_read_only_rejects_writes(
+    tmp_path: Path, items: dict[str, dict[str, Any]]
+) -> None:
+    path = tmp_path / "to_uri_ro.sqlite"
+    with PickleSQLiteStore.from_path(path) as store:
+        store.set_many(items)
+        uri = store.to_uri()
+    with PickleSQLiteStore.from_uri(uri, read_only=True) as reloaded:
+        assert reloaded.count() == len(items)
+        with pytest.raises(sqlite3.OperationalError):
+            reloaded.set("new", {"a": 1})

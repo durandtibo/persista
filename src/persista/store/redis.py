@@ -92,6 +92,13 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
     def closed(self) -> bool:
         return self._closed
 
+    def to_uri(self) -> str:
+        return self._url
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
+        return cls(uri)
+
     def get(self, key: str) -> dict[str, Any] | None:
         value = self._client.get(key)
         return self._decode(value) if value is not None else None

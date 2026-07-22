@@ -649,6 +649,35 @@ async def test_iter_batches_does_not_mutate_store(
     assert await store.count() == len(items)
 
 
+# --- to_uri/from_uri ---
+
+
+async def test_to_uri_returns_url_unchanged(store: AsyncBaseRedisStore) -> None:
+    assert store.to_uri() == store._url
+
+
+async def test_from_uri_constructs_with_same_url(
+    monkeypatch: pytest.MonkeyPatch, store_cls: type[AsyncBaseRedisStore]
+) -> None:
+    _use_fake_redis(monkeypatch)
+    url = "redis://localhost:6379/0"
+    new_store = store_cls.from_uri(url)
+    assert new_store._url == url
+    await new_store.set("1", {"text": "hello"})
+    assert await new_store.get("1") == {"text": "hello"}
+
+
+async def test_from_uri_ignores_read_only(
+    monkeypatch: pytest.MonkeyPatch, store_cls: type[AsyncBaseRedisStore]
+) -> None:
+    _use_fake_redis(monkeypatch)
+    url = "redis://localhost:6379/0"
+    new_store = store_cls.from_uri(url, read_only=True)
+    assert new_store._url == url
+    await new_store.set("1", {"text": "hello"})
+    assert await new_store.get("1") == {"text": "hello"}
+
+
 # --- close ---
 
 

@@ -1000,3 +1000,42 @@ def test_iter_batches_with_typed_schema(
     for batch in typed_store.iter_batches(batch_size=2):
         result.update(batch)
     assert result == items
+
+
+# ---------------------------------------------------------------------------
+# to_uri / from_uri
+# ---------------------------------------------------------------------------
+
+
+def test_to_uri_from_uri_round_trips_in_memory_data(
+    store_cls: type[BaseSQLiteStore], items: dict[str, dict[str, Any]]
+) -> None:
+    with store_cls(":memory:") as store:
+        store.set_many(items)
+        # :memory: never round-trips data -- each connection is a fresh DB.
+        with store_cls.from_uri(store.to_uri()) as reloaded:
+            assert reloaded.count() == 0
+
+
+def test_to_uri_from_uri_round_trips_file_data(
+    store_path: Path, store_cls: type[BaseSQLiteStore], items: dict[str, dict[str, Any]]
+) -> None:
+    path = store_path / f"to_uri_{store_cls.__name__}.sqlite"
+    with store_cls.from_path(path) as store:
+        store.set_many(items)
+        uri = store.to_uri()
+    with store_cls.from_uri(uri) as reloaded:
+        assert reloaded.count() == len(items)
+
+
+def test_from_uri_read_only_rejects_writes(
+    store_path: Path, store_cls: type[BaseSQLiteStore], items: dict[str, dict[str, Any]]
+) -> None:
+    path = store_path / f"to_uri_ro_{store_cls.__name__}.sqlite"
+    with store_cls.from_path(path) as store:
+        store.set_many(items)
+        uri = store.to_uri()
+    with store_cls.from_uri(uri, read_only=True) as reloaded:
+        assert reloaded.count() == len(items)
+        with pytest.raises(sqlite3.OperationalError):
+            reloaded.set("new", {"a": 1})

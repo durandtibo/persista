@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
     from persista.store import BaseLmdbStore
 
-pytest.importorskip("lmdb")
+lmdb = pytest.importorskip("lmdb")
 
 
 # ---------------------------------------------------------------------------
@@ -666,6 +666,35 @@ def test_context_manager_multiple_open_close_same_path(
         with lmdb_store as store:
             store.set(str(i), {"text": "hello"})
             assert store.count() == i + 1
+
+
+###############################
+#     Tests for to_uri/from_uri     #
+###############################
+
+
+def test_to_uri_from_uri_round_trips_data(
+    tmp_path: Path, store_cls: type[BaseLmdbStore], items: dict[str, dict[str, Any]]
+) -> None:
+    path = tmp_path / "db"
+    with store_cls(path) as store:
+        store.set_many(items)
+        uri = store.to_uri()
+    with store_cls.from_uri(uri) as reloaded:
+        assert reloaded.count() == len(items)
+
+
+def test_from_uri_read_only_rejects_writes(
+    tmp_path: Path, store_cls: type[BaseLmdbStore], items: dict[str, dict[str, Any]]
+) -> None:
+    path = tmp_path / "db"
+    with store_cls(path) as store:
+        store.set_many(items)
+        uri = store.to_uri()
+    with store_cls.from_uri(uri, read_only=True) as reloaded:
+        assert reloaded.count() == len(items)
+        with pytest.raises(lmdb.ReadonlyError):
+            reloaded.set("new", {"a": 1})
 
 
 ##########################################################

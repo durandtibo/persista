@@ -729,3 +729,30 @@ def test_json_store_files_are_readable(tmp_path: Path) -> None:
     files = list((tmp_path / "db").iterdir())
     assert len(files) == 1
     assert files[0].suffix == ".json"
+
+
+# --- to_uri/from_uri ---
+
+
+def test_to_uri_round_trips_path(tmp_path: Path, store_cls: type[BaseFileStore]) -> None:
+    store = store_cls(tmp_path / "db")
+    reloaded = store_cls.from_uri(store.to_uri())
+    assert reloaded.path == store.path
+
+
+def test_to_uri_from_uri_preserves_data(
+    tmp_path: Path, store_cls: type[BaseFileStore], items: dict[str, dict]
+) -> None:
+    store = store_cls(tmp_path / "db")
+    store.set_many(items)
+    reloaded = store_cls.from_uri(store.to_uri())
+    assert reloaded.count() == len(items)
+    assert reloaded.get("1") == items["1"]
+
+
+def test_json_file_store_scheme(tmp_path: Path) -> None:
+    assert JsonFileStore(tmp_path / "x").scheme == "file+json"
+
+
+def test_pickle_file_store_scheme(tmp_path: Path) -> None:
+    assert PickleFileStore(tmp_path / "x").scheme == "file+pickle"
