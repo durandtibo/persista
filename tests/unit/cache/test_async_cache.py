@@ -270,6 +270,25 @@ async def test_get_or_compute_different_keys_independent(cache: AsyncCache) -> N
     assert await cache.get_or_compute("key2", fn, (2,), {}) == 4
 
 
+async def test_get_or_compute_sync_fn_miss_calls_fn(cache: AsyncCache) -> None:
+    def fn(x: int) -> int:
+        return x * 2
+
+    assert await cache.get_or_compute("key", fn, (1,), {}) == 2
+
+
+async def test_get_or_compute_sync_fn_hit_does_not_call_fn(cache: AsyncCache) -> None:
+    calls = []
+
+    def fn(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    await cache.get_or_compute("key", fn, (1,), {})
+    assert await cache.get_or_compute("key", fn, (1,), {}) == 2
+    assert calls == [1]
+
+
 # --- memoize ---
 
 
@@ -278,6 +297,19 @@ async def test_memoize_caches_result(cache: AsyncCache) -> None:
 
     @cache.memoize()
     async def func(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert await func(1) == 2
+    assert await func(1) == 2
+    assert calls == [1]
+
+
+async def test_memoize_caches_result_sync_func(cache: AsyncCache) -> None:
+    calls = []
+
+    @cache.memoize()
+    def func(x: int) -> int:
         calls.append(x)
         return x * 2
 
