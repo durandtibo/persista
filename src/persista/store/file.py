@@ -16,6 +16,7 @@ from coola.utils.path import sanitize_path
 from iden.io import load_json, load_pickle, save_json, save_pickle
 
 from persista.store.base import BaseStore
+from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import normalize_on_conflict, validate_batch_size
 
 if TYPE_CHECKING:
@@ -72,6 +73,9 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
     def extension(self) -> str:
         """File extension (including the leading dot) used for value
         files."""
+
+    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
+    scheme: str
 
     @abstractmethod
     def _save(self, path: Path, value: dict[str, Any]) -> None:
@@ -153,6 +157,9 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
         for file_path in self._iter_files():
             file_path.unlink(missing_ok=True)
 
+    def contains(self, key: str) -> bool:
+        return self._key_to_path(key).is_file()
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         flags = [self._key_to_path(key).is_file() for key in keys]
         found = [key for key, flag in zip(keys, flags, strict=True) if flag]
@@ -182,6 +189,13 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
 
     def count(self) -> int:
         return sum(1 for _ in self._iter_files())
+
+    def to_uri(self) -> str:
+        return encode_path_uri(self.scheme, str(self._path))
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
+        return cls(decode_path_uri(uri, expected_scheme=cls.scheme))
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"path": str(self._path), "closed": self._closed}
@@ -230,6 +244,8 @@ class JsonFileStore(BaseFileStore):
         ```
     """
 
+    scheme = "file+json"
+
     @property
     def extension(self) -> str:
         return ".json"
@@ -271,6 +287,8 @@ class PickleFileStore(BaseFileStore):
 
         ```
     """
+
+    scheme = "file+pickle"
 
     @property
     def extension(self) -> str:

@@ -114,6 +114,13 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def closed(self) -> bool:
         return self._closed
 
+    def to_uri(self) -> str:
+        return self._conninfo
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
+        return cls(uri)
+
     def get(self, key: str) -> dict[str, Any] | None:
         query = sql.SQL("SELECT * FROM {table} WHERE {key_col} = %s").format(
             table=self._table_ident, key_col=sql.Identifier(self._key_column)
@@ -199,6 +206,14 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def clear(self) -> None:
         query = sql.SQL("DELETE FROM {table}").format(table=self._table_ident)
         self._conn.execute(query)
+
+    def contains(self, key: str) -> bool:
+        query = sql.SQL("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1").format(
+            table=self._table_ident, key_col=sql.Identifier(self._key_column)
+        )
+        with self._conn.cursor() as cur:
+            cur.execute(query, (key,))
+            return cur.fetchone() is not None
 
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
@@ -360,6 +375,15 @@ class TypedPostgresStore(BasePostgresStore):
         1
 
         ```
+
+    Note:
+        :meth:`from_uri` reconstructs the store with an empty
+        ``value_schema`` and the default ``table`` name, so value
+        fields that were stored in typed columns won't appear in
+        :meth:`get`/:meth:`filter` results until the caller
+        re-supplies the original ``value_schema``/``table`` to a
+        fresh construction; the data itself isn't lost in the
+        database, just not visible through the reconstructed store.
     """
 
     _key_column = _KEY_COLUMN

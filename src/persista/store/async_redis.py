@@ -97,6 +97,13 @@ class AsyncBaseRedisStore(AsyncBaseStore, MultilineDisplayMixin):
     def closed(self) -> bool:
         return self._closed
 
+    def to_uri(self) -> str:
+        return self._url
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
+        return cls(uri)
+
     async def get(self, key: str) -> dict[str, Any] | None:
         value = await self._client.get(key)
         return self._decode(value) if value is not None else None
@@ -171,6 +178,9 @@ class AsyncBaseRedisStore(AsyncBaseStore, MultilineDisplayMixin):
 
     async def clear(self) -> None:
         await self.delete_many([key async for key in self.keys()])
+
+    async def contains(self, key: str) -> bool:
+        return bool(await self._client.sismember(_KEYS_SET, key))
 
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:

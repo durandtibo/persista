@@ -17,6 +17,8 @@ from persista.store.validation import normalize_on_conflict, validate_batch_size
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 
+    from typing_extensions import Self
+
     from persista.store.types import OnConflict
 
 
@@ -134,6 +136,9 @@ class AsyncInMemoryStore(AsyncBaseStore, InlineDisplayMixin):
     async def clear(self) -> None:
         self._data.clear()
 
+    async def contains(self, key: str) -> bool:
+        return key in self._data
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         found = [key for key in keys if key in self._data]
         missing = [key for key in keys if key not in self._data]
@@ -152,6 +157,13 @@ class AsyncInMemoryStore(AsyncBaseStore, InlineDisplayMixin):
 
     async def count(self) -> int:
         return len(self._data)
+
+    def to_uri(self) -> str:
+        return "memory://"
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
+        return cls()
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
         return {"count": len(self._data)}

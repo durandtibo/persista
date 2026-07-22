@@ -386,6 +386,27 @@ def test_delete_many_single_key(store: InMemoryStore, items: dict[str, dict[str,
     assert store.get("2") is None
 
 
+# --- contains ---
+
+
+def test_contains_true_when_key_present(
+    store: InMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.contains("1")
+
+
+def test_contains_false_when_key_missing(
+    store: InMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert not store.contains("99")
+
+
+def test_contains_false_when_store_empty(store: InMemoryStore) -> None:
+    assert not store.contains("1")
+
+
 # --- contains_many ---
 
 
@@ -698,3 +719,23 @@ def test_context_manager_multiple_open_close() -> None:
             assert store.count() == 0
             store.set(str(i), {"text": "hello"})
             assert store.count() == 1
+
+
+# --- to_uri/from_uri ---
+
+
+def test_to_uri_returns_memory_scheme(store: InMemoryStore) -> None:
+    assert store.to_uri() == "memory://"
+
+
+def test_from_uri_returns_empty_store() -> None:
+    store = InMemoryStore.from_uri("memory://")
+    assert store.count() == 0
+
+
+def test_to_uri_from_uri_does_not_carry_data(
+    store: InMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    reloaded = InMemoryStore.from_uri(store.to_uri())
+    assert reloaded.count() == 0

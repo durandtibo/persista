@@ -57,6 +57,7 @@ _DELETE_ANY_RE = re.compile(r'^DELETE FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
 _DELETE_ONE_RE = re.compile(r'^DELETE FROM "(\w+)" WHERE "[^"]+" = %s$')
 _DELETE_ALL_RE = re.compile(r'^DELETE FROM "(\w+)"$')
 _COUNT_RE = re.compile(r'^SELECT COUNT\(\*\) FROM "(\w+)"$')
+_EXISTS_RE = re.compile(r'^SELECT 1 FROM "(\w+)" WHERE "([^"]+)" = %s LIMIT 1$')
 _COL_ANY_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
 _COL_ALL_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)"$')
 _STAR_RE = re.compile(r'^SELECT \* FROM "(\w+)"(?: WHERE (.+))?$')
@@ -148,6 +149,9 @@ class FakeConnection:
     def dispatch_read(self, text: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
         if m := _COUNT_RE.match(text):
             return [(len(self.tables.get(m.group(1), {})),)]
+        if m := _EXISTS_RE.match(text):
+            table = self.tables.get(m.group(1), {})
+            return [(1,)] if params[0] in table else []
         if m := _COL_ANY_RE.match(text):
             table = self.tables.get(m.group(2), {})
             return [(key,) for key in params[0] if key in table]
@@ -296,6 +300,35 @@ def test_two_stores_different_tables_are_isolated(store_cls: type[BasePostgresSt
     store_a.set("1", {"text": "a"})
     assert store_b.get("1") is None
     assert store_b.count() == 0
+
+
+# --- to_uri/from_uri ---
+
+
+def test_to_uri_returns_conninfo_unchanged(store: BasePostgresStore) -> None:
+    assert store.to_uri() == store._conninfo
+
+
+def test_from_uri_constructs_with_same_conninfo(store_cls: type[BasePostgresStore]) -> None:
+    conninfo = "postgresql://user:pass@localhost/dbname"
+    conn = FakeConnection()
+    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
+        new_store = store_cls.from_uri(conninfo)
+    conn.store = new_store
+    assert new_store._conninfo == conninfo
+    new_store.set("1", {"text": "a"})
+    assert new_store.get("1") == {"text": "a"}
+
+
+def test_from_uri_ignores_read_only(store_cls: type[BasePostgresStore]) -> None:
+    conninfo = "postgresql://user:pass@localhost/dbname"
+    conn = FakeConnection()
+    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
+        new_store = store_cls.from_uri(conninfo, read_only=True)
+    conn.store = new_store
+    assert new_store._conninfo == conninfo
+    new_store.set("1", {"text": "a"})
+    assert new_store.get("1") == {"text": "a"}
 
 
 # --- repr/str ---
@@ -660,6 +693,27 @@ def test_clear_then_set_works(store: BasePostgresStore) -> None:
     store.set("2", {"text": "world"})
     assert store.count() == 1
     assert store.get("2") == {"text": "world"}
+
+
+# --- contains ---
+
+
+def test_contains_true_when_key_present(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.contains("1")
+
+
+def test_contains_false_when_key_missing(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert not store.contains("99")
+
+
+def test_contains_false_when_store_empty(store: BasePostgresStore) -> None:
+    assert not store.contains("1")
 
 
 # --- contains_many ---

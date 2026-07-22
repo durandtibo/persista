@@ -395,6 +395,27 @@ async def test_delete_many_single_key(
     assert await store.get("2") is None
 
 
+# --- contains ---
+
+
+async def test_contains_true_when_key_present(
+    store: AsyncInMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    assert await store.contains("1")
+
+
+async def test_contains_false_when_key_missing(
+    store: AsyncInMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    assert not await store.contains("99")
+
+
+async def test_contains_false_when_store_empty(store: AsyncInMemoryStore) -> None:
+    assert not await store.contains("1")
+
+
 # --- contains_many ---
 
 
@@ -666,3 +687,15 @@ async def test_context_manager_usable_for_reads_and_writes() -> None:
         assert result[0]["text"] == "hello"
         await store.delete("1")
         assert await store.count() == 1
+
+
+# --- to_uri/from_uri ---
+
+
+async def test_to_uri_returns_memory_scheme(store: AsyncInMemoryStore) -> None:
+    assert store.to_uri() == "memory://"
+
+
+async def test_from_uri_returns_empty_store() -> None:
+    store = AsyncInMemoryStore.from_uri("memory://")
+    assert await store.count() == 0

@@ -76,6 +76,9 @@ class AsyncInMemoryStore(AsyncBaseStore):
     async def clear(self) -> None:
         self._data.clear()
 
+    async def contains(self, key: str) -> bool:
+        return key in self._data
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         found = [key for key in keys if key in self._data]
         missing = [key for key in keys if key not in self._data]
@@ -95,6 +98,13 @@ class AsyncInMemoryStore(AsyncBaseStore):
 
     async def count(self) -> int:
         return len(self._data)
+
+    def to_uri(self) -> str:
+        return "test-memory://"
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> AsyncInMemoryStore:  # noqa: ARG003
+        return cls()
 
 
 @pytest.fixture

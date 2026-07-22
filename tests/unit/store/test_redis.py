@@ -433,6 +433,27 @@ def test_clear_then_set_works(store: BaseRedisStore) -> None:
     assert store.get("2") == {"text": "world"}
 
 
+# --- contains ---
+
+
+def test_contains_true_when_key_present(
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.contains("1")
+
+
+def test_contains_false_when_key_missing(
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert not store.contains("99")
+
+
+def test_contains_false_when_store_empty(store: BaseRedisStore) -> None:
+    assert not store.contains("1")
+
+
 # --- contains_many ---
 
 
@@ -588,6 +609,35 @@ def test_iter_batches_does_not_mutate_store(
     store.set_many(items)
     list(store.iter_batches(batch_size=2))
     assert store.count() == len(items)
+
+
+# --- to_uri/from_uri ---
+
+
+def test_to_uri_returns_url_unchanged(store: BaseRedisStore) -> None:
+    assert store.to_uri() == store._url
+
+
+def test_from_uri_constructs_with_same_url(
+    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
+) -> None:
+    _use_fake_redis(monkeypatch)
+    url = "redis://localhost:6379/0"
+    new_store = store_cls.from_uri(url)
+    assert new_store._url == url
+    new_store.set("1", {"text": "hello"})
+    assert new_store.get("1") == {"text": "hello"}
+
+
+def test_from_uri_ignores_read_only(
+    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
+) -> None:
+    _use_fake_redis(monkeypatch)
+    url = "redis://localhost:6379/0"
+    new_store = store_cls.from_uri(url, read_only=True)
+    assert new_store._url == url
+    new_store.set("1", {"text": "hello"})
+    assert new_store.get("1") == {"text": "hello"}
 
 
 # --- close ---

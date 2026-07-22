@@ -13,7 +13,6 @@ from persista.store.validation import validate_batch_size
 
 if TYPE_CHECKING:
     from collections.abc import (
-        AsyncGenerator,
         AsyncIterator,
         Generator,
         Iterable,
@@ -189,6 +188,17 @@ class BaseStore(ABC):
         """
 
     @abstractmethod
+    def contains(self, key: str) -> bool:
+        """Check if the key exists in the store.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            True if the key exists in the store, False otherwise.
+        """
+
+    @abstractmethod
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         """Check which keys exist in the store.
 
@@ -275,6 +285,34 @@ class BaseStore(ABC):
         Returns:
             ``True`` if the store has been closed, ``False`` if it is
             open and ready to use.
+        """
+
+    @abstractmethod
+    def to_uri(self) -> str:
+        """Return a URI that identifies where this store's data lives.
+
+        Returns:
+            A URI. For a store backed by a file/database, passing
+            this URI to :meth:`from_uri` reconnects to the same
+            data. For a process-local store, the URI carries no
+            reconnection information and :meth:`from_uri` returns a
+            fresh, empty store.
+        """
+
+    @classmethod
+    @abstractmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+        """Reconstruct a store from a URI produced by :meth:`to_uri`.
+
+        Args:
+            uri: A URI produced by :meth:`to_uri` (of a store of this
+                same class).
+            read_only: If ``True`` and this store type supports a
+                read-only connection mode, open it read-only.
+                Ignored by store types with no such mode.
+
+        Returns:
+            A new store instance.
         """
 
     def __enter__(self) -> Self:
@@ -447,6 +485,17 @@ class AsyncBaseStore(ABC):
         """
 
     @abstractmethod
+    async def contains(self, key: str) -> bool:
+        """Check if the key exists in the store.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            True if the key exists in the store, False otherwise.
+        """
+
+    @abstractmethod
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         """Check which keys exist in the store.
 
@@ -486,7 +535,7 @@ class AsyncBaseStore(ABC):
                 yield value
 
     @abstractmethod
-    def iter_batches(self, batch_size: int = 32) -> AsyncGenerator[dict[str, dict[str, Any]], None]:
+    def iter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
         """Yield key-value pairs in batches, avoiding loading the whole
         store into memory at once.
 
@@ -532,6 +581,34 @@ class AsyncBaseStore(ABC):
         Returns:
             ``True`` if the store has been closed, ``False`` if it is
             open and ready to use.
+        """
+
+    @abstractmethod
+    def to_uri(self) -> str:
+        """Return a URI that identifies where this store's data lives.
+
+        Returns:
+            A URI. For a store backed by a file/database, passing
+            this URI to :meth:`from_uri` reconnects to the same
+            data. For a process-local store, the URI carries no
+            reconnection information and :meth:`from_uri` returns a
+            fresh, empty store.
+        """
+
+    @classmethod
+    @abstractmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+        """Reconstruct a store from a URI produced by :meth:`to_uri`.
+
+        Args:
+            uri: A URI produced by :meth:`to_uri` (of a store of this
+                same class).
+            read_only: If ``True`` and this store type supports a
+                read-only connection mode, open it read-only.
+                Ignored by store types with no such mode.
+
+        Returns:
+            A new store instance.
         """
 
     async def __aenter__(self) -> Self:

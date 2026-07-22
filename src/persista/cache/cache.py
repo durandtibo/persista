@@ -366,7 +366,7 @@ class Cache:
                     )
                     return await self.aget_or_compute(key, func, *args, ttl=ttl, **kwargs)
 
-                return async_wrapper  # pyright: ignore[reportReturnType]
+                return async_wrapper
 
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> T:

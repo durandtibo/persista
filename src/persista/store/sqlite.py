@@ -16,6 +16,7 @@ from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
+from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
     normalize_on_conflict,
     validate_batch_size,
@@ -70,8 +71,16 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     #: Name of the table's primary key column.
     _key_column: str = "key"
 
+    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
+    _scheme: str = "sqlite"
+
     def __init__(self, database: Path | str, **kwargs: Any) -> None:
         self._database = database
+        # Plain path/":memory:" identifier used by to_uri(). Overridden by
+        # from_path() when database is instead the wrapped `file:...` URI
+        # that sqlite3.connect() expects, so to_uri()/from_uri() round-trip
+        # the original path rather than double-wrapping it.
+        self._path_for_uri: Path | str = database
         self._kwargs = kwargs
         self._closed = False
         self._conn = sqlite3.connect(database, **kwargs)
@@ -141,7 +150,17 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             uri = f"file:{path}?mode=ro"
         else:
             uri = f"file:{path}?mode=rwc"
-        return cls(uri, uri=True, **kwargs)
+        store = cls(uri, uri=True, **kwargs)
+        store._path_for_uri = path
+        return store
+
+    def to_uri(self) -> str:
+        return encode_path_uri(self._scheme, str(self._path_for_uri))
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+        path = decode_path_uri(uri, expected_scheme=cls._scheme)
+        return cls.from_path(path, read_only=read_only)
 
     def close(self) -> None:
         if self._closed:
@@ -231,6 +250,13 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     def clear(self) -> None:
         self._conn.execute("DELETE FROM store")
         self._conn.commit()
+
+    def contains(self, key: str) -> bool:
+        row = self._conn.execute(
+            f"SELECT 1 FROM store WHERE {self._key_column} = ? LIMIT 1",  # noqa: S608
+            [key],
+        ).fetchone()
+        return row is not None
 
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
@@ -423,9 +449,18 @@ class TypedSQLiteStore(BaseSQLiteStore):
         1
 
         ```
+
+    Note:
+        :meth:`from_uri` reconstructs the store with an empty
+        ``value_schema``, so value fields that were stored in typed
+        columns won't appear in :meth:`get`/:meth:`filter` results
+        until the caller re-supplies the original ``value_schema`` to
+        a fresh construction; the data itself isn't lost in the
+        database, just not visible through the reconstructed store.
     """
 
     _key_column = _KEY_COLUMN
+    _scheme = "sqlite+typed"
 
     def __init__(
         self,
@@ -531,6 +566,8 @@ class PickleSQLiteStore(BaseSQLiteStore):
 
         ```
     """
+
+    _scheme = "sqlite+pickle"
 
     def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
         super().__init__(database, **kwargs)

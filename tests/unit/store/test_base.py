@@ -74,6 +74,9 @@ class InMemoryTestStore(BaseStore):
     def clear(self) -> None:
         self._data.clear()
 
+    def contains(self, key: str) -> bool:
+        return key in self._data
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         found = [key for key in keys if key in self._data]
         missing = [key for key in keys if key not in self._data]
@@ -93,6 +96,13 @@ class InMemoryTestStore(BaseStore):
     def count(self) -> int:
         return len(self._data)
 
+    def to_uri(self) -> str:
+        return "test-memory://"
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> InMemoryTestStore:  # noqa: ARG003
+        return cls()
+
 
 @pytest.fixture
 def store() -> InMemoryTestStore:
@@ -102,6 +112,68 @@ def store() -> InMemoryTestStore:
 def test_base_store_is_abstract() -> None:
     with pytest.raises(TypeError, match="abstract"):
         BaseStore()
+
+
+def test_base_store_is_abstract_missing_to_uri_from_uri() -> None:
+    class IncompleteStore(BaseStore):
+        def get(self, key: str) -> dict[str, Any] | None:  # noqa: ARG002
+            return None
+
+        def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:  # noqa: ARG002
+            return []
+
+        def set(
+            self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+        ) -> None:
+            pass
+
+        def set_many(
+            self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        ) -> None:
+            pass
+
+        def filter(self, **field_filters: Any) -> list[dict[str, Any]]:  # noqa: ARG002
+            return []
+
+        def delete(self, key: str) -> None:
+            pass
+
+        def delete_many(self, keys: list[str]) -> None:
+            pass
+
+        def clear(self) -> None:
+            pass
+
+        def contains(self, key: str) -> bool:  # noqa: ARG002
+            return False
+
+        def contains_many(
+            self,
+            keys: list[str],  # noqa: ARG002
+        ) -> tuple[list[str], list[str]]:
+            return [], []
+
+        def keys(self) -> Iterator[str]:
+            return iter(())
+
+        def iter_batches(
+            self,
+            batch_size: int = 32,  # noqa: ARG002
+        ) -> Generator[dict[str, dict[str, Any]], None, None]:
+            yield from ()
+
+        def count(self) -> int:
+            return 0
+
+        def close(self) -> None:
+            pass
+
+        @property
+        def closed(self) -> bool:
+            return False
+
+    with pytest.raises(TypeError, match="abstract"):
+        IncompleteStore()
 
 
 def test_base_store_values(store: InMemoryTestStore) -> None:

@@ -453,6 +453,27 @@ async def test_clear_then_set_works(store: AsyncBaseRedisStore) -> None:
     assert await store.get("2") == {"text": "world"}
 
 
+# --- contains ---
+
+
+async def test_contains_true_when_key_present(
+    store: AsyncBaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    assert await store.contains("1")
+
+
+async def test_contains_false_when_key_missing(
+    store: AsyncBaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    assert not await store.contains("99")
+
+
+async def test_contains_false_when_store_empty(store: AsyncBaseRedisStore) -> None:
+    assert not await store.contains("1")
+
+
 # --- contains_many ---
 
 
@@ -626,6 +647,35 @@ async def test_iter_batches_does_not_mutate_store(
     async for _ in store.iter_batches(batch_size=2):
         pass
     assert await store.count() == len(items)
+
+
+# --- to_uri/from_uri ---
+
+
+async def test_to_uri_returns_url_unchanged(store: AsyncBaseRedisStore) -> None:
+    assert store.to_uri() == store._url
+
+
+async def test_from_uri_constructs_with_same_url(
+    monkeypatch: pytest.MonkeyPatch, store_cls: type[AsyncBaseRedisStore]
+) -> None:
+    _use_fake_redis(monkeypatch)
+    url = "redis://localhost:6379/0"
+    new_store = store_cls.from_uri(url)
+    assert new_store._url == url
+    await new_store.set("1", {"text": "hello"})
+    assert await new_store.get("1") == {"text": "hello"}
+
+
+async def test_from_uri_ignores_read_only(
+    monkeypatch: pytest.MonkeyPatch, store_cls: type[AsyncBaseRedisStore]
+) -> None:
+    _use_fake_redis(monkeypatch)
+    url = "redis://localhost:6379/0"
+    new_store = store_cls.from_uri(url, read_only=True)
+    assert new_store._url == url
+    await new_store.set("1", {"text": "hello"})
+    assert await new_store.get("1") == {"text": "hello"}
 
 
 # --- close ---

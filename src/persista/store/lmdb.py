@@ -15,6 +15,7 @@ from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
+from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import normalize_on_conflict, validate_batch_size
 from persista.utils.imports import check_lmdb, is_lmdb_available
 
@@ -59,6 +60,9 @@ class BaseLmdbStore(BaseStore, MultilineDisplayMixin):
         **kwargs: Additional keyword arguments to pass to
             ``lmdb.open``.
     """
+
+    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
+    _scheme: str = "lmdb"
 
     def __init__(
         self, path: str | PathLike[str], map_size: int = _DEFAULT_MAP_SIZE, **kwargs: Any
@@ -169,6 +173,10 @@ class BaseLmdbStore(BaseStore, MultilineDisplayMixin):
             db = self._env.open_db()
             txn.drop(db, delete=False)
 
+    def contains(self, key: str) -> bool:
+        with self._env.begin() as txn:
+            return txn.get(self._key_bytes(key)) is not None
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []
@@ -194,6 +202,14 @@ class BaseLmdbStore(BaseStore, MultilineDisplayMixin):
     def count(self) -> int:
         with self._env.begin() as txn:
             return txn.stat()["entries"]
+
+    def to_uri(self) -> str:
+        return encode_path_uri(self._scheme, self._path)
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+        path = decode_path_uri(uri, expected_scheme=cls._scheme)
+        return cls(path, readonly=read_only)
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"path": self._path, "closed": self._closed}
@@ -291,6 +307,8 @@ class PickleLmdbStore(BaseLmdbStore):
 
         ```
     """
+
+    _scheme = "lmdb+pickle"
 
     def _encode(self, value: dict[str, Any]) -> bytes:
         return pickle.dumps(value)
