@@ -270,6 +270,14 @@ class AsyncBaseSQLiteStore(AsyncBaseStore, MultilineDisplayMixin):
         await self._conn.execute("DELETE FROM store")
         await self._conn.commit()
 
+    async def contains(self, key: str) -> bool:
+        await self._ensure_schema()
+        cursor = await self._conn.execute(
+            f"SELECT 1 FROM store WHERE {self._key_column} = ? LIMIT 1",  # noqa: S608
+            [key],
+        )
+        return await cursor.fetchone() is not None
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []

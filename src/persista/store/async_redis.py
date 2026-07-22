@@ -172,6 +172,9 @@ class AsyncBaseRedisStore(AsyncBaseStore, MultilineDisplayMixin):
     async def clear(self) -> None:
         await self.delete_many([key async for key in self.keys()])
 
+    async def contains(self, key: str) -> bool:
+        return bool(await self._client.sismember(_KEYS_SET, key))
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []

@@ -100,6 +100,14 @@ async def test_delete_many_is_silent(store: AsyncNullStore) -> None:
     await store.delete_many(["1", "2"])
 
 
+# --- contains ---
+
+
+async def test_contains_always_false(store: AsyncNullStore) -> None:
+    await store.set("1", {"text": "hello"})
+    assert await store.contains("1") is False
+
+
 # --- contains_many ---
 
 

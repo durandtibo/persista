@@ -386,6 +386,27 @@ def test_delete_many_single_key(store: InMemoryStore, items: dict[str, dict[str,
     assert store.get("2") is None
 
 
+# --- contains ---
+
+
+def test_contains_true_when_key_present(
+    store: InMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.contains("1") is True
+
+
+def test_contains_false_when_key_missing(
+    store: InMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.contains("99") is False
+
+
+def test_contains_false_when_store_empty(store: InMemoryStore) -> None:
+    assert store.contains("1") is False
+
+
 # --- contains_many ---
 
 

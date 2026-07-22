@@ -395,6 +395,27 @@ async def test_delete_many_single_key(
     assert await store.get("2") is None
 
 
+# --- contains ---
+
+
+async def test_contains_true_when_key_present(
+    store: AsyncInMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    assert await store.contains("1") is True
+
+
+async def test_contains_false_when_key_missing(
+    store: AsyncInMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    assert await store.contains("99") is False
+
+
+async def test_contains_false_when_store_empty(store: AsyncInMemoryStore) -> None:
+    assert await store.contains("1") is False
+
+
 # --- contains_many ---
 
 

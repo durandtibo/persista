@@ -520,6 +520,27 @@ def test_clear_then_set_works(store: BaseSQLiteStore) -> None:
     assert store.get("2") == {"text": "world"}
 
 
+# --- contains ---
+
+
+def test_contains_true_when_key_present(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.contains("1") is True
+
+
+def test_contains_false_when_key_missing(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.contains("99") is False
+
+
+def test_contains_false_when_store_empty(store: BaseSQLiteStore) -> None:
+    assert store.contains("1") is False
+
+
 # --- contains_many ---
 
 

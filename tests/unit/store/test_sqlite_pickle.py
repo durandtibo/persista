@@ -109,6 +109,12 @@ def test_clear(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]) -> No
     assert store.count() == 0
 
 
+def test_contains(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]) -> None:
+    store.set_many(items)
+    assert store.contains("1") is True
+    assert store.contains("missing") is False
+
+
 def test_contains_many(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     found, missing = store.contains_many(["1", "missing"])

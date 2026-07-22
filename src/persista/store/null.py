@@ -86,6 +86,9 @@ class NullStore(BaseStore, InlineDisplayMixin):
     def clear(self) -> None:
         return
 
+    def contains(self, key: str) -> bool:  # noqa: ARG002
+        return False
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         return [], list(keys)
 

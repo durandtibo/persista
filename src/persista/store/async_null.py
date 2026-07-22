@@ -91,6 +91,9 @@ class AsyncNullStore(AsyncBaseStore, InlineDisplayMixin):
     async def clear(self) -> None:
         return
 
+    async def contains(self, key: str) -> bool:  # noqa: ARG002
+        return False
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         return [], list(keys)
 

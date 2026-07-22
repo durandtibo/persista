@@ -608,6 +608,30 @@ async def test_clear_then_set_works(store: AsyncBaseSQLiteStore) -> None:
     assert await store.get("2") == {"text": "world"}
 
 
+# --- contains ---
+
+
+@aiosqlite_available
+async def test_contains_true_when_key_present(
+    store: AsyncBaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    assert await store.contains("1") is True
+
+
+@aiosqlite_available
+async def test_contains_false_when_key_missing(
+    store: AsyncBaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    assert await store.contains("99") is False
+
+
+@aiosqlite_available
+async def test_contains_false_when_store_empty(store: AsyncBaseSQLiteStore) -> None:
+    assert await store.contains("1") is False
+
+
 # --- contains_many ---
 
 

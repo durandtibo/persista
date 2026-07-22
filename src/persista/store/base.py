@@ -189,6 +189,17 @@ class BaseStore(ABC):
         """
 
     @abstractmethod
+    def contains(self, key: str) -> bool:
+        """Check if the key exists in the store.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            True if the key exists in the store, False otherwise.
+        """
+
+    @abstractmethod
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         """Check which keys exist in the store.
 
@@ -444,6 +455,17 @@ class AsyncBaseStore(ABC):
 
         This is equivalent to resetting the store to empty, without
         closing it.
+        """
+
+    @abstractmethod
+    async def contains(self, key: str) -> bool:
+        """Check if the key exists in the store.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            True if the key exists in the store, False otherwise.
         """
 
     @abstractmethod
