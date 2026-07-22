@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import httpx
-
 from persista.http.client import AsyncHttpClient, HttpClient
 from persista.testing.fixtures import httpx_available
+from persista.utils.imports import is_httpx_available
+
+if is_httpx_available():
+    import httpx
 
 REMOTE_URL = "https://jsonplaceholder.typicode.com/todos/1"
 REMOTE_COLLECTION_URL = "https://jsonplaceholder.typicode.com/todos"
