@@ -10,7 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from persista.cache.utils import make_key
-from persista.http.httpx import (
+from persista.http.httpx.method import (
     DEFAULT_RETRY_STATUS_CODES,
     send_request,
     send_request_async,
@@ -106,7 +106,7 @@ class HttpClient:
     Example:
         ```pycon
         >>> import httpx
-        >>> from persista.http.client import HttpClient
+        >>> from persista.http.httpx import HttpClient
         >>> with httpx.Client() as httpx_client:  # doctest: +SKIP
         ...     client = HttpClient(client=httpx_client)
         ...     response = client.get("https://jsonplaceholder.typicode.com/todos/1")
@@ -248,7 +248,7 @@ class AsyncHttpClient:
         ```pycon
         >>> import asyncio
         >>> import httpx
-        >>> from persista.http.client import AsyncHttpClient
+        >>> from persista.http.httpx import AsyncHttpClient
         >>> async def main():  # doctest: +SKIP
         ...     async with httpx.AsyncClient() as httpx_client:
         ...         client = AsyncHttpClient(client=httpx_client)

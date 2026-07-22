@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from persista.http.httpx import (
+from persista.http.httpx.method import (
     _get_retry_delay,
     delete_response,
     delete_response_async,
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 httpx = pytest.importorskip("httpx")
 
 
-MODULE = "persista.http.httpx"
+MODULE = "persista.http.httpx.method"
 
 
 @pytest.fixture(autouse=True)

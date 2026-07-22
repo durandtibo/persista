@@ -59,7 +59,7 @@ behavior.
 an `httpx.Response`:
 
 ```python
-from persista.http.httpx import get_response
+from persista.http.httpx.method import get_response
 
 response = get_response(
     "https://jsonplaceholder.typicode.com/todos/1",
@@ -75,7 +75,7 @@ each attempt (`2 ** (attempt - 1)` seconds).
 For other HTTP methods, use `send_request`, which takes the method as its first argument:
 
 ```python
-from persista.http.httpx import send_request
+from persista.http.httpx.method import send_request
 
 response = send_request(
     "POST",
@@ -97,7 +97,7 @@ response.json()
 ```python
 import asyncio
 
-from persista.http.httpx import get_response_async, send_request_async
+from persista.http.httpx.method import get_response_async, send_request_async
 
 
 async def main():

@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from persista.cache import AsyncCache, Cache
-from persista.http.client import AsyncHttpClient, HttpClient
+from persista.http.httpx.client import AsyncHttpClient, HttpClient
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 httpx = pytest.importorskip("httpx")
 
 
-MODULE = "persista.http.httpx"
+MODULE = "persista.http.httpx.method"
 
 
 @pytest.fixture(autouse=True)
