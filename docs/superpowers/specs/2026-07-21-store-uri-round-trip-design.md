@@ -6,8 +6,14 @@ Every store in `persista.store` gets two new methods:
 
 - `to_uri(self) -> str` — returns a URI that identifies where the store's
   data lives.
-- `from_uri(cls, uri: str) -> Self` (classmethod) — reconstructs a store
-  from that URI.
+- `from_uri(cls, uri: str, *, read_only: bool = False) -> Self` (classmethod)
+  — reconstructs a store from that URI. `read_only` is accepted on every
+  class for a uniform signature, but only has an effect on the stores that
+  have a native read-only connection mode: `SQLiteStore` (and its `Typed`/
+  `Pickle`/async variants), `DuckDBStore`/`TypedDuckDBStore`, and
+  `LmdbStore`/`PickleLmdbStore`. Everywhere else (file stores, Postgres,
+  Redis, in-memory, null) it's silently ignored — those backends have no
+  local notion of a read-only connection.
 
 For stores that persist to a file/directory/database, `store.from_uri(store.to_uri())`
 must reconnect to the *same* data (round trip). For the process-local stores
@@ -78,7 +84,7 @@ def to_uri(self) -> str: ...
 
 @classmethod
 @abstractmethod
-def from_uri(cls, uri: str) -> Self: ...
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self: ...
 ```
 
 ### Family base classes (shared implementation)
@@ -86,12 +92,24 @@ def from_uri(cls, uri: str) -> Self: ...
 - `BaseFileStore`: add a class attribute `scheme: str` (abstract property,
   alongside the existing `extension`), implement
   `to_uri` → `encode_path_uri(self.scheme, str(self._path))` and `from_uri`
-  → `cls(decode_path_uri(uri, expected_scheme=cls.scheme))`.
-- `BaseSQLiteStore`: same pattern keyed off `self._database`.
-- `BaseDuckDBStore`: same pattern keyed off `self._path`.
-- `BaseLmdbStore`: same pattern keyed off `self._path`.
+  → `cls(decode_path_uri(uri, expected_scheme=cls.scheme))`. `read_only` is
+  accepted but ignored — no native read-only mode.
+- `BaseSQLiteStore`: same encode/decode pattern keyed off `self._database`,
+  but `from_uri` delegates to the existing `from_path` machinery so
+  `read_only=True` reuses the `file:...?mode=ro` URI trick already used by
+  `from_path` (the decoded path is passed straight to
+  `cls.from_path(path, read_only=read_only)` instead of `cls(path)`).
+- `BaseDuckDBStore`: same encode/decode pattern keyed off `self._path`;
+  `from_uri` passes `read_only=read_only` straight through to `cls(path,
+  read_only=read_only)` (DuckDB's own constructor kwarg).
+- `BaseLmdbStore`: same encode/decode pattern keyed off `self._path`;
+  `from_uri` passes `readonly=read_only` to `cls(path, readonly=read_only)`
+  (`lmdb.open`'s kwarg is spelled `readonly`, no underscore).
 - `BasePostgresStore`: `to_uri` → `self._conninfo`; `from_uri` → `cls(uri)`.
+  `read_only` accepted but ignored (no local read-only connection mode;
+  read-only enforcement there is a matter of the DB role/user in `conninfo`).
 - `BaseRedisStore`: `to_uri` → `self._url`; `from_uri` → `cls(uri)`.
+  `read_only` accepted but ignored, same reasoning as Postgres.
 
 Leaf classes just set the `scheme`/equivalent class attribute:
 `JsonFileStore.scheme = "file+json"`, `PickleFileStore.scheme = "file+pickle"`,
@@ -107,11 +125,12 @@ def to_uri(self) -> str:
     return "memory://"  # or "null://"
 
 @classmethod
-def from_uri(cls, uri: str) -> Self:
+def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
     return cls()
 ```
 
-No validation beyond accepting the call; nothing meaningful to decode.
+`read_only` is accepted but ignored. No validation beyond accepting the
+call; nothing meaningful to decode.
 
 ### `persista/store/registry.py` (new)
 
@@ -119,8 +138,8 @@ No validation beyond accepting the call; nothing meaningful to decode.
 _SYNC_SCHEMES: dict[str, type[BaseStore]] = {...}
 _ASYNC_SCHEMES: dict[str, type[AsyncBaseStore]] = {...}
 
-def store_from_uri(uri: str) -> BaseStore: ...
-def async_store_from_uri(uri: str) -> AsyncBaseStore: ...
+def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore: ...
+def async_store_from_uri(uri: str, *, read_only: bool = False) -> AsyncBaseStore: ...
 ```
 
 Each looks up `urlsplit(uri).scheme` in its table and calls `.from_uri(uri)`
@@ -155,3 +174,8 @@ through this reconstructed store).
   an unknown scheme.
 - Typed stores: confirm `from_uri` round-trips connection target but not
   schema (documented behavior, not a bug).
+- `read_only=True`: for SQLite/DuckDB/LMDB, verify the reconstructed store
+  can `get`/`filter` existing data but raises/fails on `set`/`delete`/`clear`
+  (whatever the underlying driver does for a read-only connection). For
+  every other store, verify `read_only=True` is accepted without error and
+  has no effect (writes still succeed).
