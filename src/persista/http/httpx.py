@@ -3,7 +3,20 @@ r"""Provide HTTP helper functions for fetching remote content using
 
 from __future__ import annotations
 
-__all__ = ["get_response", "get_response_async", "send_request", "send_request_async"]
+__all__ = [
+    "delete_response",
+    "delete_response_async",
+    "get_response",
+    "get_response_async",
+    "patch_response",
+    "patch_response_async",
+    "post_response",
+    "post_response_async",
+    "put_response",
+    "put_response_async",
+    "send_request",
+    "send_request_async",
+]
 
 
 import asyncio
@@ -71,6 +84,248 @@ def get_response(
     """
     return send_request(
         method="GET",
+        url=url,
+        timeout=timeout,
+        max_retries=max_retries,
+        retry_status_codes=retry_status_codes,
+        client=client,
+        **kwargs,
+    )
+
+
+def post_response(
+    url: str,
+    timeout: int = 30,
+    max_retries: int = 3,
+    retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+    client: httpx.Client | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Send a ``POST`` request with automatic retries and timeout.
+
+    This is a convenience wrapper around :func:`send_request` for the
+    common case of issuing a ``POST`` request. See :func:`send_request`
+    for full documentation of the retry and backoff behavior.
+
+    Args:
+        url: The full URL to send the request to.
+        timeout: Request timeout in seconds per attempt. Defaults to 30.
+            Ignored when ``client`` is provided.
+        max_retries: Maximum number of retry attempts on transient failures.
+            Defaults to 3. Set to 0 to disable retries.
+        retry_status_codes: The HTTP status codes that trigger a retry.
+            Defaults to ``{429, 500, 502, 503, 504}``.
+        client: An optional :class:`httpx.Client` to reuse. When ``None``,
+            a new client is created and closed after the request completes.
+        **kwargs: Additional keyword arguments forwarded to
+            :meth:`httpx.Client.request`, e.g. ``headers``, ``json``,
+            ``data``, ``params``, ``content``, ``files``.
+
+    Returns:
+        The :class:`httpx.Response` object for the completed request.
+
+    Raises:
+        RuntimeError: if the ``httpx`` package is not installed.
+        httpx.HTTPStatusError: On 4xx/5xx responses that are not retried
+            (e.g. 404, 403).
+        httpx.TransportError: If the host is unreachable or the request
+            times out after all retries are exhausted.
+
+    Example:
+        ```pycon
+        >>> from persista.http.httpx import post_response
+        >>> response = post_response(  # doctest: +SKIP
+        ...     "https://jsonplaceholder.typicode.com/todos",
+        ...     json={"title": "example"},
+        ...     timeout=10,
+        ...     max_retries=5,
+        ... )
+
+        ```
+    """
+    return send_request(
+        method="POST",
+        url=url,
+        timeout=timeout,
+        max_retries=max_retries,
+        retry_status_codes=retry_status_codes,
+        client=client,
+        **kwargs,
+    )
+
+
+def put_response(
+    url: str,
+    timeout: int = 30,
+    max_retries: int = 3,
+    retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+    client: httpx.Client | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Send a ``PUT`` request with automatic retries and timeout.
+
+    This is a convenience wrapper around :func:`send_request` for the
+    common case of issuing a ``PUT`` request. See :func:`send_request`
+    for full documentation of the retry and backoff behavior.
+
+    Args:
+        url: The full URL to send the request to.
+        timeout: Request timeout in seconds per attempt. Defaults to 30.
+            Ignored when ``client`` is provided.
+        max_retries: Maximum number of retry attempts on transient failures.
+            Defaults to 3. Set to 0 to disable retries.
+        retry_status_codes: The HTTP status codes that trigger a retry.
+            Defaults to ``{429, 500, 502, 503, 504}``.
+        client: An optional :class:`httpx.Client` to reuse. When ``None``,
+            a new client is created and closed after the request completes.
+        **kwargs: Additional keyword arguments forwarded to
+            :meth:`httpx.Client.request`, e.g. ``headers``, ``json``,
+            ``data``, ``params``, ``content``, ``files``.
+
+    Returns:
+        The :class:`httpx.Response` object for the completed request.
+
+    Raises:
+        RuntimeError: if the ``httpx`` package is not installed.
+        httpx.HTTPStatusError: On 4xx/5xx responses that are not retried
+            (e.g. 404, 403).
+        httpx.TransportError: If the host is unreachable or the request
+            times out after all retries are exhausted.
+
+    Example:
+        ```pycon
+        >>> from persista.http.httpx import put_response
+        >>> response = put_response(  # doctest: +SKIP
+        ...     "https://jsonplaceholder.typicode.com/todos/1",
+        ...     json={"title": "example"},
+        ...     timeout=10,
+        ...     max_retries=5,
+        ... )
+
+        ```
+    """
+    return send_request(
+        method="PUT",
+        url=url,
+        timeout=timeout,
+        max_retries=max_retries,
+        retry_status_codes=retry_status_codes,
+        client=client,
+        **kwargs,
+    )
+
+
+def patch_response(
+    url: str,
+    timeout: int = 30,
+    max_retries: int = 3,
+    retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+    client: httpx.Client | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Send a ``PATCH`` request with automatic retries and timeout.
+
+    This is a convenience wrapper around :func:`send_request` for the
+    common case of issuing a ``PATCH`` request. See :func:`send_request`
+    for full documentation of the retry and backoff behavior.
+
+    Args:
+        url: The full URL to send the request to.
+        timeout: Request timeout in seconds per attempt. Defaults to 30.
+            Ignored when ``client`` is provided.
+        max_retries: Maximum number of retry attempts on transient failures.
+            Defaults to 3. Set to 0 to disable retries.
+        retry_status_codes: The HTTP status codes that trigger a retry.
+            Defaults to ``{429, 500, 502, 503, 504}``.
+        client: An optional :class:`httpx.Client` to reuse. When ``None``,
+            a new client is created and closed after the request completes.
+        **kwargs: Additional keyword arguments forwarded to
+            :meth:`httpx.Client.request`, e.g. ``headers``, ``json``,
+            ``data``, ``params``, ``content``, ``files``.
+
+    Returns:
+        The :class:`httpx.Response` object for the completed request.
+
+    Raises:
+        RuntimeError: if the ``httpx`` package is not installed.
+        httpx.HTTPStatusError: On 4xx/5xx responses that are not retried
+            (e.g. 404, 403).
+        httpx.TransportError: If the host is unreachable or the request
+            times out after all retries are exhausted.
+
+    Example:
+        ```pycon
+        >>> from persista.http.httpx import patch_response
+        >>> response = patch_response(  # doctest: +SKIP
+        ...     "https://jsonplaceholder.typicode.com/todos/1",
+        ...     json={"title": "example"},
+        ...     timeout=10,
+        ...     max_retries=5,
+        ... )
+
+        ```
+    """
+    return send_request(
+        method="PATCH",
+        url=url,
+        timeout=timeout,
+        max_retries=max_retries,
+        retry_status_codes=retry_status_codes,
+        client=client,
+        **kwargs,
+    )
+
+
+def delete_response(
+    url: str,
+    timeout: int = 30,
+    max_retries: int = 3,
+    retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+    client: httpx.Client | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Send a ``DELETE`` request with automatic retries and timeout.
+
+    This is a convenience wrapper around :func:`send_request` for the
+    common case of issuing a ``DELETE`` request. See :func:`send_request`
+    for full documentation of the retry and backoff behavior.
+
+    Args:
+        url: The full URL to send the request to.
+        timeout: Request timeout in seconds per attempt. Defaults to 30.
+            Ignored when ``client`` is provided.
+        max_retries: Maximum number of retry attempts on transient failures.
+            Defaults to 3. Set to 0 to disable retries.
+        retry_status_codes: The HTTP status codes that trigger a retry.
+            Defaults to ``{429, 500, 502, 503, 504}``.
+        client: An optional :class:`httpx.Client` to reuse. When ``None``,
+            a new client is created and closed after the request completes.
+        **kwargs: Additional keyword arguments forwarded to
+            :meth:`httpx.Client.request`, e.g. ``headers``, ``params``.
+
+    Returns:
+        The :class:`httpx.Response` object for the completed request.
+
+    Raises:
+        RuntimeError: if the ``httpx`` package is not installed.
+        httpx.HTTPStatusError: On 4xx/5xx responses that are not retried
+            (e.g. 404, 403).
+        httpx.TransportError: If the host is unreachable or the request
+            times out after all retries are exhausted.
+
+    Example:
+        ```pycon
+        >>> from persista.http.httpx import delete_response
+        >>> response = delete_response(  # doctest: +SKIP
+        ...     "https://jsonplaceholder.typicode.com/todos/1",
+        ...     timeout=10,
+        ...     max_retries=5,
+        ... )
+
+        ```
+    """
+    return send_request(
+        method="DELETE",
         url=url,
         timeout=timeout,
         max_retries=max_retries,
@@ -247,6 +502,270 @@ async def get_response_async(
     """
     return await send_request_async(
         method="GET",
+        url=url,
+        timeout=timeout,
+        max_retries=max_retries,
+        retry_status_codes=retry_status_codes,
+        client=client,
+        **kwargs,
+    )
+
+
+async def post_response_async(
+    url: str,
+    timeout: int = 30,
+    max_retries: int = 3,
+    retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+    client: httpx.AsyncClient | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Send a ``POST`` request asynchronously with automatic retries and
+    timeout.
+
+    This is a convenience wrapper around :func:`send_request_async` for the
+    common case of issuing a ``POST`` request. See :func:`send_request_async`
+    for full documentation of the retry and backoff behavior.
+
+    Args:
+        url: The full URL to send the request to.
+        timeout: Request timeout in seconds per attempt. Defaults to 30.
+            Ignored when ``client`` is provided.
+        max_retries: Maximum number of retry attempts on transient failures.
+            Defaults to 3. Set to 0 to disable retries.
+        retry_status_codes: The HTTP status codes that trigger a retry.
+            Defaults to ``{429, 500, 502, 503, 504}``.
+        client: An optional :class:`httpx.AsyncClient` to reuse. When
+            ``None``, a new client is created and closed after the request
+            completes.
+        **kwargs: Additional keyword arguments forwarded to
+            :meth:`httpx.AsyncClient.request`, e.g. ``headers``, ``json``,
+            ``data``, ``params``, ``content``, ``files``.
+
+    Returns:
+        The :class:`httpx.Response` object for the completed request.
+
+    Raises:
+        RuntimeError: if the ``httpx`` package is not installed.
+        httpx.HTTPStatusError: On 4xx/5xx responses that are not retried
+            (e.g. 404, 403).
+        httpx.TransportError: If the host is unreachable or the request
+            times out after all retries are exhausted.
+
+    Example:
+        ```pycon
+        >>> import asyncio
+        >>> from persista.http.httpx import post_response_async
+        >>> response = asyncio.run(  # doctest: +SKIP
+        ...     post_response_async(
+        ...         "https://jsonplaceholder.typicode.com/todos",
+        ...         json={"title": "example"},
+        ...         timeout=10,
+        ...         max_retries=5,
+        ...     )
+        ... )
+
+        ```
+    """
+    return await send_request_async(
+        method="POST",
+        url=url,
+        timeout=timeout,
+        max_retries=max_retries,
+        retry_status_codes=retry_status_codes,
+        client=client,
+        **kwargs,
+    )
+
+
+async def put_response_async(
+    url: str,
+    timeout: int = 30,
+    max_retries: int = 3,
+    retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+    client: httpx.AsyncClient | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Send a ``PUT`` request asynchronously with automatic retries and
+    timeout.
+
+    This is a convenience wrapper around :func:`send_request_async` for the
+    common case of issuing a ``PUT`` request. See :func:`send_request_async`
+    for full documentation of the retry and backoff behavior.
+
+    Args:
+        url: The full URL to send the request to.
+        timeout: Request timeout in seconds per attempt. Defaults to 30.
+            Ignored when ``client`` is provided.
+        max_retries: Maximum number of retry attempts on transient failures.
+            Defaults to 3. Set to 0 to disable retries.
+        retry_status_codes: The HTTP status codes that trigger a retry.
+            Defaults to ``{429, 500, 502, 503, 504}``.
+        client: An optional :class:`httpx.AsyncClient` to reuse. When
+            ``None``, a new client is created and closed after the request
+            completes.
+        **kwargs: Additional keyword arguments forwarded to
+            :meth:`httpx.AsyncClient.request`, e.g. ``headers``, ``json``,
+            ``data``, ``params``, ``content``, ``files``.
+
+    Returns:
+        The :class:`httpx.Response` object for the completed request.
+
+    Raises:
+        RuntimeError: if the ``httpx`` package is not installed.
+        httpx.HTTPStatusError: On 4xx/5xx responses that are not retried
+            (e.g. 404, 403).
+        httpx.TransportError: If the host is unreachable or the request
+            times out after all retries are exhausted.
+
+    Example:
+        ```pycon
+        >>> import asyncio
+        >>> from persista.http.httpx import put_response_async
+        >>> response = asyncio.run(  # doctest: +SKIP
+        ...     put_response_async(
+        ...         "https://jsonplaceholder.typicode.com/todos/1",
+        ...         json={"title": "example"},
+        ...         timeout=10,
+        ...         max_retries=5,
+        ...     )
+        ... )
+
+        ```
+    """
+    return await send_request_async(
+        method="PUT",
+        url=url,
+        timeout=timeout,
+        max_retries=max_retries,
+        retry_status_codes=retry_status_codes,
+        client=client,
+        **kwargs,
+    )
+
+
+async def patch_response_async(
+    url: str,
+    timeout: int = 30,
+    max_retries: int = 3,
+    retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+    client: httpx.AsyncClient | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Send a ``PATCH`` request asynchronously with automatic retries
+    and timeout.
+
+    This is a convenience wrapper around :func:`send_request_async` for the
+    common case of issuing a ``PATCH`` request. See
+    :func:`send_request_async` for full documentation of the retry and
+    backoff behavior.
+
+    Args:
+        url: The full URL to send the request to.
+        timeout: Request timeout in seconds per attempt. Defaults to 30.
+            Ignored when ``client`` is provided.
+        max_retries: Maximum number of retry attempts on transient failures.
+            Defaults to 3. Set to 0 to disable retries.
+        retry_status_codes: The HTTP status codes that trigger a retry.
+            Defaults to ``{429, 500, 502, 503, 504}``.
+        client: An optional :class:`httpx.AsyncClient` to reuse. When
+            ``None``, a new client is created and closed after the request
+            completes.
+        **kwargs: Additional keyword arguments forwarded to
+            :meth:`httpx.AsyncClient.request`, e.g. ``headers``, ``json``,
+            ``data``, ``params``, ``content``, ``files``.
+
+    Returns:
+        The :class:`httpx.Response` object for the completed request.
+
+    Raises:
+        RuntimeError: if the ``httpx`` package is not installed.
+        httpx.HTTPStatusError: On 4xx/5xx responses that are not retried
+            (e.g. 404, 403).
+        httpx.TransportError: If the host is unreachable or the request
+            times out after all retries are exhausted.
+
+    Example:
+        ```pycon
+        >>> import asyncio
+        >>> from persista.http.httpx import patch_response_async
+        >>> response = asyncio.run(  # doctest: +SKIP
+        ...     patch_response_async(
+        ...         "https://jsonplaceholder.typicode.com/todos/1",
+        ...         json={"title": "example"},
+        ...         timeout=10,
+        ...         max_retries=5,
+        ...     )
+        ... )
+
+        ```
+    """
+    return await send_request_async(
+        method="PATCH",
+        url=url,
+        timeout=timeout,
+        max_retries=max_retries,
+        retry_status_codes=retry_status_codes,
+        client=client,
+        **kwargs,
+    )
+
+
+async def delete_response_async(
+    url: str,
+    timeout: int = 30,
+    max_retries: int = 3,
+    retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
+    client: httpx.AsyncClient | None = None,
+    **kwargs: Any,
+) -> httpx.Response:
+    """Send a ``DELETE`` request asynchronously with automatic retries
+    and timeout.
+
+    This is a convenience wrapper around :func:`send_request_async` for the
+    common case of issuing a ``DELETE`` request. See
+    :func:`send_request_async` for full documentation of the retry and
+    backoff behavior.
+
+    Args:
+        url: The full URL to send the request to.
+        timeout: Request timeout in seconds per attempt. Defaults to 30.
+            Ignored when ``client`` is provided.
+        max_retries: Maximum number of retry attempts on transient failures.
+            Defaults to 3. Set to 0 to disable retries.
+        retry_status_codes: The HTTP status codes that trigger a retry.
+            Defaults to ``{429, 500, 502, 503, 504}``.
+        client: An optional :class:`httpx.AsyncClient` to reuse. When
+            ``None``, a new client is created and closed after the request
+            completes.
+        **kwargs: Additional keyword arguments forwarded to
+            :meth:`httpx.AsyncClient.request`, e.g. ``headers``, ``params``.
+
+    Returns:
+        The :class:`httpx.Response` object for the completed request.
+
+    Raises:
+        RuntimeError: if the ``httpx`` package is not installed.
+        httpx.HTTPStatusError: On 4xx/5xx responses that are not retried
+            (e.g. 404, 403).
+        httpx.TransportError: If the host is unreachable or the request
+            times out after all retries are exhausted.
+
+    Example:
+        ```pycon
+        >>> import asyncio
+        >>> from persista.http.httpx import delete_response_async
+        >>> response = asyncio.run(  # doctest: +SKIP
+        ...     delete_response_async(
+        ...         "https://jsonplaceholder.typicode.com/todos/1",
+        ...         timeout=10,
+        ...         max_retries=5,
+        ...     )
+        ... )
+
+        ```
+    """
+    return await send_request_async(
+        method="DELETE",
         url=url,
         timeout=timeout,
         max_retries=max_retries,

@@ -7,8 +7,16 @@ import pytest
 
 from persista.http.httpx import (
     _get_retry_delay,
+    delete_response,
+    delete_response_async,
     get_response,
     get_response_async,
+    patch_response,
+    patch_response_async,
+    post_response,
+    post_response_async,
+    put_response,
+    put_response_async,
     send_request,
     send_request_async,
 )
@@ -222,6 +230,205 @@ def test_get_response_raises_when_httpx_not_available(monkeypatch: pytest.Monkey
 
     with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
         get_response("https://example.com")
+
+
+############################
+#      post_response       #
+############################
+
+
+def test_post_response_success_first_try() -> None:
+    handler, calls = _counting_handler([201], json={"id": 1})
+
+    response = post_response("https://example.com", client=_client(handler), json={"a": 1})
+
+    assert response.status_code == 201
+    assert response.json() == {"id": 1}
+    assert calls.call_count == 1
+
+
+def test_post_response_sends_method_and_body() -> None:
+    received: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received["method"] = request.method
+        received["body"] = request.content
+        return httpx.Response(201)
+
+    post_response("https://example.com", client=_client(handler), json={"name": "value"})
+
+    assert received["method"] == "POST"
+    assert received["body"] == b'{"name":"value"}'
+
+
+def test_post_response_retries_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 200], json={"ok": True})
+
+    response = post_response("https://example.com", client=_client(handler), max_retries=1)
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+    assert no_sleep.call_count == 1
+
+
+def test_post_response_raises_when_httpx_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    error_message = "'httpx' package is required but not installed."
+
+    def _raise() -> None:
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(f"{MODULE}.check_httpx", _raise)
+
+    with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
+        post_response("https://example.com")
+
+
+############################
+#       put_response        #
+############################
+
+
+def test_put_response_success_first_try() -> None:
+    handler, calls = _counting_handler([200], json={"ok": True})
+
+    response = put_response("https://example.com", client=_client(handler), json={"a": 1})
+
+    assert response.status_code == 200
+    assert calls.call_count == 1
+
+
+def test_put_response_sends_method_and_body() -> None:
+    received: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received["method"] = request.method
+        received["body"] = request.content
+        return httpx.Response(200)
+
+    put_response("https://example.com", client=_client(handler), json={"name": "value"})
+
+    assert received["method"] == "PUT"
+    assert received["body"] == b'{"name":"value"}'
+
+
+def test_put_response_retries_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 200], json={"ok": True})
+
+    response = put_response("https://example.com", client=_client(handler), max_retries=1)
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+    assert no_sleep.call_count == 1
+
+
+def test_put_response_raises_when_httpx_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    error_message = "'httpx' package is required but not installed."
+
+    def _raise() -> None:
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(f"{MODULE}.check_httpx", _raise)
+
+    with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
+        put_response("https://example.com")
+
+
+############################
+#      patch_response       #
+############################
+
+
+def test_patch_response_success_first_try() -> None:
+    handler, calls = _counting_handler([200], json={"ok": True})
+
+    response = patch_response("https://example.com", client=_client(handler), json={"a": 1})
+
+    assert response.status_code == 200
+    assert calls.call_count == 1
+
+
+def test_patch_response_sends_method_and_body() -> None:
+    received: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received["method"] = request.method
+        received["body"] = request.content
+        return httpx.Response(200)
+
+    patch_response("https://example.com", client=_client(handler), json={"name": "value"})
+
+    assert received["method"] == "PATCH"
+    assert received["body"] == b'{"name":"value"}'
+
+
+def test_patch_response_retries_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 200], json={"ok": True})
+
+    response = patch_response("https://example.com", client=_client(handler), max_retries=1)
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+    assert no_sleep.call_count == 1
+
+
+def test_patch_response_raises_when_httpx_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    error_message = "'httpx' package is required but not installed."
+
+    def _raise() -> None:
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(f"{MODULE}.check_httpx", _raise)
+
+    with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
+        patch_response("https://example.com")
+
+
+############################
+#      delete_response      #
+############################
+
+
+def test_delete_response_success_first_try() -> None:
+    handler, calls = _counting_handler([204])
+
+    response = delete_response("https://example.com", client=_client(handler))
+
+    assert response.status_code == 204
+    assert calls.call_count == 1
+
+
+def test_delete_response_sends_method() -> None:
+    received: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received["method"] = request.method
+        return httpx.Response(204)
+
+    delete_response("https://example.com", client=_client(handler))
+
+    assert received["method"] == "DELETE"
+
+
+def test_delete_response_retries_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 204])
+
+    response = delete_response("https://example.com", client=_client(handler), max_retries=1)
+
+    assert response.status_code == 204
+    assert calls.call_count == 2
+    assert no_sleep.call_count == 1
+
+
+def test_delete_response_raises_when_httpx_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    error_message = "'httpx' package is required but not installed."
+
+    def _raise() -> None:
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(f"{MODULE}.check_httpx", _raise)
+
+    with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
+        delete_response("https://example.com")
 
 
 ############################
@@ -472,6 +679,233 @@ async def test_get_response_async_raises_when_httpx_not_available(
 
     with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
         await get_response_async("https://example.com")
+
+
+############################
+#    post_response_async   #
+############################
+
+
+async def test_post_response_async_success_first_try() -> None:
+    handler, calls = _counting_handler([201], json={"id": 1})
+
+    response = await post_response_async(
+        "https://example.com", client=_async_client(handler), json={"a": 1}
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {"id": 1}
+    assert calls.call_count == 1
+
+
+async def test_post_response_async_sends_method_and_body() -> None:
+    received: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received["method"] = request.method
+        received["body"] = request.content
+        return httpx.Response(201)
+
+    await post_response_async(
+        "https://example.com", client=_async_client(handler), json={"name": "value"}
+    )
+
+    assert received["method"] == "POST"
+    assert received["body"] == b'{"name":"value"}'
+
+
+async def test_post_response_async_retries_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 200], json={"ok": True})
+
+    response = await post_response_async(
+        "https://example.com", client=_async_client(handler), max_retries=1
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+    assert no_sleep.call_count == 1
+
+
+async def test_post_response_async_raises_when_httpx_not_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error_message = "'httpx' package is required but not installed."
+
+    def _raise() -> None:
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(f"{MODULE}.check_httpx", _raise)
+
+    with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
+        await post_response_async("https://example.com")
+
+
+############################
+#    put_response_async    #
+############################
+
+
+async def test_put_response_async_success_first_try() -> None:
+    handler, calls = _counting_handler([200], json={"ok": True})
+
+    response = await put_response_async(
+        "https://example.com", client=_async_client(handler), json={"a": 1}
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 1
+
+
+async def test_put_response_async_sends_method_and_body() -> None:
+    received: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received["method"] = request.method
+        received["body"] = request.content
+        return httpx.Response(200)
+
+    await put_response_async(
+        "https://example.com", client=_async_client(handler), json={"name": "value"}
+    )
+
+    assert received["method"] == "PUT"
+    assert received["body"] == b'{"name":"value"}'
+
+
+async def test_put_response_async_retries_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 200], json={"ok": True})
+
+    response = await put_response_async(
+        "https://example.com", client=_async_client(handler), max_retries=1
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+    assert no_sleep.call_count == 1
+
+
+async def test_put_response_async_raises_when_httpx_not_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error_message = "'httpx' package is required but not installed."
+
+    def _raise() -> None:
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(f"{MODULE}.check_httpx", _raise)
+
+    with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
+        await put_response_async("https://example.com")
+
+
+############################
+#   patch_response_async    #
+############################
+
+
+async def test_patch_response_async_success_first_try() -> None:
+    handler, calls = _counting_handler([200], json={"ok": True})
+
+    response = await patch_response_async(
+        "https://example.com", client=_async_client(handler), json={"a": 1}
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 1
+
+
+async def test_patch_response_async_sends_method_and_body() -> None:
+    received: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received["method"] = request.method
+        received["body"] = request.content
+        return httpx.Response(200)
+
+    await patch_response_async(
+        "https://example.com", client=_async_client(handler), json={"name": "value"}
+    )
+
+    assert received["method"] == "PATCH"
+    assert received["body"] == b'{"name":"value"}'
+
+
+async def test_patch_response_async_retries_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 200], json={"ok": True})
+
+    response = await patch_response_async(
+        "https://example.com", client=_async_client(handler), max_retries=1
+    )
+
+    assert response.status_code == 200
+    assert calls.call_count == 2
+    assert no_sleep.call_count == 1
+
+
+async def test_patch_response_async_raises_when_httpx_not_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error_message = "'httpx' package is required but not installed."
+
+    def _raise() -> None:
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(f"{MODULE}.check_httpx", _raise)
+
+    with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
+        await patch_response_async("https://example.com")
+
+
+############################
+#   delete_response_async   #
+############################
+
+
+async def test_delete_response_async_success_first_try() -> None:
+    handler, calls = _counting_handler([204])
+
+    response = await delete_response_async("https://example.com", client=_async_client(handler))
+
+    assert response.status_code == 204
+    assert calls.call_count == 1
+
+
+async def test_delete_response_async_sends_method() -> None:
+    received: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received["method"] = request.method
+        return httpx.Response(204)
+
+    await delete_response_async("https://example.com", client=_async_client(handler))
+
+    assert received["method"] == "DELETE"
+
+
+async def test_delete_response_async_retries_then_succeeds(no_sleep: Mock) -> None:
+    handler, calls = _counting_handler([503, 204])
+
+    response = await delete_response_async(
+        "https://example.com", client=_async_client(handler), max_retries=1
+    )
+
+    assert response.status_code == 204
+    assert calls.call_count == 2
+    assert no_sleep.call_count == 1
+
+
+async def test_delete_response_async_raises_when_httpx_not_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error_message = "'httpx' package is required but not installed."
+
+    def _raise() -> None:
+        raise RuntimeError(error_message)
+
+    monkeypatch.setattr(f"{MODULE}.check_httpx", _raise)
+
+    with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
+        await delete_response_async("https://example.com")
 
 
 ############################
