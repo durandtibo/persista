@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import pytest
 
 from persista.store import AsyncNullStore
@@ -64,6 +66,10 @@ async def test_get_many_returns_none_for_every_key(store: AsyncNullStore) -> Non
     assert await store.get_many(["1", "2"]) == [None, None]
 
 
+async def test_get_many_preserves_length(store: AsyncNullStore) -> None:
+    assert await store.get_many(["1", "2", "3"]) == [None, None, None]
+
+
 async def test_get_many_empty_list_returns_empty_list(store: AsyncNullStore) -> None:
     assert await store.get_many([]) == []
 
@@ -98,6 +104,14 @@ async def test_delete_is_silent(store: AsyncNullStore) -> None:
 
 async def test_delete_many_is_silent(store: AsyncNullStore) -> None:
     await store.delete_many(["1", "2"])
+
+
+# --- contains ---
+
+
+async def test_contains_always_false(store: AsyncNullStore) -> None:
+    await store.set("1", {"text": "hello"})
+    assert not await store.contains("1")
 
 
 # --- contains_many ---
@@ -139,6 +153,10 @@ async def test_values_yields_nothing(store: AsyncNullStore) -> None:
 async def test_iter_batches_yields_nothing(store: AsyncNullStore) -> None:
     await store.set("1", {"text": "hello"})
     assert [batch async for batch in store.iter_batches()] == []
+
+
+async def test_iter_batches_returns_async_iterator(store: AsyncNullStore) -> None:
+    assert isinstance(store.iter_batches(), AsyncIterator)
 
 
 # --- count ---

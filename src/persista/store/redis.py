@@ -165,6 +165,9 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
     def clear(self) -> None:
         self.delete_many(list(self.keys()))
 
+    def contains(self, key: str) -> bool:
+        return bool(self._client.sismember(_KEYS_SET, key))
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []

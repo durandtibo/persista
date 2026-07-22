@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING, Any
 from coola.display import InlineDisplayMixin
 
 from persista.store.base import AsyncBaseStore
+from persista.utils.asyncio import EmptyAsyncIterator
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+    from collections.abc import AsyncIterator, Mapping
 
     from persista.store.types import OnConflict
 
@@ -91,19 +92,20 @@ class AsyncNullStore(AsyncBaseStore, InlineDisplayMixin):
     async def clear(self) -> None:
         return
 
+    async def contains(self, key: str) -> bool:  # noqa: ARG002
+        return False
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         return [], list(keys)
 
-    async def keys(self) -> AsyncIterator[str]:
-        for key in ():
-            yield key
+    def keys(self) -> AsyncIterator[str]:
+        return EmptyAsyncIterator()
 
-    async def iter_batches(
+    def iter_batches(
         self,
         batch_size: int = 32,  # noqa: ARG002
-    ) -> AsyncGenerator[dict[str, dict[str, Any]], None]:
-        for batch in ():
-            yield batch
+    ) -> AsyncIterator[dict[str, dict[str, Any]]]:
+        return EmptyAsyncIterator()
 
     async def count(self) -> int:
         return 0

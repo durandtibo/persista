@@ -56,6 +56,7 @@ _DELETE_ANY_RE = re.compile(r'^DELETE FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
 _DELETE_ONE_RE = re.compile(r'^DELETE FROM "(\w+)" WHERE "[^"]+" = %s$')
 _DELETE_ALL_RE = re.compile(r'^DELETE FROM "(\w+)"$')
 _COUNT_RE = re.compile(r'^SELECT COUNT\(\*\) FROM "(\w+)"$')
+_EXISTS_RE = re.compile(r'^SELECT 1 FROM "(\w+)" WHERE "([^"]+)" = %s LIMIT 1$')
 _COL_ANY_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
 _COL_ALL_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)"$')
 _STAR_RE = re.compile(r'^SELECT \* FROM "(\w+)"(?: WHERE (.+))?$')
@@ -152,6 +153,9 @@ class FakeConnection:
     def dispatch_read(self, text: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
         if m := _COUNT_RE.match(text):
             return [(len(self.tables.get(m.group(1), {})),)]
+        if m := _EXISTS_RE.match(text):
+            table = self.tables.get(m.group(1), {})
+            return [(1,)] if params[0] in table else []
         if m := _COL_ANY_RE.match(text):
             table = self.tables.get(m.group(2), {})
             return [(key,) for key in params[0] if key in table]
@@ -699,6 +703,27 @@ async def test_clear_then_set_works(store: AsyncBasePostgresStore) -> None:
     await store.set("2", {"text": "world"})
     assert await store.count() == 1
     assert await store.get("2") == {"text": "world"}
+
+
+# --- contains ---
+
+
+async def test_contains_true_when_key_present(
+    store: AsyncBasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    assert await store.contains("1")
+
+
+async def test_contains_false_when_key_missing(
+    store: AsyncBasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.set_many(items)
+    assert not await store.contains("99")
+
+
+async def test_contains_false_when_store_empty(store: AsyncBasePostgresStore) -> None:
+    assert not await store.contains("1")
 
 
 # --- contains_many ---

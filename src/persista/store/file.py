@@ -153,6 +153,9 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
         for file_path in self._iter_files():
             file_path.unlink(missing_ok=True)
 
+    def contains(self, key: str) -> bool:
+        return self._key_to_path(key).is_file()
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         flags = [self._key_to_path(key).is_file() for key in keys]
         found = [key for key, flag in zip(keys, flags, strict=True) if flag]

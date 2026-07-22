@@ -239,6 +239,15 @@ class AsyncBasePostgresStore(AsyncBaseStore, MultilineDisplayMixin):
         query = sql.SQL("DELETE FROM {table}").format(table=self._table_ident)
         await self._conn.execute(query)
 
+    async def contains(self, key: str) -> bool:
+        await self._ensure_schema()
+        query = sql.SQL("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1").format(
+            table=self._table_ident, key_col=sql.Identifier(self._key_column)
+        )
+        async with self._conn.cursor() as cur:
+            await cur.execute(query, (key,))
+            return await cur.fetchone() is not None
+
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []

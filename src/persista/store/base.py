@@ -13,7 +13,6 @@ from persista.store.validation import validate_batch_size
 
 if TYPE_CHECKING:
     from collections.abc import (
-        AsyncGenerator,
         AsyncIterator,
         Generator,
         Iterable,
@@ -186,6 +185,17 @@ class BaseStore(ABC):
 
         This is equivalent to resetting the store to empty, without
         closing it.
+        """
+
+    @abstractmethod
+    def contains(self, key: str) -> bool:
+        """Check if the key exists in the store.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            True if the key exists in the store, False otherwise.
         """
 
     @abstractmethod
@@ -447,6 +457,17 @@ class AsyncBaseStore(ABC):
         """
 
     @abstractmethod
+    async def contains(self, key: str) -> bool:
+        """Check if the key exists in the store.
+
+        Args:
+            key: The key to check.
+
+        Returns:
+            True if the key exists in the store, False otherwise.
+        """
+
+    @abstractmethod
     async def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         """Check which keys exist in the store.
 
@@ -486,7 +507,7 @@ class AsyncBaseStore(ABC):
                 yield value
 
     @abstractmethod
-    def iter_batches(self, batch_size: int = 32) -> AsyncGenerator[dict[str, dict[str, Any]], None]:
+    def iter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
         """Yield key-value pairs in batches, avoiding loading the whole
         store into memory at once.
 

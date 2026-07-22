@@ -169,6 +169,10 @@ class BaseLmdbStore(BaseStore, MultilineDisplayMixin):
             db = self._env.open_db()
             txn.drop(db, delete=False)
 
+    def contains(self, key: str) -> bool:
+        with self._env.begin() as txn:
+            return txn.get(self._key_bytes(key)) is not None
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []

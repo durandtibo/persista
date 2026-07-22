@@ -74,6 +74,9 @@ class InMemoryTestStore(BaseStore):
     def clear(self) -> None:
         self._data.clear()
 
+    def contains(self, key: str) -> bool:
+        return key in self._data
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         found = [key for key in keys if key in self._data]
         missing = [key for key in keys if key not in self._data]

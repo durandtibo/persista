@@ -200,6 +200,14 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         query = sql.SQL("DELETE FROM {table}").format(table=self._table_ident)
         self._conn.execute(query)
 
+    def contains(self, key: str) -> bool:
+        query = sql.SQL("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1").format(
+            table=self._table_ident, key_col=sql.Identifier(self._key_column)
+        )
+        with self._conn.cursor() as cur:
+            cur.execute(query, (key,))
+            return cur.fetchone() is not None
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []

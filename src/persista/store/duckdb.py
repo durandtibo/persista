@@ -167,6 +167,13 @@ class BaseDuckDBStore(BaseStore, MultilineDisplayMixin):
     def clear(self) -> None:
         self._conn.execute("DELETE FROM store")
 
+    def contains(self, key: str) -> bool:
+        row = self._conn.execute(
+            f"SELECT 1 FROM store WHERE {self._key_column} = ? LIMIT 1",  # noqa: S608
+            [key],
+        ).fetchone()
+        return row is not None
+
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
             return [], []
