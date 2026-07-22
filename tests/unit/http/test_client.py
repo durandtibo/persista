@@ -147,16 +147,6 @@ def test_http_client_does_not_cache_error_response() -> None:
     assert calls.call_count == 2
 
 
-def test_http_client_context_manager_closes_client() -> None:
-    handler, _ = _counting_handler(lambda n: {"n": n})
-    raw_client = _client(handler)
-
-    with HttpClient(client=raw_client) as client:
-        client.get("https://example.com")
-
-    assert raw_client.is_closed
-
-
 ############################
 #     AsyncHttpClient     #
 ############################
@@ -221,13 +211,3 @@ async def test_async_http_client_delete() -> None:
 
     assert response.json() == {"n": 0}
     assert calls.call_count == 1
-
-
-async def test_async_http_client_context_manager_closes_client() -> None:
-    handler, _ = _counting_handler(lambda n: {"n": n})
-    raw_client = _async_client(handler)
-
-    async with AsyncHttpClient(client=raw_client) as client:
-        await client.get("https://example.com")
-
-    assert raw_client.is_closed

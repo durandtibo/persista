@@ -21,8 +21,6 @@ if is_httpx_available():  # pragma: no cover
     import httpx
 
 if TYPE_CHECKING:
-    from typing import Self
-
     from persista.cache.async_cache import AsyncCache
     from persista.cache.cache import Cache
 
@@ -102,15 +100,15 @@ class HttpClient:
         cacheable_methods: The HTTP methods (case-insensitive) whose
             responses are cached, when ``cache`` is given. Defaults
             to ``{"GET"}``.
-        ttl: The time-to-live, in seconds, applied to cached
-            responses. See :meth:`~persista.cache.cache.Cache.set`.
-        client: An optional :class:`httpx.Client` to wrap. When
-            ``None``, a new client is created.
+        client: The :class:`httpx.Client` to wrap. The caller owns
+            its lifecycle (creation and closing).
 
     Example:
         ```pycon
+        >>> import httpx
         >>> from persista.http.client import HttpClient
-        >>> with HttpClient() as client:  # doctest: +SKIP
+        >>> with httpx.Client() as httpx_client:  # doctest: +SKIP
+        ...     client = HttpClient(client=httpx_client)
         ...     response = client.get("https://jsonplaceholder.typicode.com/todos/1")
         ...
 
@@ -119,13 +117,12 @@ class HttpClient:
 
     def __init__(
         self,
+        client: httpx.Client,
         timeout: int = 30,
         max_retries: int = 3,
         retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
         cache: Cache | None = None,
         cacheable_methods: set[str] | frozenset[str] = frozenset({"GET"}),
-        ttl: float | None = None,
-        client: httpx.Client | None = None,
     ) -> None:
         check_httpx()
         self._timeout = timeout
@@ -133,8 +130,7 @@ class HttpClient:
         self._retry_status_codes = retry_status_codes
         self._cache = cache
         self._cacheable_methods = frozenset(m.upper() for m in cacheable_methods)
-        self._ttl = ttl
-        self._client = client if client is not None else httpx.Client(timeout=timeout)
+        self._client = client
 
     def request(
         self,
@@ -185,7 +181,7 @@ class HttpClient:
             **kwargs,
         )
         if cache is not None and key is not None and response.is_success:
-            cache.set(key, _response_to_entry(response), ttl=self._ttl)
+            cache.set(key, _response_to_entry(response))
         return response
 
     def get(self, url: str, **kwargs: Any) -> httpx.Response:
@@ -223,16 +219,6 @@ class HttpClient:
         """
         return self.request("DELETE", url, **kwargs)
 
-    def close(self) -> None:
-        """Close the wrapped :class:`httpx.Client`."""
-        self._client.close()
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        self.close()
-
 
 class AsyncHttpClient:
     """A wrapper around :class:`httpx.AsyncClient` with automatic
@@ -255,17 +241,17 @@ class AsyncHttpClient:
         cacheable_methods: The HTTP methods (case-insensitive) whose
             responses are cached, when ``cache`` is given. Defaults
             to ``{"GET"}``.
-        ttl: The time-to-live, in seconds, applied to cached
-            responses.
-        client: An optional :class:`httpx.AsyncClient` to wrap. When
-            ``None``, a new client is created.
+        client: The :class:`httpx.AsyncClient` to wrap. The caller
+            owns its lifecycle (creation and closing).
 
     Example:
         ```pycon
         >>> import asyncio
+        >>> import httpx
         >>> from persista.http.client import AsyncHttpClient
         >>> async def main():  # doctest: +SKIP
-        ...     async with AsyncHttpClient() as client:
+        ...     async with httpx.AsyncClient() as httpx_client:
+        ...         client = AsyncHttpClient(client=httpx_client)
         ...         response = await client.get("https://jsonplaceholder.typicode.com/todos/1")
         ...
         >>> asyncio.run(main())  # doctest: +SKIP
@@ -275,13 +261,12 @@ class AsyncHttpClient:
 
     def __init__(
         self,
+        client: httpx.AsyncClient,
         timeout: int = 30,
         max_retries: int = 3,
         retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
         cache: AsyncCache | None = None,
         cacheable_methods: set[str] | frozenset[str] = frozenset({"GET"}),
-        ttl: float | None = None,
-        client: httpx.AsyncClient | None = None,
     ) -> None:
         check_httpx()
         self._timeout = timeout
@@ -289,8 +274,7 @@ class AsyncHttpClient:
         self._retry_status_codes = retry_status_codes
         self._cache = cache
         self._cacheable_methods = frozenset(m.upper() for m in cacheable_methods)
-        self._ttl = ttl
-        self._client = client if client is not None else httpx.AsyncClient(timeout=timeout)
+        self._client = client
 
     async def request(
         self,
@@ -326,7 +310,7 @@ class AsyncHttpClient:
             **kwargs,
         )
         if cache is not None and key is not None and response.is_success:
-            await cache.set(key, _response_to_entry(response), ttl=self._ttl)
+            await cache.set(key, _response_to_entry(response))
         return response
 
     async def get(self, url: str, **kwargs: Any) -> httpx.Response:
@@ -363,13 +347,3 @@ class AsyncHttpClient:
         See :meth:`request`.
         """
         return await self.request("DELETE", url, **kwargs)
-
-    async def aclose(self) -> None:
-        """Close the wrapped :class:`httpx.AsyncClient`."""
-        await self._client.aclose()
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        await self.aclose()

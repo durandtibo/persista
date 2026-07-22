@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import httpx
+
 from persista.http.client import AsyncHttpClient, HttpClient
 from persista.testing.fixtures import httpx_available
 
@@ -14,7 +16,8 @@ REMOTE_COLLECTION_URL = "https://jsonplaceholder.typicode.com/todos"
 
 @httpx_available
 def test_http_client_get_success_against_remote_url() -> None:
-    with HttpClient(timeout=10) as client:
+    with httpx.Client(timeout=10) as httpx_client:
+        client = HttpClient(client=httpx_client)
         response = client.get(REMOTE_URL)
 
     assert response.status_code == 200
@@ -23,7 +26,8 @@ def test_http_client_get_success_against_remote_url() -> None:
 
 @httpx_available
 def test_http_client_post_success_against_remote_url() -> None:
-    with HttpClient(timeout=10) as client:
+    with httpx.Client(timeout=10) as httpx_client:
+        client = HttpClient(client=httpx_client)
         response = client.post(REMOTE_COLLECTION_URL, json={"title": "example", "completed": False})
 
     assert response.status_code == 201
@@ -32,7 +36,8 @@ def test_http_client_post_success_against_remote_url() -> None:
 
 @httpx_available
 def test_http_client_put_success_against_remote_url() -> None:
-    with HttpClient(timeout=10) as client:
+    with httpx.Client(timeout=10) as httpx_client:
+        client = HttpClient(client=httpx_client)
         response = client.put(REMOTE_URL, json={"id": 1, "title": "updated"})
 
     assert response.status_code == 200
@@ -41,7 +46,8 @@ def test_http_client_put_success_against_remote_url() -> None:
 
 @httpx_available
 def test_http_client_patch_success_against_remote_url() -> None:
-    with HttpClient(timeout=10) as client:
+    with httpx.Client(timeout=10) as httpx_client:
+        client = HttpClient(client=httpx_client)
         response = client.patch(REMOTE_URL, json={"title": "patched"})
 
     assert response.status_code == 200
@@ -50,7 +56,8 @@ def test_http_client_patch_success_against_remote_url() -> None:
 
 @httpx_available
 def test_http_client_delete_success_against_remote_url() -> None:
-    with HttpClient(timeout=10) as client:
+    with httpx.Client(timeout=10) as httpx_client:
+        client = HttpClient(client=httpx_client)
         response = client.delete(REMOTE_URL)
 
     assert response.status_code == 200
@@ -63,7 +70,8 @@ def test_http_client_delete_success_against_remote_url() -> None:
 
 @httpx_available
 async def test_async_http_client_get_success_against_remote_url() -> None:
-    async with AsyncHttpClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10) as httpx_client:
+        client = AsyncHttpClient(client=httpx_client)
         response = await client.get(REMOTE_URL)
 
     assert response.status_code == 200
@@ -72,7 +80,8 @@ async def test_async_http_client_get_success_against_remote_url() -> None:
 
 @httpx_available
 async def test_async_http_client_post_success_against_remote_url() -> None:
-    async with AsyncHttpClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10) as httpx_client:
+        client = AsyncHttpClient(client=httpx_client)
         response = await client.post(
             REMOTE_COLLECTION_URL, json={"title": "example", "completed": False}
         )
@@ -83,7 +92,8 @@ async def test_async_http_client_post_success_against_remote_url() -> None:
 
 @httpx_available
 async def test_async_http_client_put_success_against_remote_url() -> None:
-    async with AsyncHttpClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10) as httpx_client:
+        client = AsyncHttpClient(client=httpx_client)
         response = await client.put(REMOTE_URL, json={"id": 1, "title": "updated"})
 
     assert response.status_code == 200
@@ -92,7 +102,8 @@ async def test_async_http_client_put_success_against_remote_url() -> None:
 
 @httpx_available
 async def test_async_http_client_patch_success_against_remote_url() -> None:
-    async with AsyncHttpClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10) as httpx_client:
+        client = AsyncHttpClient(client=httpx_client)
         response = await client.patch(REMOTE_URL, json={"title": "patched"})
 
     assert response.status_code == 200
@@ -101,7 +112,8 @@ async def test_async_http_client_patch_success_against_remote_url() -> None:
 
 @httpx_available
 async def test_async_http_client_delete_success_against_remote_url() -> None:
-    async with AsyncHttpClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10) as httpx_client:
+        client = AsyncHttpClient(client=httpx_client)
         response = await client.delete(REMOTE_URL)
 
     assert response.status_code == 200
