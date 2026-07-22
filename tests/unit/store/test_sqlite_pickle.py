@@ -46,6 +46,15 @@ def test_from_path(tmp_path: Path) -> None:
         assert store.get("1") == {"a": 1}
 
 
+def test_from_path_creates_missing_parent_directories(tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "dirs" / "data.sqlite"
+    assert not path.parent.exists()
+
+    with PickleSQLiteStore.from_path(path) as store:
+        store.set("1", {"a": 1})
+        assert path.exists()
+
+
 def test_set_and_get(store: PickleSQLiteStore) -> None:
     store.set("1", {"title": "Intro to Python"})
     assert store.get("1") == {"title": "Intro to Python"}

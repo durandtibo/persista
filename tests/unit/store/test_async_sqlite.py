@@ -116,6 +116,20 @@ async def test_from_path_creates_file_backed_store(
 
 
 @aiosqlite_available
+async def test_from_path_creates_missing_parent_directories(
+    store_path: Path, store_cls: type[AsyncBaseSQLiteStore]
+) -> None:
+    path = store_path / "nested" / store_cls.__name__ / "dirs" / "from_path.sqlite"
+    assert not path.parent.exists()
+
+    store = store_cls.from_path(path)
+    await store.set("1", {"text": "hello"})
+    assert await store.count() == 1
+    assert path.exists()
+    await store.close()
+
+
+@aiosqlite_available
 async def test_from_path_memory_uses_shared_cache_uri(
     store_cls: type[AsyncBaseSQLiteStore],
 ) -> None:

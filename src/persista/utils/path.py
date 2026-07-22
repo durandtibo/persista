@@ -1,8 +1,8 @@
-r"""Contain DuckDB utility functions."""
+r"""Contain path utility functions."""
 
 from __future__ import annotations
 
-__all__ = ["prepare_duckdb_path"]
+__all__ = ["prepare_store_path"]
 
 import logging
 from typing import TYPE_CHECKING
@@ -16,18 +16,18 @@ if TYPE_CHECKING:
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-def prepare_duckdb_path(path: Path | str) -> Path | str:
-    """Prepare a path for use with ``duckdb.connect``.
+def prepare_store_path(path: Path | str) -> Path | str:
+    """Prepare a path for use as a file-backed store's location.
 
     If ``path`` is the special in-memory sentinel (``":memory:"``), it is
     returned unchanged. Otherwise, ``path`` is sanitized and its parent
-    directory is created if it does not already exist, so that DuckDB
-    can create the database file without failing on a missing directory.
+    directory is created if it does not already exist, so that the
+    underlying backend can create the database file without failing on a
+    missing directory.
 
     Args:
-        path: The DuckDB connection target -- either the in-memory
-            sentinel ``":memory:"``, or a filesystem path to a database
-            file.
+        path: The connection target -- either the in-memory sentinel
+            ``":memory:"``, or a filesystem path to a database file.
 
     Returns:
         ``":memory:"`` unchanged, or the sanitized, absolute ``Path``
