@@ -1146,3 +1146,57 @@ async def test_iter_batches_with_typed_schema(
     async for batch in typed_store.iter_batches(batch_size=2):
         result.update(batch)
     assert result == items
+
+
+# ---------------------------------------------------------------------------
+# to_uri / from_uri
+# ---------------------------------------------------------------------------
+
+
+@aiosqlite_available
+async def test_to_uri_from_uri_round_trips_in_memory_data(
+    store_cls: type[AsyncBaseSQLiteStore], items: dict[str, dict[str, Any]]
+) -> None:
+    store = store_cls(":memory:")
+    await store.set_many(items)
+    uri = store.to_uri()
+    await store.close()
+
+    # :memory: never round-trips data -- each connection is a fresh DB.
+    reloaded = store_cls.from_uri(uri)
+    assert await reloaded.count() == 0
+    await reloaded.close()
+
+
+@aiosqlite_available
+async def test_to_uri_from_uri_round_trips_file_data(
+    store_path: Path, store_cls: type[AsyncBaseSQLiteStore], items: dict[str, dict[str, Any]]
+) -> None:
+    path = store_path / f"to_uri_{store_cls.__name__}.sqlite"
+    store = store_cls.from_path(path)
+    await store.set_many(items)
+    uri = store.to_uri()
+    await store.close()
+
+    reloaded = store_cls.from_uri(uri)
+    assert await reloaded.count() == len(items)
+    await reloaded.close()
+
+
+@aiosqlite_available
+async def test_from_uri_read_only_rejects_writes(
+    store_path: Path, store_cls: type[AsyncBaseSQLiteStore], items: dict[str, dict[str, Any]]
+) -> None:
+    import sqlite3
+
+    path = store_path / f"to_uri_ro_{store_cls.__name__}.sqlite"
+    store = store_cls.from_path(path)
+    await store.set_many(items)
+    uri = store.to_uri()
+    await store.close()
+
+    reloaded = store_cls.from_uri(uri, read_only=True)
+    assert await reloaded.count() == len(items)
+    with pytest.raises(sqlite3.OperationalError):
+        await reloaded.set("new", {"a": 1})
+    await reloaded.close()
