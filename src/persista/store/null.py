@@ -104,5 +104,12 @@ class NullStore(BaseStore, InlineDisplayMixin):
     def count(self) -> int:
         return 0
 
+    def to_uri(self) -> str:
+        return "null://"
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> NullStore:  # noqa: ARG003
+        return cls()
+
     def _get_repr_kwargs(self) -> dict[str, Any]:
         return {"count": 0}

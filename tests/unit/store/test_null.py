@@ -210,3 +210,16 @@ def test_context_manager_closes_on_exception() -> None:
         raise ValueError(msg)
 
     assert store.closed
+
+
+# --- to_uri / from_uri ---
+
+
+def test_to_uri_returns_null_scheme(store: NullStore) -> None:
+    assert store.to_uri() == "null://"
+
+
+def test_from_uri_returns_new_store() -> None:
+    store = NullStore.from_uri("null://")
+    assert store.count() == 0
+    assert not store.closed

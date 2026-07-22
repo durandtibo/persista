@@ -212,3 +212,16 @@ async def test_context_manager_closes_on_exception() -> None:
             raise ValueError(msg)
 
     assert store.closed
+
+
+# --- to_uri / from_uri ---
+
+
+async def test_to_uri_returns_null_scheme(store: AsyncNullStore) -> None:
+    assert store.to_uri() == "null://"
+
+
+async def test_from_uri_returns_new_store() -> None:
+    store = AsyncNullStore.from_uri("null://")
+    assert await store.count() == 0
+    assert not store.closed
