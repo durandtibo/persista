@@ -394,6 +394,60 @@ in mini-batches, which is useful when the source data does not fit comfortably i
 
 ```
 
+## Store URIs
+
+Every store implements `to_uri()`, which returns a URI identifying where its data lives, and the
+matching `from_uri(uri, *, read_only=False)` classmethod, which reconstructs a store of the same
+class from that URI:
+
+```pycon
+>>> from persista.store import SQLiteStore
+>>> store = SQLiteStore("data.sqlite")
+>>> uri = store.to_uri()
+>>> uri
+'sqlite:data.sqlite'
+>>> reloaded = SQLiteStore.from_uri(uri)
+>>> store.close()
+>>> reloaded.close()
+
+```
+
+`read_only` is honored by the SQLite, DuckDB, and LMDB stores (and their `Typed`/`Pickle`
+variants); it's accepted but ignored everywhere else. `to_uri`/`from_uri` do not preserve
+constructor options like `value_schema` (typed stores) or `table` (Postgres stores) -- `from_uri`
+always reconstructs with the defaults. `InMemoryStore` and `NullStore` always round-trip to a
+fresh, empty store since they carry no reconnection information.
+
+If you don't know the concrete store class ahead of time, `store_from_uri`/`async_store_from_uri`
+dispatch on the URI's scheme to the right class automatically:
+
+```pycon
+>>> from persista.store import JsonFileStore, store_from_uri
+>>> store = JsonFileStore("data")
+>>> store.set("1", {"title": "Intro to Python"})
+>>> reloaded = store_from_uri(store.to_uri())
+>>> isinstance(reloaded, JsonFileStore)
+True
+>>> reloaded.get("1")
+{'title': 'Intro to Python'}
+
+```
+
+Store classes that share a scheme with another class (`TypedPostgresStore` and `PostgresStore`
+both use `postgresql://`, `PickleRedisStore` and `RedisStore` both use `redis://`) aren't
+reachable through the dispatcher -- call `TheClass.from_uri(uri)` directly for those.
+
+Use `register_scheme`/`register_async_scheme` to register a custom store class (or override a
+built-in one) under a given scheme:
+
+```python
+from persista.store import register_scheme, store_from_uri
+from my_project.stores import MyCustomStore
+
+register_scheme("mycustom", MyCustomStore)
+store = store_from_uri("mycustom://...")
+```
+
 ## Choosing a Store
 
 | Store           | Backend            | Persisted | Typed columns | Pickle values | Async |
