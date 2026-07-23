@@ -1059,14 +1059,14 @@ def test_from_uri_read_only_rejects_writes(
 
 
 @pytest.mark.asyncio
-async def test_sqlite_store_aget_aset_round_trip(store) -> None:
+async def test_sqlite_store_aget_aset_round_trip(store: BaseSQLiteStore) -> None:
     await store.aset("1", {"title": "Intro to Python"})
     assert await store.aget("1") == {"title": "Intro to Python"}
     assert await store.aget("missing") is None
 
 
 @pytest.mark.asyncio
-async def test_sqlite_store_aset_many_and_afilter(store) -> None:
+async def test_sqlite_store_aset_many_and_afilter(store: BaseSQLiteStore) -> None:
     await store.aset_many(
         {
             "1": {"author": "Alice", "category": "Programming"},
@@ -1078,7 +1078,7 @@ async def test_sqlite_store_aset_many_and_afilter(store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sqlite_store_acontains_many(store) -> None:
+async def test_sqlite_store_acontains_many(store: BaseSQLiteStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     found, missing = await store.acontains_many(["1", "3"])
     assert found == ["1"]
@@ -1086,14 +1086,14 @@ async def test_sqlite_store_acontains_many(store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sqlite_store_adelete_acount(store) -> None:
+async def test_sqlite_store_adelete_acount(store: BaseSQLiteStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     await store.adelete("1")
     assert await store.acount() == 1
 
 
 @pytest.mark.asyncio
-async def test_sqlite_store_akeys_and_aiter_batches(store) -> None:
+async def test_sqlite_store_akeys_and_aiter_batches(store: BaseSQLiteStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
     assert sorted([key async for key in store.akeys()]) == ["1", "2", "3"]
     batches = [batch async for batch in store.aiter_batches(batch_size=2)]
@@ -1101,7 +1101,7 @@ async def test_sqlite_store_akeys_and_aiter_batches(store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sqlite_store_aclose_is_idempotent(store_cls) -> None:
+async def test_sqlite_store_aclose_is_idempotent(store_cls: type[BaseSQLiteStore]) -> None:
     store = store_cls(":memory:")
     await store.aget("1")  # forces the lazy async connection open
     await store.aclose()
@@ -1110,7 +1110,7 @@ async def test_sqlite_store_aclose_is_idempotent(store_cls) -> None:
 
 
 def test_sqlite_store_async_methods_work_without_aiosqlite(
-    store_cls, monkeypatch: pytest.MonkeyPatch
+    store_cls: type[BaseSQLiteStore], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import asyncio
 

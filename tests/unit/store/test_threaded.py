@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import copy
-from typing import Any
+from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 
 from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
 from persista.store.validation import normalize_on_conflict, validate_batch_size
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Mapping
+
+    from persista.store.types import OnConflict
 
 
 class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
@@ -22,17 +27,19 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
     def closed(self) -> bool:
         return self._closed
 
-    def get(self, key):
+    def get(self, key: str) -> dict[str, Any] | None:
         value = self._data.get(key)
         return copy.deepcopy(value) if value is not None else None
 
-    def get_many(self, keys):
+    def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
         return [self.get(key) for key in keys]
 
-    def set(self, key, value, on_conflict="overwrite") -> None:
+    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
 
-    def set_many(self, items, on_conflict="overwrite") -> None:
+    def set_many(
+        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+    ) -> None:
         on_conflict = normalize_on_conflict(on_conflict)
         conflicts = [key for key in items if key in self._data]
         if conflicts and on_conflict == "raise":
@@ -46,7 +53,7 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
                 continue
             self._data[key] = copy.deepcopy(value)
 
-    def filter(self, **field_filters):
+    def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         if not field_filters:
             return [copy.deepcopy(v) for v in self._data.values()]
         return [
@@ -55,41 +62,41 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
             if all(v.get(k) == val for k, val in field_filters.items())
         ]
 
-    def delete(self, key) -> None:
+    def delete(self, key: str) -> None:
         self._data.pop(key, None)
 
-    def delete_many(self, keys) -> None:
+    def delete_many(self, keys: list[str]) -> None:
         for key in keys:
             self.delete(key)
 
     def clear(self) -> None:
         self._data.clear()
 
-    def contains(self, key):
+    def contains(self, key: str) -> bool:
         return key in self._data
 
-    def contains_many(self, keys):
+    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         found = [key for key in keys if key in self._data]
         missing = [key for key in keys if key not in self._data]
         return found, missing
 
-    def keys(self):
+    def keys(self) -> Iterator[str]:
         yield from list(self._data.keys())
 
-    def iter_batches(self, batch_size: int = 32):
+    def iter_batches(self, batch_size: int = 32) -> Iterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
         items = list(self._data.items())
         for i in range(0, len(items), batch_size):
             yield dict(items[i : i + batch_size])
 
-    def count(self):
+    def count(self) -> int:
         return len(self._data)
 
     def to_uri(self) -> str:
         return "threaded-test://"
 
     @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False):
+    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
         return cls()
 
 
