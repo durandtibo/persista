@@ -14,7 +14,6 @@ __all__ = [
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from persista.store.async_redis import AsyncRedisStore
 from persista.store.duckdb import DuckDBStore, TypedDuckDBStore
 from persista.store.file import JsonFileStore, PickleFileStore
 from persista.store.in_memory import InMemoryStore
@@ -45,10 +44,7 @@ _SYNC_SCHEMES: dict[str, type[BaseStore]] = {
     "rediss": RedisStore,
 }
 
-_ASYNC_SCHEMES: dict[str, type[AsyncBaseStore]] = {
-    "redis": AsyncRedisStore,
-    "rediss": AsyncRedisStore,
-}
+_ASYNC_SCHEMES: dict[str, type[AsyncBaseStore]] = {}
 
 
 def register_scheme(scheme: str, store_cls: type[BaseStore]) -> None:

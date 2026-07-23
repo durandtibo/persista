@@ -501,3 +501,42 @@ def test_context_manager_multiple_open_close(store_cls: type[BaseRedisStore]) ->
     finally:
         with redis_store as store:
             store.delete_many(list(store.keys()))
+
+
+# --- async round trips ---
+
+
+@redis_available
+@redis_server_available
+@pytest.mark.asyncio
+async def test_redis_store_aget_aset_round_trip(store: BaseRedisStore) -> None:
+    await store.aset("1", {"title": "Intro to Python"})
+    assert await store.aget("1") == {"title": "Intro to Python"}
+
+
+@redis_available
+@redis_server_available
+@pytest.mark.asyncio
+async def test_redis_store_afilter(store: BaseRedisStore) -> None:
+    await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
+    assert await store.afilter(author="Alice") == [{"author": "Alice"}]
+
+
+@redis_available
+@redis_server_available
+@pytest.mark.asyncio
+async def test_redis_store_acontains_many(store: BaseRedisStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    found, missing = await store.acontains_many(["1", "3"])
+    assert found == ["1"]
+    assert missing == ["3"]
+
+
+@redis_available
+@redis_server_available
+@pytest.mark.asyncio
+async def test_redis_store_akeys_aclear(store: BaseRedisStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert sorted([key async for key in store.akeys()]) == ["1", "2"]
+    await store.aclear()
+    assert await store.acount() == 0
