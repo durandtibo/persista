@@ -157,9 +157,30 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
 
     def get(self, key: str) -> dict[str, Any] | None: ...      # uses self._conn, unchanged from today
     async def aget(self, key: str) -> dict[str, Any] | None:
+        if not is_aiosqlite_available():
+            return await asyncio.to_thread(self.get, key)
         conn = await self._ensure_aconn()
         ...
 ```
+
+`psycopg` and `redis` bundle their sync and async clients in the same
+package (`psycopg.AsyncConnection`, `redis.asyncio`), so `PostgresStore` and
+`RedisStore` can assume the native async driver is present whenever the
+package itself is installed (already required for the sync side, and
+already `check_psycopg()`/`check_redis()`-gated). `aiosqlite` is different:
+it's a separate optional dependency layered on top of the *stdlib*
+`sqlite3`, so a `SQLiteStore` can be constructed and used purely synchronously
+with no extra install. To keep that working, `SQLiteStore` no longer
+requires `aiosqlite` at all — it's checked lazily, only when an async method
+is actually called:
+
+- If `is_aiosqlite_available()` is `True`, async methods use the native
+  `aiosqlite` connection as shown above (best concurrency).
+- If `False`, async methods fall back to `asyncio.to_thread(self.get, ...)`
+  over the sync `sqlite3` connection instead — the same fallback strategy
+  as category B — rather than raising `ImportError`/calling
+  `check_aiosqlite()`. `aiosqlite` becomes purely a performance opt-in for
+  async SQLite users, not a hard requirement.
 
 Subclasses (`SQLiteStore`, `TypedSQLiteStore`, `PickleSQLiteStore`,
 `PostgresStore`, `TypedPostgresStore`, `RedisStore`, `PickleRedisStore`) keep
