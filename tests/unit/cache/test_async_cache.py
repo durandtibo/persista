@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from persista.cache.async_cache import AsyncCache
-from persista.store.async_in_memory import AsyncInMemoryStore
+from persista.store import BaseStore
+from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -39,13 +40,19 @@ def fake_time(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 def test_init_default_store() -> None:
     cache = AsyncCache()
-    assert isinstance(cache._store, AsyncInMemoryStore)
+    assert isinstance(cache._store, InMemoryStore)
 
 
 def test_init_custom_store() -> None:
-    store = AsyncInMemoryStore()
+    store = InMemoryStore()
     cache = AsyncCache(store=store)
     assert cache._store is store
+
+
+def test_async_cache_accepts_base_store_type() -> None:
+    store = InMemoryStore()
+    cache = AsyncCache(store=store)
+    assert isinstance(cache._store, BaseStore)
 
 
 def test_init_default_ttl_is_none() -> None:
@@ -106,12 +113,30 @@ async def test_get_expired(cache: AsyncCache, fake_time: list[float]) -> None:
 
 
 async def test_get_expired_evicts_entry(fake_time: list[float]) -> None:
-    store = AsyncInMemoryStore()
+    store = InMemoryStore()
     cache = AsyncCache(store=store)
     await cache.set("key", "value", ttl=10)
     fake_time[0] += 11
     await cache.get("key")
-    assert await store.get("key") is None
+    assert await store.aget("key") is None
+
+
+async def test_async_cache_full_round_trip_through_real_store() -> None:
+    """Regression test: exercises AsyncCache against a real InMemoryStore,
+    which would raise TypeError if any call site used the sync (unprefixed)
+    store methods instead of the async (a-prefixed) ones.
+    """
+    cache = AsyncCache(store=InMemoryStore())
+    await cache.set("key", "value")
+    assert await cache.get("key") == "value"
+    assert await cache.contains("key") is True
+    await cache.delete("key")
+    assert await cache.get("key") is None
+    await cache.set("key1", "value1")
+    await cache.set("key2", "value2")
+    await cache.clear()
+    assert await cache.get("key1") is None
+    assert await cache.get("key2") is None
 
 
 async def test_set_uses_default_ttl_when_not_given(fake_time: list[float]) -> None:
