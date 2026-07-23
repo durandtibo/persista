@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -668,6 +669,20 @@ async def test_close_from_running_event_loop_raises(store: BaseRedisStore) -> No
     await store._ensure_aclient()
     with pytest.raises(RuntimeError, match="inside a running event loop"):
         store.close()
+
+
+def test_close_with_already_closed_event_loop_logs_and_clears_aclient(
+    store: BaseRedisStore,
+) -> None:
+    """If the event loop that owned the async client is already closed
+    by the time ``close()`` runs synchronously, ``asyncio.run(...)``
+    raises ``RuntimeError``; ``close()`` should swallow it, log, and
+    still clear ``_aclient``."""
+    store._aclient = MagicMock()
+    with patch(f"{MODULE}.asyncio.run", side_effect=RuntimeError("event loop is closed")):
+        store.close()
+    assert store._aclient is None
+    assert store.closed
 
 
 # --- closed ---

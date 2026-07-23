@@ -129,6 +129,19 @@ async def test_threaded_mixin_aiter_batches_respects_batch_size() -> None:
     assert all(len(b) <= 2 for b in batches)
 
 
+async def test_threaded_mixin_aget_many() -> None:
+    store = _ThreadedTestStore()
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert await store.aget_many(["1", "3"]) == [{"a": 1}, None]
+
+
+async def test_threaded_mixin_adelete_many() -> None:
+    store = _ThreadedTestStore()
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    await store.adelete_many(["1", "2"])
+    assert await store.acount() == 0
+
+
 async def test_threaded_mixin_adelete_and_aclear() -> None:
     store = _ThreadedTestStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})

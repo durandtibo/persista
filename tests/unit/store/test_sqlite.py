@@ -1189,3 +1189,94 @@ async def test_sqlite_store_async_context_manager_reopens_after_close(
         await store.aset("1", {"a": 1})
         assert await store.aget("1") == {"a": 1}
     assert store.closed
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: async methods on the real (available) aiosqlite path
+# that aren't exercised by the round-trip tests above.
+# ---------------------------------------------------------------------------
+
+
+async def test_sqlite_store_aget_many_empty(store: BaseSQLiteStore) -> None:
+    assert await store.aget_many([]) == []
+
+
+async def test_sqlite_store_aget_many(store: BaseSQLiteStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    result = await store.aget_many(["1", "missing", "2"])
+    assert result == [{"a": 1}, None, {"a": 2}]
+
+
+async def test_sqlite_store_aset_many_empty_items(store: BaseSQLiteStore) -> None:
+    assert await store.aset_many({}) is None
+
+
+async def test_sqlite_store_aset_on_conflict_raise(store: BaseSQLiteStore) -> None:
+    await store.aset("1", {"text": "original"})
+    with pytest.raises(KeyError, match=r"1"):
+        await store.aset("1", {"text": "updated"}, on_conflict="raise")
+    assert await store.aget("1") == {"text": "original"}
+
+
+async def test_sqlite_store_aset_on_conflict_skip(store: BaseSQLiteStore) -> None:
+    await store.aset("1", {"text": "original"})
+    await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
+    assert await store.aget("1") == {"text": "original"}
+    assert await store.aget("2") == {"text": "new"}
+
+
+async def test_sqlite_store_aset_many_merge_with_new_key(store: BaseSQLiteStore) -> None:
+    """Exercises the non-conflicting-key branch of ``aset_many`` when
+    ``on_conflict != 'overwrite'`` (a key not already present is written
+    directly, without going through ``aget``)."""
+    await store.aset("1", {"text": "original", "author": "Alice"})
+    await store.aset_many(
+        {"1": {"text": "updated"}, "2": {"text": "brand new"}}, on_conflict="merge"
+    )
+    assert await store.aget("1") == {"text": "updated", "author": "Alice"}
+    assert await store.aget("2") == {"text": "brand new"}
+
+
+async def test_sqlite_store_aset_many_skip_all_writes_nothing(store: BaseSQLiteStore) -> None:
+    """When every key conflicts and ``on_conflict='skip'``, ``to_write``
+    ends up empty, exercising the ``if items:`` false branch of
+    ``_aset_many``."""
+    await store.aset("1", {"text": "original"})
+    await store.aset_many({"1": {"text": "updated"}}, on_conflict="skip")
+    assert await store.aget("1") == {"text": "original"}
+
+
+async def test_sqlite_store_afilter_no_filters(store: BaseSQLiteStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    result = await store.afilter()
+    assert len(result) == 2
+
+
+async def test_sqlite_store_adelete_many_empty(store: BaseSQLiteStore) -> None:
+    assert await store.adelete_many([]) is None
+
+
+async def test_sqlite_store_adelete_many(store: BaseSQLiteStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    await store.adelete_many(["1", "3"])
+    assert await store.acount() == 1
+    assert await store.aget("2") is not None
+
+
+async def test_sqlite_store_aclear(store: BaseSQLiteStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    await store.aclear()
+    assert await store.acount() == 0
+
+
+async def test_sqlite_store_acontains_many_empty(store: BaseSQLiteStore) -> None:
+    assert await store.acontains_many([]) == ([], [])
+
+
+async def test_sqlite_store_aiter_batches_exact_multiple(store: BaseSQLiteStore) -> None:
+    """When the item count is an exact multiple of ``batch_size``, the
+    trailing ``if batch:`` check at the end of ``aiter_batches`` is
+    false, exercising that branch."""
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert sum(len(b) for b in batches) == 2

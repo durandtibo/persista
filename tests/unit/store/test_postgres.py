@@ -5,7 +5,7 @@ import logging
 import re
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -1423,3 +1423,98 @@ async def test_postgres_store_async_context_manager(store_cls: type[BasePostgres
         await astore.adelete("1")
         assert await astore.acount() == 1
     assert store._conn.closed
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: async branches not exercised above.
+# ---------------------------------------------------------------------------
+
+
+async def test_ensure_aconn_opens_connection_lazily(
+    store_cls: type[BasePostgresStore],
+) -> None:
+    """The lazy async connection is opened on first async use; the
+    ``store`` fixture pre-populates it via ``_connect()``, so exercise
+    the real opening path (lines 100-103 of ``_ensure_aconn``) directly
+    here."""
+    conn = FakeConnection()
+    aconn_fake = FakeConnection()
+    aconn = _AsyncConnAdapter(aconn_fake)
+    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
+        store = store_cls("postgresql://x", table="store")
+    aconn_fake.store = store
+    assert store._aconn is None
+    with patch(f"{MODULE}.psycopg.AsyncConnection.connect", new=AsyncMock(return_value=aconn)):
+        await store.aget("missing")
+    assert store._aconn is aconn
+
+
+async def test_postgres_store_aget_many_empty(store: BasePostgresStore) -> None:
+    assert await store.aget_many([]) == []
+
+
+async def test_postgres_store_aget_many(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    result = await store.aget_many(["1", "missing", "2"])
+    assert result[0] == {"a": 1}
+    assert result[1] is None
+    assert result[2] == {"a": 2}
+
+
+async def test_postgres_store_aset_many_empty_items(store: BasePostgresStore) -> None:
+    assert await store.aset_many({}) is None
+
+
+async def test_postgres_store_aset_on_conflict_skip(store: BasePostgresStore) -> None:
+    await store.aset("1", {"text": "original"})
+    await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
+    assert await store.aget("1") == {"text": "original"}
+    assert await store.aget("2") == {"text": "new"}
+
+
+async def test_postgres_store_aset_many_merge_with_new_key(store: BasePostgresStore) -> None:
+    """Exercises the non-conflicting-key branch of ``aset_many`` when
+    ``on_conflict != 'overwrite'`` (a key not already present is written
+    directly, without going through ``aget``)."""
+    await store.aset("1", {"text": "original"})
+    await store.aset_many(
+        {"1": {"text": "updated"}, "2": {"text": "brand new"}}, on_conflict="merge"
+    )
+    assert await store.aget("1") == {"text": "updated"}
+    assert await store.aget("2") == {"text": "brand new"}
+
+
+async def test_postgres_store_aset_many_skip_all_writes_nothing(
+    store: BasePostgresStore,
+) -> None:
+    """When every key conflicts and ``on_conflict='skip'``, ``to_write``
+    ends up empty, exercising the ``if items:`` false branch of
+    ``_aset_many``."""
+    await store.aset("1", {"text": "original"})
+    await store.aset_many({"1": {"text": "updated"}}, on_conflict="skip")
+    assert await store.aget("1") == {"text": "original"}
+
+
+async def test_postgres_store_afilter_no_filters(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    result = await store.afilter()
+    assert len(result) == 2
+
+
+async def test_postgres_store_adelete_many_empty(store: BasePostgresStore) -> None:
+    assert await store.adelete_many([]) is None
+
+
+async def test_postgres_store_acontains_many_empty(store: BasePostgresStore) -> None:
+    assert await store.acontains_many([]) == ([], [])
+
+
+async def test_postgres_store_aiter_batches_exact_multiple(
+    store: BasePostgresStore,
+) -> None:
+    """When the item count is an exact multiple of ``batch_size``, the
+    trailing ``if batch:`` check at the end of ``aiter_batches`` is
+    false, exercising that branch."""
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert sum(len(b) for b in batches) == 2
