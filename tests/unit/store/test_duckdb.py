@@ -976,19 +976,16 @@ def test_from_uri_read_only(
 # --- async methods ---
 
 
-@pytest.mark.asyncio
 async def test_duckdb_store_aget_aset_round_trip(store: BaseDuckDBStore) -> None:
     await store.aset("1", {"a": 1})
     assert await store.aget("1") == {"a": 1}
 
 
-@pytest.mark.asyncio
 async def test_duckdb_store_afilter(store: BaseDuckDBStore) -> None:
     await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
     assert await store.afilter(author="Alice") == [{"author": "Alice"}]
 
 
-@pytest.mark.asyncio
 async def test_duckdb_store_acount(store: BaseDuckDBStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     assert await store.acount() == 2

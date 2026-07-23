@@ -761,19 +761,16 @@ def test_pickle_file_store_scheme(tmp_path: Path) -> None:
 # --- async methods ---
 
 
-@pytest.mark.asyncio
 async def test_file_store_aget_aset_round_trip(store: BaseFileStore) -> None:
     await store.aset("1", {"a": 1})
     assert await store.aget("1") == {"a": 1}
 
 
-@pytest.mark.asyncio
 async def test_file_store_afilter(store: BaseFileStore) -> None:
     await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
     assert await store.afilter(author="Alice") == [{"author": "Alice"}]
 
 
-@pytest.mark.asyncio
 async def test_file_store_acount_adelete(store: BaseFileStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     assert await store.acount() == 2
@@ -781,7 +778,6 @@ async def test_file_store_acount_adelete(store: BaseFileStore) -> None:
     assert await store.acount() == 1
 
 
-@pytest.mark.asyncio
 async def test_file_store_akeys(store: BaseFileStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     assert sorted([key async for key in store.akeys()]) == ["1", "2"]

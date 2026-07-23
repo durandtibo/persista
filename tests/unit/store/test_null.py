@@ -228,49 +228,42 @@ def test_from_uri_returns_new_store() -> None:
 # --- async ---
 
 
-@pytest.mark.asyncio
 async def test_null_store_aget_always_none() -> None:
     store = NullStore()
     await store.aset("1", {"a": 1})
     assert await store.aget("1") is None
 
 
-@pytest.mark.asyncio
 async def test_null_store_acontains_always_false() -> None:
     store = NullStore()
     await store.aset("1", {"a": 1})
     assert await store.acontains("1") is False
 
 
-@pytest.mark.asyncio
 async def test_null_store_acount_always_zero() -> None:
     store = NullStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     assert await store.acount() == 0
 
 
-@pytest.mark.asyncio
 async def test_null_store_akeys_empty() -> None:
     store = NullStore()
     keys = [key async for key in store.akeys()]
     assert keys == []
 
 
-@pytest.mark.asyncio
 async def test_null_store_aiter_batches_empty() -> None:
     store = NullStore()
     batches = [batch async for batch in store.aiter_batches()]
     assert batches == []
 
 
-@pytest.mark.asyncio
 async def test_null_store_afilter_always_empty() -> None:
     store = NullStore()
     await store.aset("1", {"a": 1})
     assert await store.afilter(a=1) == []
 
 
-@pytest.mark.asyncio
 async def test_null_store_async_context_manager() -> None:
     async with NullStore() as store:
         assert not store.closed

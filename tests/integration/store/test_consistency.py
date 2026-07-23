@@ -542,18 +542,15 @@ def test_cross_store_outputs_are_identical(items: dict[str, dict[str, Any]]) -> 
 # --- aget / aset ---
 
 
-@pytest.mark.asyncio
 async def test_aget_missing_key_returns_none(store: BaseStore) -> None:
     assert await store.aget("nonexistent") is None
 
 
-@pytest.mark.asyncio
 async def test_aset_then_aget_round_trips(store: BaseStore) -> None:
     await store.aset("1", {"text": "hello", "n": 1})
     assert await store.aget("1") == {"text": "hello", "n": 1}
 
 
-@pytest.mark.asyncio
 async def test_aset_default_overwrites_existing(store: BaseStore) -> None:
     await store.aset("1", {"text": "original"})
     await store.aset("1", {"text": "updated"})
@@ -561,7 +558,6 @@ async def test_aset_default_overwrites_existing(store: BaseStore) -> None:
     assert await store.acount() == 1
 
 
-@pytest.mark.asyncio
 async def test_aset_on_conflict_raise(store: BaseStore) -> None:
     await store.aset("1", {"text": "original"})
     with pytest.raises(KeyError, match=r"1"):
@@ -569,28 +565,24 @@ async def test_aset_on_conflict_raise(store: BaseStore) -> None:
     assert await store.aget("1") == {"text": "original"}
 
 
-@pytest.mark.asyncio
 async def test_aset_on_conflict_skip(store: BaseStore) -> None:
     await store.aset("1", {"text": "original"})
     await store.aset("1", {"text": "updated"}, on_conflict="skip")
     assert await store.aget("1") == {"text": "original"}
 
 
-@pytest.mark.asyncio
 async def test_aset_on_conflict_overwrite(store: BaseStore) -> None:
     await store.aset("1", {"text": "original"})
     await store.aset("1", {"text": "updated"}, on_conflict="overwrite")
     assert await store.aget("1") == {"text": "updated"}
 
 
-@pytest.mark.asyncio
 async def test_aset_on_conflict_merge(store: BaseStore) -> None:
     await store.aset("1", {"text": "original", "author": "Alice"})
     await store.aset("1", {"text": "updated"}, on_conflict="merge")
     assert await store.aget("1") == {"text": "updated", "author": "Alice"}
 
 
-@pytest.mark.asyncio
 async def test_aset_on_conflict_invalid_raises(store: BaseStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
         await store.aset("1", {"text": "hello"}, on_conflict="bogus")
@@ -599,7 +591,6 @@ async def test_aset_on_conflict_invalid_raises(store: BaseStore) -> None:
 # --- aget_many ---
 
 
-@pytest.mark.asyncio
 async def test_aget_many_preserves_order(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -607,7 +598,6 @@ async def test_aget_many_preserves_order(
     assert await store.aget_many(["3", "1", "2"]) == [items["3"], items["1"], items["2"]]
 
 
-@pytest.mark.asyncio
 async def test_aget_many_returns_none_for_missing(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -616,7 +606,6 @@ async def test_aget_many_returns_none_for_missing(
     assert result[1] is None
 
 
-@pytest.mark.asyncio
 async def test_aget_many_empty_list_returns_empty_list(store: BaseStore) -> None:
     assert await store.aget_many([]) == []
 
@@ -624,7 +613,6 @@ async def test_aget_many_empty_list_returns_empty_list(store: BaseStore) -> None
 # --- aset_many ---
 
 
-@pytest.mark.asyncio
 async def test_aset_many_increases_count(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -632,13 +620,11 @@ async def test_aset_many_increases_count(
     assert await store.acount() == len(items)
 
 
-@pytest.mark.asyncio
 async def test_aset_many_empty_is_no_op(store: BaseStore) -> None:
     await store.aset_many({})
     assert await store.acount() == 0
 
 
-@pytest.mark.asyncio
 async def test_aset_many_on_conflict_raise(store: BaseStore) -> None:
     await store.aset_many({"1": {"text": "original"}, "2": {"text": "other"}})
     with pytest.raises(KeyError, match=r"1"):
@@ -647,7 +633,6 @@ async def test_aset_many_on_conflict_raise(store: BaseStore) -> None:
     assert await store.aget("3") is None
 
 
-@pytest.mark.asyncio
 async def test_aset_many_on_conflict_skip(store: BaseStore) -> None:
     await store.aset_many({"1": {"text": "original"}})
     await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
@@ -655,7 +640,6 @@ async def test_aset_many_on_conflict_skip(store: BaseStore) -> None:
     assert await store.aget("2") == {"text": "new"}
 
 
-@pytest.mark.asyncio
 async def test_aset_many_on_conflict_merge(store: BaseStore) -> None:
     await store.aset_many({"1": {"text": "original", "author": "Alice"}})
     await store.aset_many({"1": {"text": "updated"}}, on_conflict="merge")
@@ -665,14 +649,12 @@ async def test_aset_many_on_conflict_merge(store: BaseStore) -> None:
 # --- aset_batches ---
 
 
-@pytest.mark.asyncio
 async def test_aset_batches_writes_all_pairs(store: BaseStore) -> None:
     await store.aset_batches([("1", {"v": 1}), ("2", {"v": 2}), ("3", {"v": 3})], batch_size=2)
     assert await store.acount() == 3
     assert await store.aget("2") == {"v": 2}
 
 
-@pytest.mark.asyncio
 async def test_aset_batches_empty_is_no_op(store: BaseStore) -> None:
     await store.aset_batches([])
     assert await store.acount() == 0
@@ -681,7 +663,6 @@ async def test_aset_batches_empty_is_no_op(store: BaseStore) -> None:
 # --- afilter ---
 
 
-@pytest.mark.asyncio
 async def test_afilter_no_args_returns_all(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -689,7 +670,6 @@ async def test_afilter_no_args_returns_all(
     assert len(await store.afilter()) == len(items)
 
 
-@pytest.mark.asyncio
 async def test_afilter_single_field(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     await store.aset_many(items)
     result = await store.afilter(author="Alice")
@@ -697,13 +677,11 @@ async def test_afilter_single_field(store: BaseStore, items: dict[str, dict[str,
     assert len(result) == 2
 
 
-@pytest.mark.asyncio
 async def test_afilter_multiple_fields(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     await store.aset_many(items)
     assert len(await store.afilter(author="Alice", category="Programming")) == 2
 
 
-@pytest.mark.asyncio
 async def test_afilter_no_match_returns_empty(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -711,7 +689,6 @@ async def test_afilter_no_match_returns_empty(
     assert await store.afilter(author="Charlie") == []
 
 
-@pytest.mark.asyncio
 async def test_afilter_integer_field_value(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -721,7 +698,6 @@ async def test_afilter_integer_field_value(
     assert result[0]["title"] == "Intro to Python"
 
 
-@pytest.mark.asyncio
 async def test_afilter_empty_store_returns_empty(store: BaseStore) -> None:
     assert await store.afilter(author="Alice") == []
 
@@ -729,7 +705,6 @@ async def test_afilter_empty_store_returns_empty(store: BaseStore) -> None:
 # --- adelete / adelete_many ---
 
 
-@pytest.mark.asyncio
 async def test_adelete_removes_value(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     await store.aset_many(items)
     await store.adelete("1")
@@ -737,12 +712,10 @@ async def test_adelete_removes_value(store: BaseStore, items: dict[str, dict[str
     assert await store.aget("1") is None
 
 
-@pytest.mark.asyncio
 async def test_adelete_nonexistent_is_silent(store: BaseStore) -> None:
     await store.adelete("nonexistent")
 
 
-@pytest.mark.asyncio
 async def test_adelete_many_removes_values(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -753,7 +726,6 @@ async def test_adelete_many_removes_values(
     assert await store.aget("3") is None
 
 
-@pytest.mark.asyncio
 async def test_adelete_many_empty_list_is_no_op(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -762,7 +734,6 @@ async def test_adelete_many_empty_list_is_no_op(
     assert await store.acount() == len(items)
 
 
-@pytest.mark.asyncio
 async def test_adelete_many_nonexistent_keys_are_silent(store: BaseStore) -> None:
     await store.adelete_many(["99", "100"])
 
@@ -770,7 +741,6 @@ async def test_adelete_many_nonexistent_keys_are_silent(store: BaseStore) -> Non
 # --- aclear ---
 
 
-@pytest.mark.asyncio
 async def test_aclear_removes_all_values(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -780,18 +750,15 @@ async def test_aclear_removes_all_values(
     assert [key async for key in store.akeys()] == []
 
 
-@pytest.mark.asyncio
 async def test_aclear_empty_store_is_no_op(store: BaseStore) -> None:
     await store.aclear()
     assert await store.acount() == 0
 
 
-@pytest.mark.asyncio
 async def test_aclear_returns_none(store: BaseStore) -> None:
     assert await store.aclear() is None
 
 
-@pytest.mark.asyncio
 async def test_aclear_then_aset_works(store: BaseStore) -> None:
     await store.aset("1", {"text": "hello"})
     await store.aclear()
@@ -803,7 +770,6 @@ async def test_aclear_then_aset_works(store: BaseStore) -> None:
 # --- acontains_many ---
 
 
-@pytest.mark.asyncio
 async def test_acontains_many_mixed(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     await store.aset_many(items)
     found, missing = await store.acontains_many(["1", "99", "3", "42"])
@@ -811,12 +777,10 @@ async def test_acontains_many_mixed(store: BaseStore, items: dict[str, dict[str,
     assert sorted(missing) == ["42", "99"]
 
 
-@pytest.mark.asyncio
 async def test_acontains_many_empty_input_returns_empty_lists(store: BaseStore) -> None:
     assert await store.acontains_many([]) == ([], [])
 
 
-@pytest.mark.asyncio
 async def test_acontains_many_empty_store_returns_all_missing(store: BaseStore) -> None:
     found, missing = await store.acontains_many(["1", "2"])
     assert found == []
@@ -826,19 +790,16 @@ async def test_acontains_many_empty_store_returns_all_missing(store: BaseStore) 
 # --- akeys / avalues ---
 
 
-@pytest.mark.asyncio
 async def test_akeys_empty_store_yields_nothing(store: BaseStore) -> None:
     assert [key async for key in store.akeys()] == []
 
 
-@pytest.mark.asyncio
 async def test_akeys_returns_all_keys(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     await store.aset_many(items)
     result = [key async for key in store.akeys()]
     assert sorted(result) == sorted(items.keys())
 
 
-@pytest.mark.asyncio
 async def test_avalues_returns_all_values(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -851,17 +812,14 @@ async def test_avalues_returns_all_values(
 # --- aiter_batches ---
 
 
-@pytest.mark.asyncio
 async def test_aiter_batches_empty_store_yields_nothing(store: BaseStore) -> None:
     assert [batch async for batch in store.aiter_batches()] == []
 
 
-@pytest.mark.asyncio
 async def test_aiter_batches_returns_async_iterator(store: BaseStore) -> None:
     assert isinstance(store.aiter_batches(), AsyncIterator)
 
 
-@pytest.mark.asyncio
 async def test_aiter_batches_returns_all_key_value_pairs(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -872,7 +830,6 @@ async def test_aiter_batches_returns_all_key_value_pairs(
     assert result == items
 
 
-@pytest.mark.asyncio
 async def test_aiter_batches_yields_correct_batch_sizes(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -881,7 +838,6 @@ async def test_aiter_batches_yields_correct_batch_sizes(
     assert sorted(len(b) for b in batches) == [2, 2]
 
 
-@pytest.mark.asyncio
 async def test_aiter_batches_zero_batch_size_raises(store: BaseStore) -> None:
     with pytest.raises(ValueError, match="batch_size must be a positive integer"):
         async for _ in store.aiter_batches(batch_size=0):
@@ -891,12 +847,10 @@ async def test_aiter_batches_zero_batch_size_raises(store: BaseStore) -> None:
 # --- acount ---
 
 
-@pytest.mark.asyncio
 async def test_acount_empty_store(store: BaseStore) -> None:
     assert await store.acount() == 0
 
 
-@pytest.mark.asyncio
 async def test_acount_after_aset_many(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     await store.aset_many(items)
     assert await store.acount() == len(items)
@@ -905,18 +859,15 @@ async def test_acount_after_aset_many(store: BaseStore, items: dict[str, dict[st
 # --- aclose / async context manager ---
 
 
-@pytest.mark.asyncio
 async def test_aclose_is_idempotent(store: BaseStore) -> None:
     await store.aclose()
     await store.aclose()  # should not raise
 
 
-@pytest.mark.asyncio
 async def test_aclose_returns_none(store: BaseStore) -> None:
     assert await store.aclose() is None
 
 
-@pytest.mark.asyncio
 async def test_async_context_manager_usable_for_reads_and_writes(store: BaseStore) -> None:
     await store.aset_many(
         {
@@ -949,7 +900,6 @@ async def _all_available_stores_async() -> AsyncIterator[tuple[str, BaseStore]]:
         yield store_id, store
 
 
-@pytest.mark.asyncio
 async def test_cross_store_outputs_are_identical_async(items: dict[str, dict[str, Any]]) -> None:
     results: dict[str, Any] = {}
     stores: list[BaseStore] = []

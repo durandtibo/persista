@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any, Self
-
-import pytest
+from typing import TYPE_CHECKING, Any
 
 from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
@@ -11,6 +9,7 @@ from persista.store.validation import normalize_on_conflict, validate_batch_size
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
+    from typing import Self
 
     from persista.store.types import OnConflict
 
@@ -100,7 +99,6 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
         return cls()
 
 
-@pytest.mark.asyncio
 async def test_threaded_mixin_aget_aset_round_trip() -> None:
     store = _ThreadedTestStore()
     await store.aset("1", {"a": 1})
@@ -108,7 +106,6 @@ async def test_threaded_mixin_aget_aset_round_trip() -> None:
     assert await store.aget("missing") is None
 
 
-@pytest.mark.asyncio
 async def test_threaded_mixin_aset_many_and_acontains_many() -> None:
     store = _ThreadedTestStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
@@ -117,7 +114,6 @@ async def test_threaded_mixin_aset_many_and_acontains_many() -> None:
     assert missing == ["3"]
 
 
-@pytest.mark.asyncio
 async def test_threaded_mixin_akeys_yields_all_keys() -> None:
     store = _ThreadedTestStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
@@ -125,7 +121,6 @@ async def test_threaded_mixin_akeys_yields_all_keys() -> None:
     assert keys == ["1", "2"]
 
 
-@pytest.mark.asyncio
 async def test_threaded_mixin_aiter_batches_respects_batch_size() -> None:
     store = _ThreadedTestStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
@@ -134,7 +129,6 @@ async def test_threaded_mixin_aiter_batches_respects_batch_size() -> None:
     assert all(len(b) <= 2 for b in batches)
 
 
-@pytest.mark.asyncio
 async def test_threaded_mixin_adelete_and_aclear() -> None:
     store = _ThreadedTestStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
@@ -144,14 +138,12 @@ async def test_threaded_mixin_adelete_and_aclear() -> None:
     assert await store.acount() == 0
 
 
-@pytest.mark.asyncio
 async def test_threaded_mixin_aclose_sets_closed() -> None:
     store = _ThreadedTestStore()
     await store.aclose()
     assert store.closed
 
 
-@pytest.mark.asyncio
 async def test_threaded_mixin_afilter_matches_field() -> None:
     store = _ThreadedTestStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})

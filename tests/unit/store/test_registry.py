@@ -8,7 +8,6 @@ def test_store_from_uri_memory_scheme() -> None:
     assert isinstance(store, InMemoryStore)
 
 
-@pytest.mark.asyncio
 async def test_store_from_uri_result_supports_async_methods() -> None:
     store = store_from_uri("memory://")
     await store.aset("1", {"a": 1})

@@ -772,12 +772,10 @@ async def astore(
 # --- aget / aget_many ---
 
 
-@pytest.mark.asyncio
 async def test_aget_missing_key_returns_none(astore: BaseRedisStore) -> None:
     assert await astore.aget("nonexistent") is None
 
 
-@pytest.mark.asyncio
 async def test_aget_existing_value(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -785,7 +783,6 @@ async def test_aget_existing_value(
     assert await astore.aget("1") == items["1"]
 
 
-@pytest.mark.asyncio
 async def test_aget_many_preserves_order(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -794,7 +791,6 @@ async def test_aget_many_preserves_order(
     assert result == [items["3"], items["1"], items["2"]]
 
 
-@pytest.mark.asyncio
 async def test_aget_many_empty_list_returns_empty_list(astore: BaseRedisStore) -> None:
     assert await astore.aget_many([]) == []
 
@@ -802,20 +798,17 @@ async def test_aget_many_empty_list_returns_empty_list(astore: BaseRedisStore) -
 # --- aset / aset_many ---
 
 
-@pytest.mark.asyncio
 async def test_aset_increases_count(astore: BaseRedisStore) -> None:
     await astore.aset("1", {"text": "hello"})
     assert await astore.acount() == 1
 
 
-@pytest.mark.asyncio
 async def test_aset_default_overwrites_existing(astore: BaseRedisStore) -> None:
     await astore.aset("1", {"text": "original"})
     await astore.aset("1", {"text": "updated"})
     assert await astore.aget("1") == {"text": "updated"}
 
 
-@pytest.mark.asyncio
 async def test_aset_on_conflict_raise(astore: BaseRedisStore) -> None:
     await astore.aset("1", {"text": "original"})
     with pytest.raises(KeyError, match=r"1"):
@@ -823,27 +816,23 @@ async def test_aset_on_conflict_raise(astore: BaseRedisStore) -> None:
     assert await astore.aget("1") == {"text": "original"}
 
 
-@pytest.mark.asyncio
 async def test_aset_on_conflict_skip(astore: BaseRedisStore) -> None:
     await astore.aset("1", {"text": "original"})
     await astore.aset("1", {"text": "updated"}, on_conflict="skip")
     assert await astore.aget("1") == {"text": "original"}
 
 
-@pytest.mark.asyncio
 async def test_aset_on_conflict_merge(astore: BaseRedisStore) -> None:
     await astore.aset("1", {"text": "original", "author": "Alice"})
     await astore.aset("1", {"text": "updated"}, on_conflict="merge")
     assert await astore.aget("1") == {"text": "updated", "author": "Alice"}
 
 
-@pytest.mark.asyncio
 async def test_aset_on_conflict_invalid_raises(astore: BaseRedisStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
         await astore.aset("1", {"text": "hello"}, on_conflict="bogus")
 
 
-@pytest.mark.asyncio
 async def test_aset_many_increases_count(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -851,13 +840,11 @@ async def test_aset_many_increases_count(
     assert await astore.acount() == len(items)
 
 
-@pytest.mark.asyncio
 async def test_aset_many_empty_is_no_op(astore: BaseRedisStore) -> None:
     await astore.aset_many({})
     assert await astore.acount() == 0
 
 
-@pytest.mark.asyncio
 async def test_aset_many_on_conflict_raise(astore: BaseRedisStore) -> None:
     await astore.aset_many({"1": {"text": "original"}, "2": {"text": "other"}})
     with pytest.raises(KeyError, match=r"1"):
@@ -868,7 +855,6 @@ async def test_aset_many_on_conflict_raise(astore: BaseRedisStore) -> None:
     assert await astore.aget("3") is None
 
 
-@pytest.mark.asyncio
 async def test_aset_many_on_conflict_skip(astore: BaseRedisStore) -> None:
     await astore.aset_many({"1": {"text": "original"}})
     await astore.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
@@ -876,7 +862,6 @@ async def test_aset_many_on_conflict_skip(astore: BaseRedisStore) -> None:
     assert await astore.aget("2") == {"text": "new"}
 
 
-@pytest.mark.asyncio
 async def test_aset_many_on_conflict_merge(astore: BaseRedisStore) -> None:
     await astore.aset_many({"1": {"text": "original", "author": "Alice"}})
     await astore.aset_many({"1": {"text": "updated"}}, on_conflict="merge")
@@ -886,7 +871,6 @@ async def test_aset_many_on_conflict_merge(astore: BaseRedisStore) -> None:
 # --- afilter ---
 
 
-@pytest.mark.asyncio
 async def test_afilter_no_args_returns_all(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -894,7 +878,6 @@ async def test_afilter_no_args_returns_all(
     assert len(await astore.afilter()) == len(items)
 
 
-@pytest.mark.asyncio
 async def test_afilter_single_field(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -904,7 +887,6 @@ async def test_afilter_single_field(
     assert len(result) == 2
 
 
-@pytest.mark.asyncio
 async def test_afilter_no_match_returns_empty(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -915,7 +897,6 @@ async def test_afilter_no_match_returns_empty(
 # --- adelete / adelete_many ---
 
 
-@pytest.mark.asyncio
 async def test_adelete_removes_value(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -925,12 +906,10 @@ async def test_adelete_removes_value(
     assert await astore.aget("1") is None
 
 
-@pytest.mark.asyncio
 async def test_adelete_nonexistent_is_silent(astore: BaseRedisStore) -> None:
     await astore.adelete("nonexistent")
 
 
-@pytest.mark.asyncio
 async def test_adelete_many_removes_values(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -941,7 +920,6 @@ async def test_adelete_many_removes_values(
     assert await astore.aget("3") is None
 
 
-@pytest.mark.asyncio
 async def test_adelete_many_empty_list_is_no_op(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -953,7 +931,6 @@ async def test_adelete_many_empty_list_is_no_op(
 # --- aclear ---
 
 
-@pytest.mark.asyncio
 async def test_aclear_removes_all_values(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -963,7 +940,6 @@ async def test_aclear_removes_all_values(
     assert [key async for key in astore.akeys()] == []
 
 
-@pytest.mark.asyncio
 async def test_aclear_empty_store_is_no_op(astore: BaseRedisStore) -> None:
     await astore.aclear()
     assert await astore.acount() == 0
@@ -972,7 +948,6 @@ async def test_aclear_empty_store_is_no_op(astore: BaseRedisStore) -> None:
 # --- acontains / acontains_many ---
 
 
-@pytest.mark.asyncio
 async def test_acontains_true_when_key_present(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -980,12 +955,10 @@ async def test_acontains_true_when_key_present(
     assert await astore.acontains("1")
 
 
-@pytest.mark.asyncio
 async def test_acontains_false_when_key_missing(astore: BaseRedisStore) -> None:
     assert not await astore.acontains("99")
 
 
-@pytest.mark.asyncio
 async def test_acontains_many_mixed(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -995,7 +968,6 @@ async def test_acontains_many_mixed(
     assert sorted(missing) == ["42", "99"]
 
 
-@pytest.mark.asyncio
 async def test_acontains_many_empty_input_returns_empty_lists(astore: BaseRedisStore) -> None:
     found, missing = await astore.acontains_many([])
     assert found == []
@@ -1005,12 +977,10 @@ async def test_acontains_many_empty_input_returns_empty_lists(astore: BaseRedisS
 # --- akeys / avalues ---
 
 
-@pytest.mark.asyncio
 async def test_akeys_empty_store_yields_nothing(astore: BaseRedisStore) -> None:
     assert [key async for key in astore.akeys()] == []
 
 
-@pytest.mark.asyncio
 async def test_akeys_returns_all_keys(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -1019,7 +989,6 @@ async def test_akeys_returns_all_keys(
     assert sorted(result) == sorted(items.keys())
 
 
-@pytest.mark.asyncio
 async def test_avalues_returns_all_values(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -1032,17 +1001,14 @@ async def test_avalues_returns_all_values(
 # --- aiter_batches ---
 
 
-@pytest.mark.asyncio
 async def test_aiter_batches_empty_store_yields_nothing(astore: BaseRedisStore) -> None:
     assert [batch async for batch in astore.aiter_batches()] == []
 
 
-@pytest.mark.asyncio
 async def test_aiter_batches_returns_async_iterator(astore: BaseRedisStore) -> None:
     assert isinstance(astore.aiter_batches(), AsyncIterator)
 
 
-@pytest.mark.asyncio
 async def test_aiter_batches_returns_all_key_value_pairs(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -1053,7 +1019,6 @@ async def test_aiter_batches_returns_all_key_value_pairs(
     assert result == items
 
 
-@pytest.mark.asyncio
 async def test_aiter_batches_yields_correct_batch_sizes(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -1062,7 +1027,6 @@ async def test_aiter_batches_yields_correct_batch_sizes(
     assert sorted(len(b) for b in batches) == [2, 2]
 
 
-@pytest.mark.asyncio
 async def test_aiter_batches_zero_batch_size_raises(astore: BaseRedisStore) -> None:
     with pytest.raises(ValueError, match="batch_size must be a positive integer"):
         async for _ in astore.aiter_batches(batch_size=0):
@@ -1072,18 +1036,15 @@ async def test_aiter_batches_zero_batch_size_raises(astore: BaseRedisStore) -> N
 # --- aclose / async context manager ---
 
 
-@pytest.mark.asyncio
 async def test_aclose_is_idempotent(astore: BaseRedisStore) -> None:
     await astore.aclose()
     await astore.aclose()  # should not raise
 
 
-@pytest.mark.asyncio
 async def test_aclose_returns_none(astore: BaseRedisStore) -> None:
     assert await astore.aclose() is None
 
 
-@pytest.mark.asyncio
 async def test_async_context_manager_returns_self(
     monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
 ) -> None:
@@ -1093,7 +1054,6 @@ async def test_async_context_manager_returns_self(
         assert isinstance(store, store_cls)
 
 
-@pytest.mark.asyncio
 async def test_async_context_manager_usable_for_reads_and_writes(
     astore: BaseRedisStore,
 ) -> None:

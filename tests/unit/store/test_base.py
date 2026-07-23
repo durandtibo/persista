@@ -3,8 +3,6 @@ from __future__ import annotations
 import copy
 from typing import TYPE_CHECKING, Any
 
-import pytest
-
 from persista.store import BaseStore, normalize_on_conflict, validate_batch_size
 
 if TYPE_CHECKING:
@@ -157,7 +155,6 @@ def test_base_store_values_iterates_all() -> None:
     assert sorted(v["a"] for v in store.values(batch_size=2)) == [1, 2, 3]
 
 
-@pytest.mark.asyncio
 async def test_base_store_avalues_iterates_all() -> None:
     store = InMemoryTestStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
@@ -171,7 +168,6 @@ def test_base_store_set_batches() -> None:
     assert store.count() == 2
 
 
-@pytest.mark.asyncio
 async def test_base_store_aset_batches() -> None:
     store = InMemoryTestStore()
     await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})], batch_size=1)
@@ -184,7 +180,6 @@ def test_base_store_sync_context_manager_calls_close() -> None:
     assert store.closed
 
 
-@pytest.mark.asyncio
 async def test_base_store_async_context_manager_calls_aclose() -> None:
     async with InMemoryTestStore() as store:
         assert not store.closed
