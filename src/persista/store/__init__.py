@@ -26,9 +26,7 @@ __all__ = [
     "TypedDuckDBStore",
     "TypedPostgresStore",
     "TypedSQLiteStore",
-    "async_store_from_uri",
     "normalize_on_conflict",
-    "register_async_scheme",
     "register_scheme",
     "store_from_uri",
     "validate_batch_size",
@@ -44,12 +42,7 @@ from persista.store.lmdb import BaseLmdbStore, LmdbStore, PickleLmdbStore
 from persista.store.null import NullStore
 from persista.store.postgres import BasePostgresStore, PostgresStore, TypedPostgresStore
 from persista.store.redis import BaseRedisStore, PickleRedisStore, RedisStore
-from persista.store.registry import (
-    async_store_from_uri,
-    register_async_scheme,
-    register_scheme,
-    store_from_uri,
-)
+from persista.store.registry import register_scheme, store_from_uri
 from persista.store.sqlite import (
     BaseSQLiteStore,
     PickleSQLiteStore,
