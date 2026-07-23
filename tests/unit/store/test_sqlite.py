@@ -9,6 +9,7 @@ import pytest
 
 from persista.store import BaseSQLiteStore, SQLiteStore, TypedSQLiteStore
 from persista.store import sqlite as sqlite_module
+from persista.testing.fixtures import aiosqlite_available
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -790,6 +791,7 @@ def test_close_returns_none(store: BaseSQLiteStore) -> None:
     assert store.close() is None
 
 
+@aiosqlite_available
 async def test_close_from_running_event_loop_raises(store: BaseSQLiteStore) -> None:
     await store._ensure_aconn()
     with pytest.raises(RuntimeError, match="inside a running event loop"):
