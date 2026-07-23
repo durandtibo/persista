@@ -503,7 +503,6 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
                 if key is _STOP_ITERATION:
                     return
                 yield key
-            return
         conn = await self._ensure_aconn()
         cursor = await conn.execute(f"SELECT {self._key_column} FROM store")  # noqa: S608
         async for (key,) in cursor:
@@ -530,7 +529,6 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
                 if batch is _STOP_ITERATION:
                     return
                 yield batch
-            return
         conn = await self._ensure_aconn()
         cursor = await conn.execute("SELECT * FROM store")
         batch: dict[str, dict[str, Any]] = {}
