@@ -17,8 +17,7 @@ if TYPE_CHECKING:
 
 class ThreadedAsyncStoreMixin:
     r"""Provide every ``a``-prefixed async method as an
-    ``asyncio.to_thread`` wrapper around the corresponding sync
-    method.
+    ``asyncio.to_thread`` wrapper around the corresponding sync method.
 
     Mix this into a :class:`~persista.store.base.BaseStore` subclass
     whose backend has no native async driver (in-memory, file, LMDB,
@@ -78,9 +77,7 @@ class ThreadedAsyncStoreMixin:
                 return
             yield key
 
-    async def aiter_batches(
-        self, batch_size: int = 32
-    ) -> AsyncIterator[dict[str, dict[str, Any]]]:
+    async def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
         sentinel = object()
         iterator = await asyncio.to_thread(lambda: iter(self.iter_batches(batch_size=batch_size)))
         while True:

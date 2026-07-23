@@ -430,9 +430,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             for batch in batchify(cur, size=batch_size):
                 yield {row[0]: self._row_to_value(row) for row in batch}
 
-    async def aiter_batches(
-        self, batch_size: int = 32
-    ) -> AsyncIterator[dict[str, dict[str, Any]]]:
+    async def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
         conn = await self._ensure_aconn()
         query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
@@ -549,9 +547,7 @@ class PostgresStore(BasePostgresStore):
                 "ON CONFLICT ({key_col}) DO UPDATE SET value = EXCLUDED.value"
             ).format(table=self._table_ident, key_col=sql.Identifier(self._key_column))
             async with conn.cursor() as cur:
-                await cur.executemany(
-                    query, [(key, Jsonb(value)) for key, value in items.items()]
-                )
+                await cur.executemany(query, [(key, Jsonb(value)) for key, value in items.items()])
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
 

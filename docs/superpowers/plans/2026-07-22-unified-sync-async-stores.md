@@ -775,7 +775,7 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
         return "threaded-test://"
 
     @classmethod
-    def from_uri(cls, uri, *, read_only=False):
+    def from_uri(cls, uri: str, *, read_only:bool=False):
         return cls()
 
 

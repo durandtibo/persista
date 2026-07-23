@@ -516,9 +516,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         for batch in batchify(cursor, size=batch_size):
             yield {row[0]: self._row_to_value(row) for row in batch}
 
-    async def aiter_batches(
-        self, batch_size: int = 32
-    ) -> AsyncIterator[dict[str, dict[str, Any]]]:
+    async def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
         if not is_aiosqlite_available():
             iterator = await asyncio.to_thread(

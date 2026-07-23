@@ -348,9 +348,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
                 if value is not None
             }
 
-    async def aiter_batches(
-        self, batch_size: int = 32
-    ) -> AsyncIterator[dict[str, dict[str, Any]]]:
+    async def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
         client = await self._ensure_aclient()
         all_keys = [self._key_str(key) for key in await client.smembers(_KEYS_SET)]

@@ -1,5 +1,5 @@
-r"""Provide a generic ``BaseStore`` dispatcher that reconstructs a
-store from a URI without knowing its concrete class upfront."""
+r"""Provide a generic ``BaseStore`` dispatcher that reconstructs a store
+from a URI without knowing its concrete class upfront."""
 
 from __future__ import annotations
 

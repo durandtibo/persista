@@ -960,7 +960,7 @@ async def test_aclear_removes_all_values(
     await astore.aset_many(items)
     await astore.aclear()
     assert await astore.acount() == 0
-    assert [key async for key in astore.akeys()] == []  # noqa: SIM118
+    assert [key async for key in astore.akeys()] == []
 
 
 @pytest.mark.asyncio
@@ -1007,7 +1007,7 @@ async def test_acontains_many_empty_input_returns_empty_lists(astore: BaseRedisS
 
 @pytest.mark.asyncio
 async def test_akeys_empty_store_yields_nothing(astore: BaseRedisStore) -> None:
-    assert [key async for key in astore.akeys()] == []  # noqa: SIM118
+    assert [key async for key in astore.akeys()] == []
 
 
 @pytest.mark.asyncio
@@ -1015,7 +1015,7 @@ async def test_akeys_returns_all_keys(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await astore.aset_many(items)
-    result = [key async for key in astore.akeys()]  # noqa: SIM118
+    result = [key async for key in astore.akeys()]
     assert sorted(result) == sorted(items.keys())
 
 

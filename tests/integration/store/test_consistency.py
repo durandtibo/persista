@@ -698,9 +698,7 @@ async def test_afilter_single_field(store: BaseStore, items: dict[str, dict[str,
 
 
 @pytest.mark.asyncio
-async def test_afilter_multiple_fields(
-    store: BaseStore, items: dict[str, dict[str, Any]]
-) -> None:
+async def test_afilter_multiple_fields(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     await store.aset_many(items)
     assert len(await store.afilter(author="Alice", category="Programming")) == 2
 
@@ -779,7 +777,7 @@ async def test_aclear_removes_all_values(
     await store.aset_many(items)
     await store.aclear()
     assert await store.acount() == 0
-    assert [key async for key in store.akeys()] == []  # noqa: SIM118
+    assert [key async for key in store.akeys()] == []
 
 
 @pytest.mark.asyncio
@@ -830,15 +828,13 @@ async def test_acontains_many_empty_store_returns_all_missing(store: BaseStore) 
 
 @pytest.mark.asyncio
 async def test_akeys_empty_store_yields_nothing(store: BaseStore) -> None:
-    assert [key async for key in store.akeys()] == []  # noqa: SIM118
+    assert [key async for key in store.akeys()] == []
 
 
 @pytest.mark.asyncio
-async def test_akeys_returns_all_keys(
-    store: BaseStore, items: dict[str, dict[str, Any]]
-) -> None:
+async def test_akeys_returns_all_keys(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     await store.aset_many(items)
-    result = [key async for key in store.akeys()]  # noqa: SIM118
+    result = [key async for key in store.akeys()]
     assert sorted(result) == sorted(items.keys())
 
 
@@ -949,7 +945,7 @@ async def _all_available_stores_async() -> AsyncIterator[tuple[str, BaseStore]]:
             continue
         store: BaseStore = factory()
         if _is_redis_store(store):
-            await store.adelete_many([key async for key in store.akeys()])  # noqa: SIM118
+            await store.adelete_many([key async for key in store.akeys()])
         yield store_id, store
 
 
@@ -977,13 +973,13 @@ async def test_cross_store_outputs_are_identical_async(items: dict[str, dict[str
                 ),
                 "filter_none": await store.afilter(author="Charlie"),
                 "contains_many": await store.acontains_many(["1", "99", "3"]),
-                "keys": sorted([key async for key in store.akeys()]),  # noqa: SIM118
+                "keys": sorted([key async for key in store.akeys()]),
                 "values_titles": sorted([v["title"] async for v in store.avalues()]),
             }
     finally:
         for store in stores:
             if _is_redis_store(store):
-                await store.adelete_many([key async for key in store.akeys()])  # noqa: SIM118
+                await store.adelete_many([key async for key in store.akeys()])
             await store.aclose()
 
     if len(results) < 2:

@@ -29,10 +29,10 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
     def get_many(self, keys):
         return [self.get(key) for key in keys]
 
-    def set(self, key, value, on_conflict="overwrite"):
+    def set(self, key, value, on_conflict="overwrite") -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
 
-    def set_many(self, items, on_conflict="overwrite"):
+    def set_many(self, items, on_conflict="overwrite") -> None:
         on_conflict = normalize_on_conflict(on_conflict)
         conflicts = [key for key in items if key in self._data]
         if conflicts and on_conflict == "raise":
@@ -55,14 +55,14 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
             if all(v.get(k) == val for k, val in field_filters.items())
         ]
 
-    def delete(self, key):
+    def delete(self, key) -> None:
         self._data.pop(key, None)
 
-    def delete_many(self, keys):
+    def delete_many(self, keys) -> None:
         for key in keys:
             self.delete(key)
 
-    def clear(self):
+    def clear(self) -> None:
         self._data.clear()
 
     def contains(self, key):
@@ -85,11 +85,11 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
     def count(self):
         return len(self._data)
 
-    def to_uri(self):
+    def to_uri(self) -> str:
         return "threaded-test://"
 
     @classmethod
-    def from_uri(cls, uri, *, read_only=False):
+    def from_uri(cls, uri: str, *, read_only: bool = False):
         return cls()
 
 

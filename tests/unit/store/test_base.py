@@ -16,8 +16,8 @@ if TYPE_CHECKING:
 class InMemoryTestStore(BaseStore):
     r"""Minimal concrete implementation of ``BaseStore`` used to
     exercise the concrete methods it provides (``values``/``avalues``,
-    ``set_batches``/``aset_batches``, the sync and async context
-    manager protocols)."""
+    ``set_batches``/``aset_batches``, the sync and async context manager
+    protocols)."""
 
     def __init__(self) -> None:
         self._data: dict[str, dict[str, Any]] = {}
@@ -133,9 +133,7 @@ class InMemoryTestStore(BaseStore):
         for i in range(0, len(items), batch_size):
             yield dict(items[i : i + batch_size])
 
-    async def aiter_batches(
-        self, batch_size: int = 32
-    ) -> AsyncIterator[dict[str, dict[str, Any]]]:
+    async def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
         for batch in self.iter_batches(batch_size=batch_size):
             yield batch
 

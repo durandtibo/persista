@@ -37,17 +37,29 @@ class BaseStore(ABC):
     async def aget_many(self, keys: list[str]) -> list[dict[str, Any] | None]: ...
 
     @abstractmethod
-    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None: ...
+    def set(
+        self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+    ) -> None: ...
     @abstractmethod
-    async def aset(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None: ...
+    async def aset(
+        self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+    ) -> None: ...
 
     @abstractmethod
-    def set_many(self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite") -> None: ...
+    def set_many(
+        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+    ) -> None: ...
     @abstractmethod
-    async def aset_many(self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite") -> None: ...
+    async def aset_many(
+        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+    ) -> None: ...
 
-    def set_batches(self, items, batch_size=32, on_conflict="overwrite") -> None: ...       # concrete, calls set_many
-    async def aset_batches(self, items, batch_size=32, on_conflict="overwrite") -> None: ... # concrete, calls aset_many
+    def set_batches(
+        self, items, batch_size=32, on_conflict="overwrite"
+    ) -> None: ...  # concrete, calls set_many
+    async def aset_batches(
+        self, items, batch_size=32, on_conflict="overwrite"
+    ) -> None: ...  # concrete, calls aset_many
 
     @abstractmethod
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]: ...
@@ -84,13 +96,21 @@ class BaseStore(ABC):
     @abstractmethod
     def akeys(self) -> AsyncIterator[str]: ...
 
-    def values(self, batch_size: int = 32) -> Iterator[dict[str, Any]]: ...       # concrete, built on iter_batches
-    def avalues(self, batch_size: int = 32) -> AsyncIterator[dict[str, Any]]: ... # concrete, built on aiter_batches
+    def values(
+        self, batch_size: int = 32
+    ) -> Iterator[dict[str, Any]]: ...  # concrete, built on iter_batches
+    def avalues(
+        self, batch_size: int = 32
+    ) -> AsyncIterator[dict[str, Any]]: ...  # concrete, built on aiter_batches
 
     @abstractmethod
-    def iter_batches(self, batch_size: int = 32) -> Iterator[dict[str, dict[str, Any]]]: ...
+    def iter_batches(
+        self, batch_size: int = 32
+    ) -> Iterator[dict[str, dict[str, Any]]]: ...
     @abstractmethod
-    def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]: ...
+    def aiter_batches(
+        self, batch_size: int = 32
+    ) -> AsyncIterator[dict[str, dict[str, Any]]]: ...
 
     @abstractmethod
     def count(self) -> int: ...
@@ -110,10 +130,17 @@ class BaseStore(ABC):
     @classmethod
     def from_uri(cls, uri: str, *, read_only: bool = False) -> Self: ...
 
-    def __enter__(self) -> Self: return self
-    def __exit__(self, *exc_info: object) -> None: self.close()
-    async def __aenter__(self) -> Self: return self
-    async def __aexit__(self, *exc_info: object) -> None: await self.aclose()
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
 ```
 
 `iter_batches`/`aiter_batches` are typed as `Iterator`/`AsyncIterator` (not
@@ -141,7 +168,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     def __init__(self, database: Path | str, **kwargs: Any) -> None:
         self._conn = sqlite3.connect(database, **kwargs)  # eager, sync
         self._ensure_schema()
-        self._aconn: aiosqlite.Connection | None = None    # lazy, async
+        self._aconn: aiosqlite.Connection | None = None  # lazy, async
         self._aconn_lock = asyncio.Lock()
         self._aschema_ready = False
 
@@ -155,7 +182,9 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
                 self._aschema_ready = True
         return self._aconn
 
-    def get(self, key: str) -> dict[str, Any] | None: ...      # uses self._conn, unchanged from today
+    def get(
+        self, key: str
+    ) -> dict[str, Any] | None: ...  # uses self._conn, unchanged from today
     async def aget(self, key: str) -> dict[str, Any] | None:
         if not is_aiosqlite_available():
             return await asyncio.to_thread(self.get, key)
