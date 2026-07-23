@@ -264,6 +264,35 @@ async def test_null_store_afilter_always_empty() -> None:
     assert await store.afilter(a=1) == []
 
 
+async def test_null_store_aget_many_returns_none_for_every_key() -> None:
+    store = NullStore()
+    await store.aset("1", {"a": 1})
+    assert await store.aget_many(["1", "2"]) == [None, None]
+
+
+async def test_null_store_adelete_is_silent() -> None:
+    store = NullStore()
+    assert await store.adelete("1") is None
+
+
+async def test_null_store_adelete_many_is_silent() -> None:
+    store = NullStore()
+    assert await store.adelete_many(["1", "2"]) is None
+
+
+async def test_null_store_aclear_returns_none() -> None:
+    store = NullStore()
+    assert await store.aclear() is None
+
+
+async def test_null_store_acontains_many_all_missing() -> None:
+    store = NullStore()
+    await store.aset("1", {"a": 1})
+    found, missing = await store.acontains_many(["1", "2"])
+    assert found == []
+    assert missing == ["1", "2"]
+
+
 async def test_null_store_async_context_manager() -> None:
     async with NullStore() as store:
         assert not store.closed

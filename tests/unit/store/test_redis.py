@@ -664,6 +664,12 @@ def test_close_returns_none(store: BaseRedisStore) -> None:
     assert store.close() is None
 
 
+async def test_close_from_running_event_loop_raises(store: BaseRedisStore) -> None:
+    await store._ensure_aclient()
+    with pytest.raises(RuntimeError, match="inside a running event loop"):
+        store.close()
+
+
 # --- closed ---
 
 
@@ -1052,6 +1058,31 @@ async def test_async_context_manager_returns_self(
     _use_fake_async_redis(monkeypatch)
     async with store_cls() as store:
         assert isinstance(store, store_cls)
+
+
+async def test_async_context_manager_multiple_open_close_same_server(
+    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
+) -> None:
+    """Reopening after aclose reconnects to the same Redis server, so
+    previously written data is still there."""
+    server = fakeredis.FakeServer()
+    monkeypatch.setattr(
+        f"{MODULE}.redis.Redis.from_url",
+        lambda *_args, **kwargs: fakeredis.FakeRedis(
+            server=server, decode_responses=kwargs.get("decode_responses", True)
+        ),
+    )
+    monkeypatch.setattr(
+        f"{MODULE}.aredis.Redis.from_url",
+        lambda *_args, **kwargs: fakeredis.aioredis.FakeRedis(
+            server=server, decode_responses=kwargs.get("decode_responses", True)
+        ),
+    )
+    redis_store = store_cls()
+    for i in range(3):
+        async with redis_store as store:
+            await store.aset(str(i), {"text": "hello"})
+            assert await store.acount() == i + 1
 
 
 async def test_async_context_manager_usable_for_reads_and_writes(

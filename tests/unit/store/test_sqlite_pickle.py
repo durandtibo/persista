@@ -390,3 +390,56 @@ def test_from_uri_read_only_rejects_writes(
         assert reloaded.count() == len(items)
         with pytest.raises(sqlite3.OperationalError):
             reloaded.set("new", {"a": 1})
+
+
+# ---------------------------------------------------------------------------
+# async
+# ---------------------------------------------------------------------------
+
+
+async def test_async_methods_work_without_aiosqlite(
+    monkeypatch: pytest.MonkeyPatch, items: dict[str, dict[str, Any]]
+) -> None:
+    from persista.store import sqlite as sqlite_module
+
+    monkeypatch.setattr(sqlite_module, "is_aiosqlite_available", lambda: False)
+    with PickleSQLiteStore(":memory:") as store:
+        await store.aset_many(items)
+        assert await store.acount() == len(items)
+        result = await store.afilter(author="Alice")
+        assert len(result) == 2
+
+
+async def test_async_context_manager_reopens_after_close() -> None:
+    store = PickleSQLiteStore(":memory:")
+    store.close()
+    async with store:
+        assert not store.closed
+        await store.aset("1", {"a": 1})
+        assert await store.aget("1") == {"a": 1}
+    assert store.closed
+
+
+async def test_async_context_manager_entering_already_open_store_is_a_noop() -> None:
+    store = PickleSQLiteStore(":memory:")
+    async with store:
+        assert not store.closed
+        await store.aset("1", {"a": 1})
+        assert await store.aget("1") == {"a": 1}
+    assert store.closed
+
+
+async def test_afilter_with_real_aiosqlite(items: dict[str, dict[str, Any]]) -> None:
+    store = PickleSQLiteStore(":memory:")
+    await store.aset_many(items)
+    assert len(await store.afilter()) == len(items)
+    result = await store.afilter(author="Alice")
+    assert len(result) == 2
+    await store.aclose()
+
+
+async def test_aset_many_internal_with_empty_items_is_a_noop() -> None:
+    store = PickleSQLiteStore(":memory:")
+    await store._aset_many({})
+    assert await store.acount() == 0
+    await store.aclose()

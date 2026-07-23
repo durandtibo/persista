@@ -997,6 +997,12 @@ def test_close_returns_none(store: BasePostgresStore) -> None:
     assert store.close() is None
 
 
+async def test_close_from_running_event_loop_raises(store: BasePostgresStore) -> None:
+    assert store._aconn is not None
+    with pytest.raises(RuntimeError, match="inside a running event loop"):
+        store.close()
+
+
 # --- closed ---
 
 

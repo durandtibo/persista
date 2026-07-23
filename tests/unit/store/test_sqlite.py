@@ -790,6 +790,12 @@ def test_close_returns_none(store: BaseSQLiteStore) -> None:
     assert store.close() is None
 
 
+async def test_close_from_running_event_loop_raises(store: BaseSQLiteStore) -> None:
+    await store._ensure_aconn()
+    with pytest.raises(RuntimeError, match="inside a running event loop"):
+        store.close()
+
+
 # --- closed ---
 
 
@@ -1077,6 +1083,31 @@ async def test_sqlite_store_aset_many_and_afilter(store: BaseSQLiteStore) -> Non
     assert len(await store.afilter(category="History")) == 1
 
 
+async def test_sqlite_store_aensure_aconn_read_only_swallows_operational_error(
+    store_path: Path, store_cls: type[BaseSQLiteStore]
+) -> None:
+    """Mirrors ``test_init_read_only_connection_without_existing_table_s
+    wallows_operational_error`` for the lazily-opened async
+    ``aiosqlite`` connection."""
+    path = store_path / f"async_no_table_yet_{store_cls.__name__}.sqlite"
+    raw_conn = sqlite3.connect(path)
+    raw_conn.execute("CREATE TABLE unrelated (x INTEGER)")
+    raw_conn.commit()
+    raw_conn.close()
+
+    store = store_cls.from_path(path, read_only=True)
+    with pytest.raises(sqlite3.OperationalError, match=r"no such table"):
+        await store.acount()
+    await store.aclose()
+    store.close()
+
+
+async def test_sqlite_store_acontains(store: BaseSQLiteStore) -> None:
+    await store.aset("1", {"a": 1})
+    assert await store.acontains("1") is True
+    assert await store.acontains("9") is False
+
+
 async def test_sqlite_store_acontains_many(store: BaseSQLiteStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     found, missing = await store.acontains_many(["1", "3"])
@@ -1117,3 +1148,44 @@ def test_sqlite_store_async_methods_work_without_aiosqlite(
             return await store.aget("1")
 
         assert asyncio.run(_run()) == {"a": 1}
+
+
+def test_sqlite_store_all_async_methods_work_without_aiosqlite(
+    store_cls: type[BaseSQLiteStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sqlite_module, "is_aiosqlite_available", lambda: False)
+    with store_cls(":memory:") as store:
+
+        async def _run() -> None:
+            await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+            assert await store.aget_many(["1", "2", "9"]) == [{"a": 1}, {"a": 2}, None]
+            assert len(await store.afilter()) == 3
+            assert await store.acontains("1") is True
+            found, missing = await store.acontains_many(["1", "9"])
+            assert found == ["1"]
+            assert missing == ["9"]
+            assert sorted([key async for key in store.akeys()]) == ["1", "2", "3"]
+            batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+            assert sum(len(b) for b in batches) == 3
+            assert await store.acount() == 3
+            await store.adelete("1")
+            assert await store.acount() == 2
+            await store.adelete_many(["2", "3"])
+            assert await store.acount() == 0
+            await store.aset_many({"1": {"a": 1}})
+            await store.aclear()
+            assert await store.acount() == 0
+
+        asyncio.run(_run())
+
+
+async def test_sqlite_store_async_context_manager_reopens_after_close(
+    store_cls: type[BaseSQLiteStore],
+) -> None:
+    store = store_cls(":memory:")
+    store.close()
+    async with store:
+        assert not store.closed
+        await store.aset("1", {"a": 1})
+        assert await store.aget("1") == {"a": 1}
+    assert store.closed
