@@ -120,13 +120,14 @@ See the [user guide](uguide/cache.md) for detailed examples.
 
 ### 🗄️ **Key-Value Stores**
 
-A consistent `BaseStore` / `AsyncBaseStore` interface for storing dict values under string keys:
+A consistent `BaseStore` interface for storing dict values under string keys, with both
+synchronous and `a`-prefixed asynchronous methods on every store:
 
-- Uniform API across backends: `get`, `get_many`, `set`, `set_many`, `delete`, `filter`, iteration
-- Sync backends: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`
-- Async backends: `AsyncInMemoryStore`, `AsyncSQLiteStore`, `AsyncRedisStore`, `AsyncPostgresStore`
+- Uniform API across backends: `get`/`aget`, `get_many`/`aget_many`, `set`/`aset`,
+  `set_many`/`aset_many`, `delete`/`adelete`, `filter`/`afilter`, iteration
+- Backends: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`
 - Typed variants (`TypedSQLiteStore`, `TypedPostgresStore`, ...) and pickle-backed variants
-  (`PickleLmdbStore`, `PickleRedisStore`, `AsyncPickleRedisStore`) for non-dict values
+  (`PickleLmdbStore`, `PickleRedisStore`) for non-dict values
 - Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`, `"merge"`)
 
 [Learn more →](uguide/store.md)

@@ -4,14 +4,14 @@
 function calls, with both synchronous and asynchronous APIs.
 
 **Prerequisites:** You'll need to know a bit of Python, and it helps to be familiar with the
-[store user guide](store.md) since caches are backed by a `BaseStore`/`AsyncBaseStore`.
+[store user guide](store.md) since caches are backed by a `BaseStore`.
 
 ## Overview
 
 The `persista.cache` package provides two related ways to cache data:
 
 - `Cache` / `AsyncCache`: explicit cache objects with `get`/`set`/`clear` methods, backed by
-  any `BaseStore`/`AsyncBaseStore` (an in-memory store by default)
+  any `BaseStore` (an in-memory store by default)
 - `cached` / `async_cached`: decorators that cache the result of a function call using a shared
   default cache
 
@@ -197,8 +197,8 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
 ## Async Caching with `AsyncCache`
 
 `AsyncCache` mirrors `Cache`'s `get`/`set`/`contains`/`delete`/`clear`/`memoize` API, but every
-method is a coroutine and it is backed by an `AsyncBaseStore` (an `AsyncInMemoryStore` by
-default):
+method is a coroutine and it accesses the backing `BaseStore` through its async (`a`-prefixed)
+methods (an `InMemoryStore` by default):
 
 ```pycon
 >>> import asyncio
@@ -218,8 +218,8 @@ None
 
 One difference from `Cache`: `AsyncCache.get_or_compute` accepts either a sync or an `async def`
 function directly — awaiting it only if the result is awaitable — so there's no separate
-`aget_or_compute`. The backing store is still always accessed with `await`, since
-`AsyncBaseStore` is an async interface:
+`aget_or_compute`. The backing store is still always accessed with `await`, via its async
+(`a`-prefixed) methods:
 
 ```pycon
 >>> import asyncio

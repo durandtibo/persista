@@ -1,10 +1,10 @@
 # Key-Value Stores
 
 :book: This page describes the `persista.store` package, which provides a uniform key-value
-store interface backed by several storage engines. This page explains the `BaseStore` /
-`AsyncBaseStore` interfaces and how to use the concrete store implementations: `InMemoryStore`,
-`SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`, and their async and
-"typed"/"pickle" variants.
+store interface backed by several storage engines. This page explains the `BaseStore` interface
+(which supports both synchronous and asynchronous usage) and how to use the concrete store
+implementations: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`,
+`PostgresStore`, and their "typed"/"pickle" variants.
 
 **Prerequisites:** You'll need to know a bit of Python.
 For a refresher, see the [Python tutorial](https://docs.python.org/tutorial/).
@@ -14,24 +14,28 @@ For a refresher, see the [Python tutorial](https://docs.python.org/tutorial/).
 The `persista.store` package provides a single, consistent interface for storing `dict` values
 under string keys, regardless of the backend used to persist them:
 
-- `BaseStore`: synchronous abstract interface
-- `AsyncBaseStore`: asynchronous abstract interface
+- `BaseStore`: a single abstract interface that supports both synchronous methods (`get`, `set`,
+  ...) and their asynchronous, `a`-prefixed counterparts (`aget`, `aset`, ...) on the same
+  instance
 
-Both interfaces expose the same set of operations:
+Both modes expose the same set of operations:
 
-- `get` / `get_many`: read one or several values by key
-- `set` / `set_many` / `set_batches`: write one, several, or a stream of values
-- `filter`: retrieve values matching field conditions
-- `delete` / `delete_many`: remove values
-- `clear`: remove all values
-- `contains_many`: check which keys exist
-- `keys` / `values` / `iter_batches`: iterate over the store's content
-- `count`: number of entries
-- `close`: release underlying resources
+- `get`/`aget`, `get_many`/`aget_many`: read one or several values by key
+- `set`/`aset`, `set_many`/`aset_many`, `set_batches`/`aset_batches`: write one, several, or a
+  stream of values
+- `filter`/`afilter`: retrieve values matching field conditions
+- `delete`/`adelete`, `delete_many`/`adelete_many`: remove values
+- `clear`/`aclear`: remove all values
+- `contains_many`/`acontains_many`: check which keys exist
+- `keys`/`akeys`, `values`/`avalues`, `iter_batches`/`aiter_batches`: iterate over the store's
+  content
+- `count`/`acount`: number of entries
+- `close`/`aclose`: release underlying resources
 
 Because every store implements the same interface, application code written against `BaseStore`
-(or `AsyncBaseStore`) can be moved between backends — for example using `InMemoryStore` in unit
-tests and `PostgresStore` in production — without changes.
+can be moved between backends — for example using `InMemoryStore` in unit tests and
+`PostgresStore` in production — without changes, and can freely mix sync and async calls on the
+same store instance.
 
 ## Getting Started
 
@@ -258,7 +262,7 @@ store.get("1")  # {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
 
 !!! warning
     `pickle.loads` can execute arbitrary code. Only use `PickleLmdbStore` (and
-    `PickleRedisStore`/`AsyncPickleRedisStore`) with data from trusted sources.
+    `PickleRedisStore`) with data from trusted sources.
 
 ### Redis
 
@@ -281,21 +285,24 @@ len(store.filter(author="Alice"))  # 2
 
 Use `PickleRedisStore` to store arbitrary Python objects using `pickle` instead of JSON.
 
-## Async Stores
+## Async Usage
 
-Every operation on `AsyncBaseStore` implementations is a coroutine (or async iterator), so they
-must be `await`ed and used from an `async` function. Async variants are available for
-`InMemoryStore`, `SQLiteStore` (requires the `aiosqlite` extra), `RedisStore`, and `PostgresStore`
-(requires the `psycopg` extra); there is no async variant for `DuckDBStore` or `LmdbStore`.
+Every store also exposes `a`-prefixed asynchronous methods (`aget`, `aset`, `acount`, ...) that
+are coroutines (or async iterators), so they must be `await`ed and used from an `async` function.
+The same store instance can be used from both sync and async code -- there is no separate async
+class. Async methods are available on every store, including `InMemoryStore`, `SQLiteStore`
+(async methods use the `aiosqlite` extra when installed, falling back to a thread otherwise),
+`RedisStore`, and `PostgresStore` (requires the `psycopg` extra); `DuckDBStore` and `LmdbStore`
+also expose async methods, backed by a thread pool.
 
 ```pycon
 >>> import asyncio
->>> from persista.store import AsyncInMemoryStore
+>>> from persista.store import InMemoryStore
 >>> async def main():
-...     store = AsyncInMemoryStore()
-...     await store.set("1", {"text": "hello"})
-...     print(await store.count())
-...     print(await store.get("1"))
+...     store = InMemoryStore()
+...     await store.aset("1", {"text": "hello"})
+...     print(await store.acount())
+...     print(await store.aget("1"))
 ...
 >>> asyncio.run(main())
 1
@@ -303,63 +310,63 @@ must be `await`ed and used from an `async` function. Async variants are availabl
 
 ```
 
-`AsyncSQLiteStore` and `AsyncTypedSQLiteStore` behave like their sync counterparts:
+`SQLiteStore` and `TypedSQLiteStore`'s async methods behave like their sync counterparts:
 
 ```pycon
 >>> import asyncio
->>> from persista.store import AsyncSQLiteStore
+>>> from persista.store import SQLiteStore
 >>> async def main():
-...     store = AsyncSQLiteStore(":memory:")
-...     await store.set_many(
+...     store = SQLiteStore(":memory:")
+...     await store.aset_many(
 ...         {
 ...             "1": {"title": "Intro to Python", "author": "Alice"},
 ...             "2": {"title": "Advanced Python", "author": "Alice"},
 ...             "3": {"title": "History of Rome", "author": "Bob"},
 ...         }
 ...     )
-...     result = await store.filter(author="Alice")
+...     result = await store.afilter(author="Alice")
 ...     print(len(result))
-...     await store.close()
+...     await store.aclose()
 ...
 >>> asyncio.run(main())
 2
 
 ```
 
-`AsyncRedisStore`/`AsyncPickleRedisStore` and `AsyncPostgresStore`/`AsyncTypedPostgresStore`
-follow the same pattern, connecting to a running Redis or PostgreSQL server:
+`RedisStore`/`PickleRedisStore` and `PostgresStore`/`TypedPostgresStore` follow the same
+pattern, connecting to a running Redis or PostgreSQL server:
 
 ```python
 import asyncio
 
-from persista.store import AsyncPostgresStore
+from persista.store import PostgresStore
 
 
 async def main():
-    store = AsyncPostgresStore("postgresql://user:pass@localhost/dbname")
-    await store.set_many(
+    store = PostgresStore("postgresql://user:pass@localhost/dbname")
+    await store.aset_many(
         {
             "1": {"title": "Intro to Python", "author": "Alice"},
             "2": {"title": "Advanced Python", "author": "Alice"},
         }
     )
-    result = await store.filter(author="Alice")
+    result = await store.afilter(author="Alice")
     print(len(result))
-    await store.close()
+    await store.aclose()
 
 
 asyncio.run(main())
 ```
 
-Also use `async with` to automatically `close()` the store:
+Also use `async with` to automatically `aclose()` the store:
 
 ```pycon
 >>> import asyncio
->>> from persista.store import AsyncInMemoryStore
+>>> from persista.store import InMemoryStore
 >>> async def main():
-...     async with AsyncInMemoryStore() as store:
-...         await store.set("1", {"text": "hello"})
-...         print(await store.get("1"))
+...     async with InMemoryStore() as store:
+...         await store.aset("1", {"text": "hello"})
+...         print(await store.aget("1"))
 ...
 >>> asyncio.run(main())
 {'text': 'hello'}
@@ -418,8 +425,8 @@ constructor options like `value_schema` (typed stores) or `table` (Postgres stor
 always reconstructs with the defaults. `InMemoryStore` and `NullStore` always round-trip to a
 fresh, empty store since they carry no reconnection information.
 
-If you don't know the concrete store class ahead of time, `store_from_uri`/`async_store_from_uri`
-dispatch on the URI's scheme to the right class automatically:
+If you don't know the concrete store class ahead of time, `store_from_uri` dispatches on the
+URI's scheme to the right class automatically:
 
 ```pycon
 >>> from persista.store import JsonFileStore, store_from_uri
@@ -437,8 +444,8 @@ Store classes that share a scheme with another class (`TypedPostgresStore` and `
 both use `postgresql://`, `PickleRedisStore` and `RedisStore` both use `redis://`) aren't
 reachable through the dispatcher -- call `TheClass.from_uri(uri)` directly for those.
 
-Use `register_scheme`/`register_async_scheme` to register a custom store class (or override a
-built-in one) under a given scheme:
+Use `register_scheme` to register a custom store class (or override a built-in one) under a
+given scheme:
 
 ```python
 from persista.store import register_scheme, store_from_uri
@@ -462,9 +469,9 @@ store = store_from_uri("mycustom://...")
 
 Use `InMemoryStore` for tests and prototyping, `SQLiteStore`/`DuckDBStore` for local
 single-process persistence without a server, and `RedisStore`/`PostgresStore` when data needs to
-be shared across processes or machines. `NullStore` (and its async counterpart `AsyncNullStore`)
-never actually stores anything -- every `get` is a miss -- which is useful for plugging into
-`Cache`/`AsyncCache` to disable caching entirely without changing any calling code.
+be shared across processes or machines. `NullStore` never actually stores anything -- every
+`get`/`aget` is a miss -- which is useful for plugging into `Cache` to disable caching entirely
+without changing any calling code.
 
 ## API Reference
 
