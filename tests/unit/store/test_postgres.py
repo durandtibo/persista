@@ -1518,3 +1518,72 @@ async def test_postgres_store_aiter_batches_exact_multiple(
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     batches = [batch async for batch in store.aiter_batches(batch_size=2)]
     assert sum(len(b) for b in batches) == 2
+
+
+async def test_postgres_store_avalues(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    values = [v async for v in store.avalues(batch_size=2)]
+    assert sorted(v["a"] for v in values) == [1, 2, 3]
+
+
+async def test_postgres_store_aset_batches(store: BasePostgresStore) -> None:
+    await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})], batch_size=1)
+    assert await store.acount() == 2
+
+
+# ---------------------------------------------------------------------------
+# async + typed schema
+# ---------------------------------------------------------------------------
+
+
+async def test_typed_postgres_store_aget_round_trips_typed_schema_fields(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    assert await typed_store.aget("1") == items["1"]
+
+
+async def test_typed_postgres_store_aset_on_conflict_merge_with_typed_schema(
+    typed_store: TypedPostgresStore,
+) -> None:
+    await typed_store.aset("1", {"author": "Alice", "year": 2022})
+    await typed_store.aset("1", {"category": "Programming"}, on_conflict="merge")
+    assert await typed_store.aget("1") == {
+        "author": "Alice",
+        "year": 2022,
+        "category": "Programming",
+    }
+
+
+async def test_typed_postgres_store_afilter_single_typed_field(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    result = await typed_store.afilter(author="Alice")
+    assert {item["title"] for item in result} == {"Intro to Python", "Advanced Python"}
+
+
+async def test_typed_postgres_store_afilter_integer_typed_column(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    result = await typed_store.afilter(year=2022)
+    assert {item["title"] for item in result} == {"Intro to Python"}
+
+
+async def test_typed_postgres_store_aiter_batches_with_typed_schema(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    result: dict[str, dict[str, Any]] = {}
+    async for batch in typed_store.aiter_batches(batch_size=2):
+        result.update(batch)
+    assert result == items
+
+
+async def test_typed_postgres_store_avalues_with_typed_schema(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    values = [v async for v in typed_store.avalues(batch_size=2)]
+    assert sorted(v["title"] for v in values) == sorted(item["title"] for item in items.values())

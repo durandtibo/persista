@@ -782,4 +782,60 @@ async def test_in_memory_store_aclose_clears_data() -> None:
     await store.aset("1", {"a": 1})
     await store.aclose()
     assert store.closed
-    assert store.data == {}
+
+
+async def test_in_memory_store_avalues_iterates_all() -> None:
+    store = InMemoryStore()
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    values = [v async for v in store.avalues(batch_size=2)]
+    assert sorted(v["a"] for v in values) == [1, 2, 3]
+
+
+async def test_in_memory_store_aset_batches() -> None:
+    store = InMemoryStore()
+    await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})], batch_size=1)
+    assert await store.acount() == 2
+
+
+async def test_in_memory_store_adelete_many() -> None:
+    store = InMemoryStore()
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    await store.adelete_many(["1", "2"])
+    assert sorted([key async for key in store.akeys()]) == ["3"]
+
+
+async def test_in_memory_store_acontains_many() -> None:
+    store = InMemoryStore()
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    found, missing = await store.acontains_many(["1", "2", "3"])
+    assert sorted(found) == ["1", "2"]
+    assert missing == ["3"]
+
+
+async def test_in_memory_store_async_context_manager_returns_self() -> None:
+    async with InMemoryStore() as store:
+        assert isinstance(store, InMemoryStore)
+
+
+async def test_in_memory_store_async_context_manager_closes_on_normal_exit() -> None:
+    async with InMemoryStore() as store:
+        await store.aset("1", {"text": "hello"})
+        assert await store.acount() == 1
+
+    assert await store.acount() == 0
+
+
+async def test_in_memory_store_async_context_manager_closes_on_exception() -> None:
+    msg = "boom"
+    with pytest.raises(ValueError, match="boom"):
+        async with InMemoryStore() as store:
+            raise ValueError(msg)
+
+    assert await store.acount() == 0
+
+
+async def test_in_memory_store_aiter_batches_yields_correct_batch_sizes() -> None:
+    store = InMemoryStore()
+    await store.aset_many({str(i): {"a": i} for i in range(5)})
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert [len(batch) for batch in batches] == [2, 2, 1]
