@@ -15,6 +15,7 @@ from coola.utils.batching import batchify
 from coola.utils.path import sanitize_path
 from iden.io import load_json, load_pickle, save_json, save_pickle
 
+from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import normalize_on_conflict, validate_batch_size
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class BaseFileStore(BaseStore, MultilineDisplayMixin):
+class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     r"""Define a base class for file-based key-value stores.
 
     Each value is persisted as its own file in a directory, using
