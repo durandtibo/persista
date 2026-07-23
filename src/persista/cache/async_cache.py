@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from persista.cache.cache import _UNSET
 from persista.cache.utils import make_key
-from persista.store.async_in_memory import AsyncInMemoryStore
+from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -87,7 +87,7 @@ class AsyncCache:
         if default_ttl is not None and default_ttl < 0:
             msg = f"default_ttl must be non-negative, got {default_ttl}"
             raise ValueError(msg)
-        self._store: AsyncBaseStore = store if store is not None else AsyncInMemoryStore()
+        self._store: AsyncBaseStore = store if store is not None else InMemoryStore()
         self.default_ttl = default_ttl
         self._ignore_none = ignore_none
 

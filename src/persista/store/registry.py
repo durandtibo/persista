@@ -14,7 +14,6 @@ __all__ = [
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from persista.store.async_in_memory import AsyncInMemoryStore
 from persista.store.async_postgres import AsyncPostgresStore
 from persista.store.async_redis import AsyncRedisStore
 from persista.store.async_sqlite import AsyncSQLiteStore, AsyncTypedSQLiteStore
@@ -49,7 +48,6 @@ _SYNC_SCHEMES: dict[str, type[BaseStore]] = {
 }
 
 _ASYNC_SCHEMES: dict[str, type[AsyncBaseStore]] = {
-    "memory": AsyncInMemoryStore,
     "sqlite": AsyncSQLiteStore,
     "sqlite+typed": AsyncTypedSQLiteStore,
     "postgresql": AsyncPostgresStore,

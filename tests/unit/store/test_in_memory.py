@@ -739,3 +739,53 @@ def test_to_uri_from_uri_does_not_carry_data(
     store.set_many(items)
     reloaded = InMemoryStore.from_uri(store.to_uri())
     assert reloaded.count() == 0
+
+
+# --- async (via ThreadedAsyncStoreMixin) ---
+
+
+@pytest.mark.asyncio
+async def test_in_memory_store_aget_aset_round_trip() -> None:
+    store = InMemoryStore()
+    await store.aset("1", {"text": "hello"})
+    assert await store.aget("1") == {"text": "hello"}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_store_aset_many_on_conflict_merge() -> None:
+    store = InMemoryStore()
+    await store.aset("1", {"a": 1})
+    await store.aset_many({"1": {"b": 2}}, on_conflict="merge")
+    assert await store.aget("1") == {"a": 1, "b": 2}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_store_afilter() -> None:
+    store = InMemoryStore()
+    await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
+    assert await store.afilter(author="Alice") == [{"author": "Alice"}]
+
+
+@pytest.mark.asyncio
+async def test_in_memory_store_acount_and_aclear() -> None:
+    store = InMemoryStore()
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert await store.acount() == 2
+    await store.aclear()
+    assert await store.acount() == 0
+
+
+@pytest.mark.asyncio
+async def test_in_memory_store_akeys() -> None:
+    store = InMemoryStore()
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert sorted([key async for key in store.akeys()]) == ["1", "2"]
+
+
+@pytest.mark.asyncio
+async def test_in_memory_store_aclose_clears_data() -> None:
+    store = InMemoryStore()
+    await store.aset("1", {"a": 1})
+    await store.aclose()
+    assert store.closed
+    assert store.data == {}

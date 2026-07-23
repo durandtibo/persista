@@ -11,11 +11,12 @@ from typing import TYPE_CHECKING, Any
 from coola.display import InlineDisplayMixin
 from coola.utils.batching import batchify
 
+from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
 from persista.store.validation import normalize_on_conflict, validate_batch_size
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator, Mapping
+    from collections.abc import Iterator, Mapping
 
     from typing_extensions import Self
 
@@ -25,13 +26,16 @@ if TYPE_CHECKING:
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class InMemoryStore(BaseStore, InlineDisplayMixin):
+class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
     """A :class:`~persista.store.BaseStore` implementation backed
     by a plain ``dict``.
 
     Values are held entirely in process memory -- nothing is
     persisted to disk. This is primarily useful for testing,
     small-scale exploration, or pipelines that don't need durability.
+    Async methods (``aget``, ``aset``, ...) are provided by
+    :class:`~persista.store._threaded.ThreadedAsyncStoreMixin`, which
+    runs each sync call in a worker thread.
 
     Values are deep-copied on both write and read so that mutating a
     value returned by this store (or a value passed into :meth:`set`
@@ -140,9 +144,7 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
     def keys(self) -> Iterator[str]:
         yield from list(self._data.keys())
 
-    def iter_batches(
-        self, batch_size: int = 32
-    ) -> Generator[dict[str, dict[str, Any]], None, None]:
+    def iter_batches(self, batch_size: int = 32) -> Iterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
         for batch in batchify(self._data.items(), size=batch_size):
             yield dict(batch)

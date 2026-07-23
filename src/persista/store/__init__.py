@@ -7,7 +7,6 @@ __all__ = [
     "AsyncBaseRedisStore",
     "AsyncBaseSQLiteStore",
     "AsyncBaseStore",
-    "AsyncInMemoryStore",
     "AsyncPickleRedisStore",
     "AsyncPostgresStore",
     "AsyncRedisStore",
@@ -47,7 +46,6 @@ __all__ = [
     "validate_on_conflict",
 ]
 
-from persista.store.async_in_memory import AsyncInMemoryStore
 from persista.store.async_postgres import (
     AsyncBasePostgresStore,
     AsyncPostgresStore,
