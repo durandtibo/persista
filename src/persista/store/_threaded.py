@@ -70,22 +70,22 @@ class ThreadedAsyncStoreMixin:
         return await asyncio.to_thread(self.contains_many, keys)
 
     async def akeys(self) -> AsyncIterator[str]:
+        sentinel = object()
         iterator = await asyncio.to_thread(lambda: iter(self.keys()))
         while True:
-            try:
-                key = await asyncio.to_thread(next, iterator)
-            except StopIteration:
+            key = await asyncio.to_thread(next, iterator, sentinel)
+            if key is sentinel:
                 return
             yield key
 
     async def aiter_batches(
         self, batch_size: int = 32
     ) -> AsyncIterator[dict[str, dict[str, Any]]]:
+        sentinel = object()
         iterator = await asyncio.to_thread(lambda: iter(self.iter_batches(batch_size=batch_size)))
         while True:
-            try:
-                batch = await asyncio.to_thread(next, iterator)
-            except StopIteration:
+            batch = await asyncio.to_thread(next, iterator, sentinel)
+            if batch is sentinel:
                 return
             yield batch
 
