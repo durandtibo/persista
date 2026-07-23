@@ -210,6 +210,61 @@ class Cache:
         hit, _ = self._get(key)
         return hit
 
+    def get_many(self, keys: list[str]) -> dict[str, Any]:
+        """Retrieve multiple values in a single batched store lookup.
+
+        Unlike calling :meth:`get` (or :meth:`contains` followed by
+        :meth:`get`) once per key, this issues one
+        ``self._store.get_many`` call for the whole batch, which
+        matters for stores where each lookup is a network round trip
+        (e.g. Redis, Postgres).
+
+        Args:
+            keys: The keys to look up.
+
+        Returns:
+            A dict mapping each key that is a hit -- present,
+            unexpired, and (when ``ignore_none`` is ``True``) not a
+            cached ``None`` -- to its cached value. Keys that are
+            missing, expired, or an ignored ``None`` are omitted
+            entirely rather than mapped to ``None``, so a hit can
+            always be distinguished from a miss with ``in``. Expired
+            entries are evicted from the backing store as a side
+            effect of this call, as in :meth:`get`.
+
+        Example:
+            ```pycon
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> cache.set("a", "hello")
+            >>> cache.set("b", "world")
+            >>> sorted(cache.get_many(["a", "b", "missing"]).items())
+            [('a', 'hello'), ('b', 'world')]
+
+            ```
+        """
+        if not keys:
+            return {}
+        entries = self._store.get_many(keys)
+        now = time.time()
+        results: dict[str, Any] = {}
+        expired_keys: list[str] = []
+        for key, entry in zip(keys, entries, strict=True):
+            if entry is None:
+                continue
+            expires_at = entry["expires_at"]
+            if expires_at is not None and now > expires_at:
+                expired_keys.append(key)
+                continue
+            value = entry["value"]
+            if self._ignore_none and value is None:
+                logger.debug("Ignoring cached None: %s", key)
+                continue
+            results[key] = value
+        if expired_keys:
+            self._store.delete_many(expired_keys)
+        return results
+
     def delete(self, key: str) -> None:
         """Remove a single entry from the cache, if present.
 
