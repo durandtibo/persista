@@ -1111,10 +1111,10 @@ def test_sqlite_store_async_methods_work_without_aiosqlite(
     from persista.store import sqlite as sqlite_module
 
     monkeypatch.setattr(sqlite_module, "is_aiosqlite_available", lambda: False)
-    store = store_cls(":memory:")
+    with store_cls(":memory:") as store:
 
-    async def _run() -> dict[str, object] | None:
-        await store.aset("1", {"a": 1})
-        return await store.aget("1")
+        async def _run() -> dict[str, object] | None:
+            await store.aset("1", {"a": 1})
+            return await store.aget("1")
 
-    assert asyncio.run(_run()) == {"a": 1}
+        assert asyncio.run(_run()) == {"a": 1}
