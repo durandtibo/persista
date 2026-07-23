@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING, Any
 from coola.display import InlineDisplayMixin
 
 from persista.store.base import BaseStore
+from persista.utils.asyncio import EmptyAsyncIterator
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator, Mapping
+    from collections.abc import AsyncIterator, Iterator, Mapping
 
     from typing_extensions import Self
 
@@ -26,12 +27,16 @@ class NullStore(BaseStore, InlineDisplayMixin):
     """A :class:`~persista.store.base.BaseStore` implementation that
     forgets everything written to it.
 
-    Every :meth:`set` / :meth:`set_many` call is silently discarded,
-    so :meth:`get` / :meth:`get_many` always report a miss and the
-    store always reports as empty. This is primarily useful for
-    plugging into :class:`~persista.cache.cache.Cache` to disable
-    caching without changing any calling code: every lookup misses,
-    so ``get_or_compute`` / ``memoize`` always recompute the value.
+    Every :meth:`set`/:meth:`aset`/:meth:`set_many`/:meth:`aset_many`
+    call is silently discarded, so :meth:`get`/:meth:`aget` always
+    report a miss and the store always reports as empty. This is
+    primarily useful for plugging into
+    :class:`~persista.cache.cache.Cache` to disable caching without
+    changing any calling code: every lookup misses, so
+    ``get_or_compute``/``memoize`` always recompute the value.
+
+    There is no I/O to offload here, so the async methods run inline
+    rather than through a thread pool.
 
     Example:
         ```pycon
@@ -51,6 +56,9 @@ class NullStore(BaseStore, InlineDisplayMixin):
     def close(self) -> None:
         self._closed = True
 
+    async def aclose(self) -> None:
+        self._closed = True
+
     @property
     def closed(self) -> bool:
         return self._closed
@@ -58,10 +66,24 @@ class NullStore(BaseStore, InlineDisplayMixin):
     def get(self, key: str) -> dict[str, Any] | None:  # noqa: ARG002
         return None
 
+    async def aget(self, key: str) -> dict[str, Any] | None:  # noqa: ARG002
+        return None
+
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
         return [None] * len(keys)
 
+    async def aget_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        return [None] * len(keys)
+
     def set(
+        self,
+        key: str,
+        value: dict[str, Any],  # noqa: ARG002
+        on_conflict: OnConflict = "overwrite",  # noqa: ARG002
+    ) -> None:
+        logger.debug("Discarding key-value pair: %s", key)
+
+    async def aset(
         self,
         key: str,
         value: dict[str, Any],  # noqa: ARG002
@@ -76,34 +98,71 @@ class NullStore(BaseStore, InlineDisplayMixin):
     ) -> None:
         logger.debug("Discarding %d key-value pair(s)", len(items))
 
+    async def aset_many(
+        self,
+        items: Mapping[str, dict[str, Any]],
+        on_conflict: OnConflict = "overwrite",  # noqa: ARG002
+    ) -> None:
+        logger.debug("Discarding %d key-value pair(s)", len(items))
+
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:  # noqa: ARG002
+        return []
+
+    async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:  # noqa: ARG002
         return []
 
     def delete(self, key: str) -> None:  # noqa: ARG002
         return
 
+    async def adelete(self, key: str) -> None:  # noqa: ARG002
+        return
+
     def delete_many(self, keys: list[str]) -> None:  # noqa: ARG002
+        return
+
+    async def adelete_many(self, keys: list[str]) -> None:  # noqa: ARG002
         return
 
     def clear(self) -> None:
         return
 
+    async def aclear(self) -> None:
+        return
+
     def contains(self, key: str) -> bool:  # noqa: ARG002
+        return False
+
+    async def acontains(self, key: str) -> bool:  # noqa: ARG002
         return False
 
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         return [], list(keys)
 
+    async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+        return [], list(keys)
+
     def keys(self) -> Iterator[str]:
         return iter(())
+
+    def akeys(self) -> AsyncIterator[str]:
+        return EmptyAsyncIterator()
 
     def iter_batches(
         self,
         batch_size: int = 32,  # noqa: ARG002
-    ) -> Generator[dict[str, dict[str, Any]], None, None]:
+    ) -> Iterator[dict[str, dict[str, Any]]]:
         yield from ()
 
+    def aiter_batches(
+        self,
+        batch_size: int = 32,  # noqa: ARG002
+    ) -> AsyncIterator[dict[str, dict[str, Any]]]:
+        return EmptyAsyncIterator()
+
     def count(self) -> int:
+        return 0
+
+    async def acount(self) -> int:
         return 0
 
     def to_uri(self) -> str:

@@ -6,7 +6,6 @@ import pytest
 
 from persista.store import (
     AsyncInMemoryStore,
-    AsyncNullStore,
     InMemoryStore,
     JsonFileStore,
     NullStore,
@@ -60,11 +59,6 @@ def test_async_store_from_uri_memory() -> None:
     assert isinstance(store, AsyncInMemoryStore)
 
 
-def test_async_store_from_uri_null() -> None:
-    store = async_store_from_uri("null://")
-    assert isinstance(store, AsyncNullStore)
-
-
 def test_async_store_from_uri_unknown_scheme_raises() -> None:
     with pytest.raises(ValueError, match="scheme"):
         async_store_from_uri("not-a-real-scheme://whatever")
@@ -83,6 +77,6 @@ def test_register_scheme_overwrites_existing() -> None:
 
 
 def test_register_async_scheme() -> None:
-    register_async_scheme("custom-null", AsyncNullStore)
-    store = async_store_from_uri("custom-null://")
-    assert isinstance(store, AsyncNullStore)
+    register_async_scheme("custom-memory", AsyncInMemoryStore)
+    store = async_store_from_uri("custom-memory://")
+    assert isinstance(store, AsyncInMemoryStore)
