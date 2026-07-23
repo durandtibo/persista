@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
+from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import normalize_on_conflict, validate_batch_size
@@ -34,7 +35,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 _DEFAULT_MAP_SIZE = 1024**3  # 1 GiB
 
 
-class BaseLmdbStore(BaseStore, MultilineDisplayMixin):
+class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     r"""Define a base class for LMDB-backed key-value stores.
 
     LMDB is an embedded, memory-mapped key-value store backed by a

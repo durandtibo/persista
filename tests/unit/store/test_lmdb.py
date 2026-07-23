@@ -721,3 +721,35 @@ def test_json_store_normalizes_tuples_and_sets_are_unsupported(tmp_path: Path) -
         assert store.get("1") == {"coordinates": [1, 2, 3]}
         with pytest.raises(TypeError, match="not JSON serializable"):
             store.set("2", {"tags": {"python", "lmdb"}})
+
+
+###############################
+#     Tests for async APIs    #
+###############################
+
+
+@pytest.mark.asyncio
+async def test_lmdb_store_aget_aset_round_trip(store: BaseLmdbStore) -> None:
+    await store.aset("1", {"a": 1})
+    assert await store.aget("1") == {"a": 1}
+
+
+@pytest.mark.asyncio
+async def test_lmdb_store_acontains_many(store: BaseLmdbStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    found, missing = await store.acontains_many(["1", "3"])
+    assert found == ["1"]
+    assert missing == ["3"]
+
+
+@pytest.mark.asyncio
+async def test_lmdb_store_akeys(store: BaseLmdbStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert sorted([key async for key in store.akeys()]) == ["1", "2"]
+
+
+@pytest.mark.asyncio
+async def test_lmdb_store_aiter_batches(store: BaseLmdbStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert sum(len(b) for b in batches) == 3
