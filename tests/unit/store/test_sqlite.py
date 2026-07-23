@@ -1051,3 +1051,76 @@ def test_from_uri_read_only_rejects_writes(
         assert reloaded.count() == len(items)
         with pytest.raises(sqlite3.OperationalError):
             reloaded.set("new", {"a": 1})
+
+
+# ---------------------------------------------------------------------------
+# Async methods
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_aget_aset_round_trip(store) -> None:
+    await store.aset("1", {"title": "Intro to Python"})
+    assert await store.aget("1") == {"title": "Intro to Python"}
+    assert await store.aget("missing") is None
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_aset_many_and_afilter(store) -> None:
+    await store.aset_many(
+        {
+            "1": {"author": "Alice", "category": "Programming"},
+            "2": {"author": "Bob", "category": "History"},
+        }
+    )
+    assert len(await store.afilter(author="Alice")) == 1
+    assert len(await store.afilter(category="History")) == 1
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_acontains_many(store) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    found, missing = await store.acontains_many(["1", "3"])
+    assert found == ["1"]
+    assert missing == ["3"]
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_adelete_acount(store) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    await store.adelete("1")
+    assert await store.acount() == 1
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_akeys_and_aiter_batches(store) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    assert sorted([key async for key in store.akeys()]) == ["1", "2", "3"]
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert sum(len(b) for b in batches) == 3
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_aclose_is_idempotent(store_cls) -> None:
+    store = store_cls(":memory:")
+    await store.aget("1")  # forces the lazy async connection open
+    await store.aclose()
+    await store.aclose()
+    assert store.closed
+
+
+def test_sqlite_store_async_methods_work_without_aiosqlite(
+    store_cls, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from persista.store import sqlite as sqlite_module
+
+    monkeypatch.setattr(sqlite_module, "is_aiosqlite_available", lambda: False)
+    store = store_cls(":memory:")
+
+    async def _run() -> dict[str, object] | None:
+        await store.aset("1", {"a": 1})
+        return await store.aget("1")
+
+    assert asyncio.run(_run()) == {"a": 1}

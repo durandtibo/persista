@@ -16,7 +16,6 @@ from urllib.parse import urlsplit
 
 from persista.store.async_postgres import AsyncPostgresStore
 from persista.store.async_redis import AsyncRedisStore
-from persista.store.async_sqlite import AsyncSQLiteStore, AsyncTypedSQLiteStore
 from persista.store.duckdb import DuckDBStore, TypedDuckDBStore
 from persista.store.file import JsonFileStore, PickleFileStore
 from persista.store.in_memory import InMemoryStore
@@ -48,8 +47,6 @@ _SYNC_SCHEMES: dict[str, type[BaseStore]] = {
 }
 
 _ASYNC_SCHEMES: dict[str, type[AsyncBaseStore]] = {
-    "sqlite": AsyncSQLiteStore,
-    "sqlite+typed": AsyncTypedSQLiteStore,
     "postgresql": AsyncPostgresStore,
     "postgres": AsyncPostgresStore,
     "redis": AsyncRedisStore,
