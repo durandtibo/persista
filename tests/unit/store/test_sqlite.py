@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from collections.abc import Generator, Iterator
 from typing import TYPE_CHECKING, Any
@@ -7,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from persista.store import BaseSQLiteStore, SQLiteStore, TypedSQLiteStore
+from persista.store import sqlite as sqlite_module
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1106,9 +1108,6 @@ async def test_sqlite_store_aclose_is_idempotent(store_cls: type[BaseSQLiteStore
 def test_sqlite_store_async_methods_work_without_aiosqlite(
     store_cls: type[BaseSQLiteStore], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import asyncio
-
-    from persista.store import sqlite as sqlite_module
 
     monkeypatch.setattr(sqlite_module, "is_aiosqlite_available", lambda: False)
     with store_cls(":memory:") as store:
