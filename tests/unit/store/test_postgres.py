@@ -1052,6 +1052,39 @@ def test_context_manager_usable_for_reads_and_writes(store_cls: type[BasePostgre
         assert store.count() == 1
 
 
+def test_context_manager_reopens_closed_store(store_cls: type[BasePostgresStore]) -> None:
+    """Reopening a closed store via ``__enter__`` must reconnect rather
+    than reusing the closed connection."""
+    store = _connect(store_cls)
+    store.close()
+    assert store.closed
+
+    new_conn = FakeConnection()
+    with patch(f"{MODULE}.psycopg.connect", return_value=new_conn), store:
+        assert not store.closed
+        assert store._conn is new_conn
+        store.set("1", {"text": "hello"})
+        assert store.count() == 1
+
+
+async def test_async_context_manager_reopens_closed_store(
+    store_cls: type[BasePostgresStore],
+) -> None:
+    """Reopening a closed store via ``__aenter__`` must reconnect rather
+    than reusing the closed connection."""
+    store = _connect(store_cls)
+    await store.aclose()
+    assert store.closed
+
+    new_conn = FakeConnection()
+    with patch(f"{MODULE}.psycopg.connect", return_value=new_conn):
+        async with store:
+            assert not store.closed
+            assert store._conn is new_conn
+            store.set("1", {"text": "hello"})
+            assert store.count() == 1
+
+
 #######################################################
 #     TypedPostgresStore-specific schema behavior     #
 #######################################################

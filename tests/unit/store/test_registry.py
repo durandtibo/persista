@@ -1,6 +1,19 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import pytest
 
-from persista.store import InMemoryStore, register_scheme, store_from_uri
+from persista.store import (
+    InMemoryStore,
+    JsonFileStore,
+    NullStore,
+    register_scheme,
+    store_from_uri,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_store_from_uri_memory_scheme() -> None:
@@ -8,10 +21,32 @@ def test_store_from_uri_memory_scheme() -> None:
     assert isinstance(store, InMemoryStore)
 
 
+def test_store_from_uri_null() -> None:
+    store = store_from_uri("null://")
+    assert isinstance(store, NullStore)
+
+
+def test_store_from_uri_file_json(tmp_path: Path) -> None:
+    original = JsonFileStore(tmp_path / "db")
+    original.set("1", {"a": 1})
+    store = store_from_uri(original.to_uri())
+    assert isinstance(store, JsonFileStore)
+    assert store.get("1") == {"a": 1}
+
+
 async def test_store_from_uri_result_supports_async_methods() -> None:
     store = store_from_uri("memory://")
     await store.aset("1", {"a": 1})
     assert await store.aget("1") == {"a": 1}
+
+
+def test_register_scheme() -> None:
+    register_scheme("custom-memory", InMemoryStore)
+    try:
+        store = store_from_uri("custom-memory://")
+        assert isinstance(store, InMemoryStore)
+    finally:
+        del store_from_uri.__globals__["_SCHEMES"]["custom-memory"]
 
 
 def test_register_scheme_overrides_existing() -> None:

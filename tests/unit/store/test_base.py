@@ -3,10 +3,12 @@ from __future__ import annotations
 import copy
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from persista.store import BaseStore, normalize_on_conflict, validate_batch_size
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator, Mapping
+    from collections.abc import AsyncIterator, Generator, Iterator, Mapping
 
     from persista.store import OnConflict
 
@@ -184,3 +186,123 @@ async def test_base_store_async_context_manager_calls_aclose() -> None:
     async with InMemoryTestStore() as store:
         assert not store.closed
     assert store.closed
+
+
+def test_base_store_is_abstract() -> None:
+    with pytest.raises(TypeError, match="abstract"):
+        BaseStore()  # type: ignore[abstract]
+
+
+def test_base_store_is_abstract_missing_to_uri_from_uri() -> None:
+    class IncompleteStore(BaseStore):
+        def close(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+        @property
+        def closed(self) -> bool:
+            return False
+
+        def get(self, key: str) -> dict[str, Any] | None:  # noqa: ARG002
+            return None
+
+        async def aget(self, key: str) -> dict[str, Any] | None:
+            return self.get(key)
+
+        def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:  # noqa: ARG002
+            return []
+
+        async def aget_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+            return self.get_many(keys)
+
+        def set(
+            self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+        ) -> None:
+            pass
+
+        async def aset(
+            self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+        ) -> None:
+            self.set(key, value, on_conflict=on_conflict)
+
+        def set_many(
+            self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        ) -> None:
+            pass
+
+        async def aset_many(
+            self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        ) -> None:
+            self.set_many(items, on_conflict=on_conflict)
+
+        def filter(self, **field_filters: Any) -> list[dict[str, Any]]:  # noqa: ARG002
+            return []
+
+        async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:
+            return self.filter(**field_filters)
+
+        def delete(self, key: str) -> None:
+            pass
+
+        async def adelete(self, key: str) -> None:
+            self.delete(key)
+
+        def delete_many(self, keys: list[str]) -> None:
+            pass
+
+        async def adelete_many(self, keys: list[str]) -> None:
+            self.delete_many(keys)
+
+        def clear(self) -> None:
+            pass
+
+        async def aclear(self) -> None:
+            self.clear()
+
+        def contains(self, key: str) -> bool:  # noqa: ARG002
+            return False
+
+        async def acontains(self, key: str) -> bool:
+            return self.contains(key)
+
+        def contains_many(
+            self,
+            keys: list[str],  # noqa: ARG002
+        ) -> tuple[list[str], list[str]]:
+            return [], []
+
+        async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+            return self.contains_many(keys)
+
+        def keys(self) -> Iterator[str]:
+            return iter(())
+
+        async def akeys(self) -> AsyncIterator[str]:
+            for key in ():
+                yield key
+
+        def iter_batches(
+            self,
+            batch_size: int = 32,  # noqa: ARG002
+        ) -> Generator[dict[str, dict[str, Any]], None, None]:
+            yield from ()
+
+        async def aiter_batches(
+            self,
+            batch_size: int = 32,
+        ) -> AsyncIterator[dict[str, dict[str, Any]]]:
+            for batch in self.iter_batches(batch_size=batch_size):
+                yield batch
+
+        def count(self) -> int:
+            return 0
+
+        async def acount(self) -> int:
+            return self.count()
+
+        # Intentionally omit ``to_uri``/``from_uri`` to keep this class abstract.
+
+    with pytest.raises(TypeError, match="abstract"):
+        IncompleteStore()  # type: ignore[abstract]

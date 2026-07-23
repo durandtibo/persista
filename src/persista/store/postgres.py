@@ -471,9 +471,17 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         return kwargs | self._kwargs
 
     def __enter__(self) -> Self:
+        if self._closed:
+            self._conn = psycopg.connect(self._conninfo, autocommit=True, **self._kwargs)
+            self._conn.execute(self._create_table_sql())
+            self._closed = False
         return self
 
     async def __aenter__(self) -> Self:
+        if self._closed:
+            self._conn = psycopg.connect(self._conninfo, autocommit=True, **self._kwargs)
+            self._conn.execute(self._create_table_sql())
+            self._closed = False
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:

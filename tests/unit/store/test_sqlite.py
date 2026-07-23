@@ -1138,6 +1138,13 @@ async def test_sqlite_store_aclose_is_idempotent(store_cls: type[BaseSQLiteStore
     assert store.closed
 
 
+@aiosqlite_available
+async def test_init_accepts_aiosqlite_connect_kwargs(store_cls: type[BaseSQLiteStore]) -> None:
+    store = store_cls(":memory:", timeout=5.0)
+    assert await store.acount() == 0
+    await store.aclose()
+
+
 def test_sqlite_store_async_methods_work_without_aiosqlite(
     store_cls: type[BaseSQLiteStore], monkeypatch: pytest.MonkeyPatch
 ) -> None:
