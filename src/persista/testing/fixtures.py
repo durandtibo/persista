@@ -12,6 +12,8 @@ __all__ = [
     "duckdb_not_available",
     "faker_available",
     "faker_not_available",
+    "httpx_available",
+    "httpx_not_available",
     "lmdb_available",
     "lmdb_not_available",
     "psycopg_available",
