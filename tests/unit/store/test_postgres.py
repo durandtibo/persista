@@ -203,12 +203,98 @@ class FakeConnection:
 
 
 def _connect(store_cls: type[BasePostgresStore], table: str = "store", **kwargs: Any) -> Any:
-    """Construct a store against a fresh :class:`FakeConnection`."""
+    """Construct a store against a fresh :class:`FakeConnection`.
+
+    Also pre-populates the store's lazy async connection slot with an
+    :class:`_AsyncConnAdapter` wrapping the *same* fake connection (and
+    therefore the same in-memory tables), so ``store._ensure_aconn()``
+    returns it immediately without ever calling the real
+    ``psycopg.AsyncConnection.connect`` -- sync and async operations
+    against the returned store share one consistent view of the data,
+    mirroring how a real Postgres server would behave.
+    """
     conn = FakeConnection()
     with patch(f"{MODULE}.psycopg.connect", return_value=conn):
         store = store_cls("postgresql://x", table=table, **kwargs)
     conn.store = store
+    store._aconn = _AsyncConnAdapter(conn)
     return store
+
+
+# ---------------------------------------------------------------------------
+# Async adapter over FakeConnection
+#
+# BasePostgresStore's async methods go through psycopg.AsyncConnection, not
+# psycopg.Connection. Rather than duplicate FakeConnection's dispatch logic
+# for a second, async-flavored fake, these adapters wrap the exact same
+# FakeConnection/FakeCursor instance with an async-compatible surface, so a
+# single store's sync and async operations observe the same table state.
+# ---------------------------------------------------------------------------
+
+
+class _AsyncCursorAdapter:
+    def __init__(self, cursor: FakeCursor) -> None:
+        self._cursor = cursor
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+    def __aiter__(self) -> Any:
+        return _aiter(self._cursor._rows)
+
+    async def execute(self, query: Any, params: Any = None) -> _AsyncCursorAdapter:
+        self._cursor.execute(query, params)
+        return self
+
+    async def executemany(self, query: Any, seq: Any) -> None:
+        self._cursor.executemany(query, seq)
+
+    async def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._cursor.fetchall()
+
+    async def fetchone(self) -> tuple[Any, ...] | None:
+        return self._cursor.fetchone()
+
+    @property
+    def itersize(self) -> int:
+        return self._cursor.itersize
+
+    @itersize.setter
+    def itersize(self, value: int) -> None:
+        self._cursor.itersize = value
+
+
+async def _aiter(rows: list[tuple[Any, ...]]) -> Any:
+    for row in rows:
+        yield row
+
+
+class _AsyncNullContext:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+
+class _AsyncConnAdapter:
+    def __init__(self, conn: FakeConnection) -> None:
+        self._conn = conn
+
+    def cursor(self, name: str | None = None) -> _AsyncCursorAdapter:
+        return _AsyncCursorAdapter(self._conn.cursor(name))
+
+    async def execute(self, query: Any, params: Any = None) -> None:
+        self._conn.execute(query, params)
+
+    async def close(self) -> None:
+        self._conn.close()
+
+    def transaction(self) -> _AsyncNullContext:
+        return _AsyncNullContext()
 
 
 # ---------------------------------------------------------------------------
@@ -1202,3 +1288,147 @@ def test_typed_round_trip_empty_value(typed_sql_store: TypedPostgresStore) -> No
     row = typed_sql_store._value_to_row("1", value)
     assert row == ("1", None, None, None)
     assert typed_sql_store._row_to_value(row) == {}
+
+
+# ---------------------------------------------------------------------------
+# Async methods
+#
+# BasePostgresStore holds both a sync psycopg.Connection (eager) and a
+# lazily-opened psycopg.AsyncConnection; the fixtures above pre-populate the
+# latter with an _AsyncConnAdapter wrapping the same FakeConnection (see
+# _connect()), so store.a*() methods below observe the exact same in-memory
+# table state as their sync counterparts tested above.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aget_aset_round_trip(store: BasePostgresStore) -> None:
+    await store.aset("1", {"title": "Intro to Python"})
+    assert await store.aget("1") == {"title": "Intro to Python"}
+    assert await store.aget("missing") is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aset_many_and_afilter(store: BasePostgresStore) -> None:
+    await store.aset_many(
+        {
+            "1": {"author": "Alice", "category": "Programming"},
+            "2": {"author": "Bob", "category": "History"},
+        }
+    )
+    assert len(await store.afilter(author="Alice")) == 1
+    assert len(await store.afilter(category="History")) == 1
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aset_on_conflict_raise(store: BasePostgresStore) -> None:
+    await store.aset("1", {"text": "original"})
+    with pytest.raises(KeyError, match=r"1"):
+        await store.aset("1", {"text": "updated"}, on_conflict="raise")
+    assert await store.aget("1") == {"text": "original"}
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aset_on_conflict_merge(store: BasePostgresStore) -> None:
+    await store.aset("1", {"text": "original", "author": "Alice"})
+    await store.aset("1", {"text": "updated"}, on_conflict="merge")
+    assert await store.aget("1") == {"text": "updated", "author": "Alice"}
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_adelete_acount(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    await store.adelete("1")
+    assert await store.acount() == 1
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_adelete_many(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    await store.adelete_many(["1", "3"])
+    assert await store.acount() == 1
+    assert await store.aget("2") is not None
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aclear(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    await store.aclear()
+    assert await store.acount() == 0
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_acontains(store: BasePostgresStore) -> None:
+    await store.aset("1", {"a": 1})
+    assert await store.acontains("1")
+    assert not await store.acontains("99")
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_acontains_many(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    found, missing = await store.acontains_many(["1", "3"])
+    assert found == ["1"]
+    assert missing == ["3"]
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_akeys_aiter_batches(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    assert sorted([key async for key in store.akeys()]) == ["1", "2", "3"]
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert sum(len(b) for b in batches) == 3
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aiter_batches_zero_batch_size_raises(
+    store: BasePostgresStore,
+) -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        async for _ in store.aiter_batches(batch_size=0):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aclose_without_ever_connecting_is_safe(
+    store_cls: type[BasePostgresStore],
+) -> None:
+    """A store whose async connection was never used has ``_aconn is
+    None`` (the sync connection is still opened eagerly, per the class
+    docstring); ``aclose()`` must tolerate that."""
+    with patch(f"{MODULE}.psycopg.connect", return_value=FakeConnection()):
+        store = store_cls("postgresql://x", table="store")
+    assert store._aconn is None
+    await store.aclose()
+    assert store.closed
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aclose_is_idempotent(store: BasePostgresStore) -> None:
+    await store.aget("1")  # forces the lazy async connection to be used
+    await store.aclose()
+    await store.aclose()
+    assert store.closed
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aclose_returns_none(store: BasePostgresStore) -> None:
+    assert await store.aclose() is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_async_context_manager(store_cls: type[BasePostgresStore]) -> None:
+    store = _connect(store_cls)
+    async with store as astore:
+        await astore.aset_many(
+            {
+                "1": {"text": "hello", "author": "Alice"},
+                "2": {"text": "world", "author": "Bob"},
+            }
+        )
+        assert await astore.acount() == 2
+        result = await astore.afilter(author="Alice")
+        assert result[0]["text"] == "hello"
+        await astore.adelete("1")
+        assert await astore.acount() == 1
+    assert store._conn.closed

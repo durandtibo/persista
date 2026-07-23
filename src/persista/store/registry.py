@@ -14,7 +14,6 @@ __all__ = [
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from persista.store.async_postgres import AsyncPostgresStore
 from persista.store.async_redis import AsyncRedisStore
 from persista.store.duckdb import DuckDBStore, TypedDuckDBStore
 from persista.store.file import JsonFileStore, PickleFileStore
@@ -47,8 +46,6 @@ _SYNC_SCHEMES: dict[str, type[BaseStore]] = {
 }
 
 _ASYNC_SCHEMES: dict[str, type[AsyncBaseStore]] = {
-    "postgresql": AsyncPostgresStore,
-    "postgres": AsyncPostgresStore,
     "redis": AsyncRedisStore,
     "rediss": AsyncRedisStore,
 }

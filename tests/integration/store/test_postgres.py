@@ -841,3 +841,96 @@ def test_iter_batches_with_typed_schema(
     for batch in typed_store.iter_batches(batch_size=2):
         result.update(batch)
     assert result == items
+
+
+# ---------------------------------------------------------------------------
+# Async methods
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aget_aset_round_trip(store: BasePostgresStore) -> None:
+    await store.aset("1", {"title": "Intro to Python"})
+    assert await store.aget("1") == {"title": "Intro to Python"}
+    assert await store.aget("missing") is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aset_many_and_afilter(store: BasePostgresStore) -> None:
+    await store.aset_many(
+        {
+            "1": {"author": "Alice", "category": "Programming"},
+            "2": {"author": "Bob", "category": "History"},
+        }
+    )
+    assert len(await store.afilter(author="Alice")) == 1
+    assert len(await store.afilter(category="History")) == 1
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_acontains_many(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    found, missing = await store.acontains_many(["1", "3"])
+    assert found == ["1"]
+    assert missing == ["3"]
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_adelete_acount(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    await store.adelete("1")
+    assert await store.acount() == 1
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_akeys_aiter_batches(store: BasePostgresStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    assert sorted([key async for key in store.akeys()]) == ["1", "2", "3"]
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert sum(len(b) for b in batches) == 3
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aclose_is_idempotent(
+    store_cls: type[BasePostgresStore], conninfo: str, table_name: str
+) -> None:
+    store = store_cls(conninfo, table=table_name)
+    await store.aget("1")  # forces the lazy async connection open
+    await store.aclose()
+    await store.aclose()
+    assert store.closed
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aset_on_conflict_merge(store: BasePostgresStore) -> None:
+    await store.aset("1", {"text": "original", "author": "Alice"})
+    await store.aset("1", {"text": "updated"}, on_conflict="merge")
+    assert await store.aget("1") == {"text": "updated", "author": "Alice"}
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_aset_on_conflict_raise(store: BasePostgresStore) -> None:
+    await store.aset("1", {"text": "original"})
+    with pytest.raises(KeyError, match=r"1"):
+        await store.aset("1", {"text": "updated"}, on_conflict="raise")
+    assert await store.aget("1") == {"text": "original"}
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_async_context_manager(
+    store_cls: type[BasePostgresStore], conninfo: str, table_name: str
+) -> None:
+    async with store_cls(conninfo, table=table_name) as astore:
+        await astore.aset_many(
+            {
+                "1": {"text": "hello", "author": "Alice"},
+                "2": {"text": "world", "author": "Bob"},
+            }
+        )
+        assert await astore.acount() == 2
+        result = await astore.afilter(author="Alice")
+        assert result[0]["text"] == "hello"
+        await astore.adelete("1")
+        assert await astore.acount() == 1
+    with pytest.raises(psycopg.OperationalError, match=r"closed"):
+        astore._conn.execute("SELECT 1")
