@@ -7,6 +7,7 @@ __all__ = ["BasePostgresStore", "PostgresStore", "TypedPostgresStore"]
 
 import asyncio
 import logging
+import uuid
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode, urlsplit, urlunsplit
@@ -422,10 +423,12 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         validate_batch_size(batch_size)
         query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
         # A named (server-side) cursor requires an explicit transaction
-        # block even on an autocommit connection.
+        # block even on an autocommit connection. The name includes a
+        # uuid4 (not just id(self)) so concurrent calls on the same store
+        # don't collide on the same server-side cursor name.
         with (
             self._conn.transaction(),
-            self._conn.cursor(name=f"iter_batches_{id(self)}") as cur,
+            self._conn.cursor(name=f"iter_batches_{id(self)}_{uuid.uuid4().hex}") as cur,
         ):
             cur.itersize = batch_size
             cur.execute(query)
@@ -438,7 +441,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
         async with (
             conn.transaction(),
-            conn.cursor(name=f"aiter_batches_{id(self)}") as cur,
+            conn.cursor(name=f"aiter_batches_{id(self)}_{uuid.uuid4().hex}") as cur,
         ):
             cur.itersize = batch_size
             await cur.execute(query)
