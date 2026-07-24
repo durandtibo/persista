@@ -279,9 +279,9 @@ def test_concurrent_set_on_conflict_raise_never_corrupts_value(store: BaseRedisS
 
 def test_set_many_on_conflict_skip_all_conflicting_writes_nothing(store: BaseRedisStore) -> None:
     """When every key in the batch already exists and
-    on_conflict="skip", resolve_conflicts produces an empty to_write
-    mapping, so _set_many must handle being called with {} without
-    erroring."""
+    on_conflict="skip", the WATCH/MULTI transaction in set_many resolves
+    to an empty to_write mapping and must leave every existing value
+    untouched."""
     store.set_many({"1": {"text": "original"}, "2": {"text": "original"}})
     store.set_many(
         {"1": {"text": "updated"}, "2": {"text": "updated"}},
@@ -301,6 +301,25 @@ async def test_aset_many_on_conflict_skip_all_conflicting_writes_nothing(
     )
     assert await store.aget("1") == {"text": "original"}
     assert await store.aget("2") == {"text": "original"}
+
+
+# --- _set_many / _aset_many (private "overwrite" helper) ---
+#
+# set_many/aset_many only call these directly on the on_conflict="overwrite"
+# fast path, where items is always non-empty (set_many/aset_many return
+# early on an empty mapping). The "if items:" no-op guard inside them is
+# still part of their contract as standalone helpers, so it's covered
+# directly here rather than indirectly through the public API.
+
+
+def test_set_many_helper_empty_items_is_a_no_op(store: BaseRedisStore) -> None:
+    store._set_many({})
+    assert store.count() == 0
+
+
+async def test_aset_many_helper_empty_items_is_a_no_op(store: BaseRedisStore) -> None:
+    await store._aset_many({})
+    assert await store.acount() == 0
 
 
 async def test_aset_many_retries_on_watch_error(
