@@ -28,6 +28,7 @@ __all__ = [
     "TypedSQLiteStore",
     "normalize_on_conflict",
     "register_scheme",
+    "split_present_missing",
     "store_from_uri",
     "validate_batch_size",
     "validate_field_name",
@@ -38,6 +39,7 @@ from persista.store.base import BaseStore
 from persista.store.duckdb import BaseDuckDBStore, DuckDBStore, TypedDuckDBStore
 from persista.store.file import BaseFileStore, JsonFileStore, PickleFileStore
 from persista.store.in_memory import InMemoryStore
+from persista.store.keys import split_present_missing
 from persista.store.lmdb import BaseLmdbStore, LmdbStore, PickleLmdbStore
 from persista.store.null import NullStore
 from persista.store.postgres import BasePostgresStore, PostgresStore, TypedPostgresStore
