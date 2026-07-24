@@ -105,6 +105,9 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
         return cls()
 
 
+# --- aget/aset ---
+
+
 async def test_threaded_mixin_aget_aset_round_trip() -> None:
     store = _ThreadedTestStore()
     await store.aset("1", {"a": 1})
@@ -120,11 +123,17 @@ async def test_threaded_mixin_aset_many_and_acontains_many() -> None:
     assert missing == ["3"]
 
 
+# --- akeys ---
+
+
 async def test_threaded_mixin_akeys_yields_all_keys() -> None:
     store = _ThreadedTestStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     keys = sorted([key async for key in store.akeys()])
     assert keys == ["1", "2"]
+
+
+# --- aiter_batches ---
 
 
 async def test_threaded_mixin_aiter_batches_respects_batch_size() -> None:
@@ -133,6 +142,9 @@ async def test_threaded_mixin_aiter_batches_respects_batch_size() -> None:
     batches = [batch async for batch in store.aiter_batches(batch_size=2)]
     assert sum(len(b) for b in batches) == 3
     assert all(len(b) <= 2 for b in batches)
+
+
+# --- aget_many/adelete_many/aclear ---
 
 
 async def test_threaded_mixin_aget_many() -> None:
@@ -157,10 +169,16 @@ async def test_threaded_mixin_adelete_and_aclear() -> None:
     assert await store.acount() == 0
 
 
+# --- aclose ---
+
+
 async def test_threaded_mixin_aclose_sets_closed() -> None:
     store = _ThreadedTestStore()
     await store.aclose()
     assert store.closed
+
+
+# --- afilter ---
 
 
 async def test_threaded_mixin_afilter_matches_field() -> None:
@@ -195,6 +213,9 @@ class _RaisingStore(_ThreadedTestStore):
     def get(self, key: str) -> dict[str, Any] | None:
         msg = f"boom for {key}"
         raise _BoomError(msg)
+
+
+# --- threading behavior ---
 
 
 async def test_threaded_mixin_aget_runs_on_worker_thread() -> None:

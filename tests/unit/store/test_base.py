@@ -151,6 +151,9 @@ class InMemoryTestStore(BaseStore):
         return cls()
 
 
+# --- values/avalues ---
+
+
 def test_base_store_values_iterates_all() -> None:
     store = InMemoryTestStore()
     store.set_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
@@ -162,6 +165,9 @@ async def test_base_store_avalues_iterates_all() -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
     values = [v async for v in store.avalues(batch_size=2)]
     assert sorted(v["a"] for v in values) == [1, 2, 3]
+
+
+# --- set_batches/aset_batches ---
 
 
 def test_base_store_set_batches() -> None:
@@ -188,6 +194,9 @@ async def test_base_store_aset_batches_default_batch_size() -> None:
     assert await store.acount() == 2
 
 
+# --- context manager ---
+
+
 def test_base_store_sync_context_manager_calls_close() -> None:
     with InMemoryTestStore() as store:
         assert not store.closed
@@ -198,6 +207,9 @@ async def test_base_store_async_context_manager_calls_aclose() -> None:
     async with InMemoryTestStore() as store:
         assert not store.closed
     assert store.closed
+
+
+# --- clear/aclear ---
 
 
 def test_base_store_clear_removes_all_values() -> None:
@@ -236,6 +248,9 @@ async def test_base_store_aclear_empty_store_is_no_op() -> None:
 async def test_base_store_aclear_returns_none() -> None:
     store = InMemoryTestStore()
     assert await store.aclear() is None
+
+
+# --- abstract ---
 
 
 def test_base_store_is_abstract() -> None:
