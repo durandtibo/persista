@@ -1359,11 +1359,11 @@ async def test_sqlite_store_async_op_after_reopen_recreates_schema(
     sees a stale flag and skips creating the table on the new connection."""
     store = store_cls(":memory:")
     await store.aset("1", {"a": 1})
-    store.close()
+    await store.aclose()
     async with store:
         await store.aset("2", {"a": 2})
         assert await store.aget("2") == {"a": 2}
-    store.close()
+    await store.aclose()
 
 
 def test_sqlite_store_aget_after_close_raises(store_cls: type[BaseSQLiteStore]) -> None:

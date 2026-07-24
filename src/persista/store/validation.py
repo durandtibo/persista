@@ -5,7 +5,9 @@ from __future__ import annotations
 
 __all__ = [
     "ON_CONFLICT_VALUES",
+    "aresolve_conflicts",
     "normalize_on_conflict",
+    "resolve_conflicts",
     "validate_batch_size",
     "validate_field_name",
     "validate_on_conflict",
@@ -13,9 +15,12 @@ __all__ = [
 ]
 
 import re
-from typing import get_args
+from typing import TYPE_CHECKING, Any, get_args
 
 from persista.store.types import OnConflict
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Mapping
 
 ON_CONFLICT_VALUES = sorted(get_args(OnConflict))
 
