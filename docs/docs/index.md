@@ -136,9 +136,9 @@ synchronous and `a`-prefixed asynchronous methods on every store:
 
 Time-to-live caching for functions and values, with sync and async variants:
 
-- `Cache` and `AsyncCache` for explicit cache instances
+- `Cache`, with sync and async (`a`-prefixed) methods, for explicit cache instances
 - `cached` / `async_cached` decorators for caching function calls
-- Shared default caches via `get_cache` / `get_async_cache`
+- A shared default cache via `get_cache`
 
 [Learn more →](uguide/cache.md)
 
