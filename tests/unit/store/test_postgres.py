@@ -1038,6 +1038,20 @@ async def test_close_from_running_event_loop_raises(store: BasePostgresStore) ->
         store.close()
 
 
+def test_close_with_already_closed_event_loop_logs_and_clears_aconn(
+    store: BasePostgresStore,
+) -> None:
+    """If the event loop that owned the async connection is already
+    closed by the time ``close()`` runs synchronously,
+    ``asyncio.run(...)`` raises ``RuntimeError``; ``close()`` should
+    swallow it, log, and still clear ``_aconn``."""
+    store._aconn = MagicMock()
+    with patch(f"{MODULE}.asyncio.run", side_effect=RuntimeError("event loop is closed")):
+        store.close()
+    assert store._aconn is None
+    assert store.closed
+
+
 # --- closed ---
 
 

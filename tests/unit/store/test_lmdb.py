@@ -674,6 +674,37 @@ def test_context_manager_multiple_open_close_same_path(
             assert store.count() == i + 1
 
 
+# --- async context manager ---
+
+
+async def test_async_context_manager_returns_self(
+    store: BaseLmdbStore, store_cls: type[BaseLmdbStore]
+) -> None:
+    async with store as opened:
+        assert isinstance(opened, store_cls)
+
+
+async def test_async_context_manager_closes_on_normal_exit(
+    tmp_path: Path, store_cls: type[BaseLmdbStore]
+) -> None:
+    async with store_cls(tmp_path / "db") as store:
+        store.set("1", {"text": "hello"})
+        assert store.count() == 1
+    assert store._closed
+
+
+async def test_async_context_manager_multiple_open_close_same_path(
+    tmp_path: Path, store_cls: type[BaseLmdbStore]
+) -> None:
+    """Reopening after close via ``async with`` reconnects to the same
+    environment on disk, so previously written data is still there."""
+    lmdb_store = store_cls(tmp_path / "db")
+    for i in range(3):
+        async with lmdb_store as store:
+            store.set(str(i), {"text": "hello"})
+            assert store.count() == i + 1
+
+
 ###############################
 #     Tests for to_uri/from_uri     #
 ###############################
