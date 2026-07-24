@@ -1,4 +1,5 @@
-r"""Postgres-specific tests for :class:`PostgresStore`/:class:`TypedPostgresStore`.
+r"""Postgres-specific tests for
+:class:`PostgresStore`/:class:`TypedPostgresStore`.
 
 The generic :class:`~persista.store.BaseStore` contract (get/set/filter/
 delete/keys/... and their async twins) is already exercised exhaustively,
@@ -13,8 +14,7 @@ feature that only :class:`TypedPostgresStore` has.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Generator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -25,6 +25,9 @@ from tests.integration.store.postgres_helpers import (
     get_postgres_conninfo,
     postgres_available,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 if is_psycopg_available():
     import psycopg

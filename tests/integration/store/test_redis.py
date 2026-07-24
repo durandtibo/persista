@@ -1,4 +1,5 @@
-r"""Redis-specific tests for :class:`RedisStore`/:class:`PickleRedisStore`.
+r"""Redis-specific tests for
+:class:`RedisStore`/:class:`PickleRedisStore`.
 
 The generic :class:`~persista.store.BaseStore` contract (get/set/filter/
 delete/keys/... and their async twins) is already exercised exhaustively,
@@ -12,7 +13,6 @@ URI round-tripping, or the JSON-vs-pickle serialization difference between
 
 from __future__ import annotations
 
-from collections.abc import Generator
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -22,6 +22,8 @@ from persista.utils.imports import is_redis_available
 from tests.integration.store.redis_helpers import REDIS_URL, redis_server_available
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
     from persista.store import BaseRedisStore
 
 if is_redis_available():
@@ -107,8 +109,8 @@ def test_repr_after_close_does_not_raise(store: BaseRedisStore) -> None:
 
 
 def test_context_manager_multiple_open_close(store_cls: type[BaseRedisStore]) -> None:
-    """Reopening a store after close reconnects to the same Redis server,
-    so previously written data is still there."""
+    """Reopening a store after close reconnects to the same Redis
+    server, so previously written data is still there."""
     redis_store = store_cls(REDIS_URL)
     try:
         with redis_store as store:

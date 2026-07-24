@@ -15,8 +15,8 @@ from coola.utils.batching import batchify
 from coola.utils.path import sanitize_path
 from iden.io import load_json, load_pickle, save_json, save_pickle
 
-from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
+from persista.store.threaded import ThreadedAsyncStoreMixin
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
     normalize_on_conflict,
