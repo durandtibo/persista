@@ -373,6 +373,36 @@ Also use `async with` to automatically `aclose()` the store:
 
 ```
 
+## Checking Which Keys Exist
+
+`contains_many` checks a batch of keys at once, returning a list of booleans in the same order
+as the input, without fetching the values themselves:
+
+```pycon
+>>> from persista.store import InMemoryStore
+>>> store = InMemoryStore()
+>>> store.set_many({"1": {"a": 1}, "2": {"a": 2}})
+>>> store.contains_many(["1", "2", "3"])
+[True, True, False]
+
+```
+
+`split_present_missing` turns those flags into two key lists, which is often more convenient than
+zipping keys and flags yourself:
+
+```pycon
+>>> from persista.store import InMemoryStore, split_present_missing
+>>> store = InMemoryStore()
+>>> store.set_many({"1": {"a": 1}, "2": {"a": 2}})
+>>> keys = ["1", "2", "3"]
+>>> present, missing = split_present_missing(keys, store.contains_many(keys))
+>>> present
+['1', '2']
+>>> missing
+['3']
+
+```
+
 ## Iterating Over a Store
 
 `keys`, `values`, and `iter_batches` iterate over a store's content without loading everything
@@ -461,8 +491,8 @@ store = store_from_uri("mycustom://...")
 |-----------------|---------------------|-----------|----------------|----------------|-------|
 | `InMemoryStore` | Python `dict`        | No        | No             | N/A            | Yes   |
 | `SQLiteStore`   | SQLite               | Yes       | Yes (`Typed…`) | No             | Yes   |
-| `DuckDBStore`   | DuckDB               | Yes       | Yes (`Typed…`) | No             | No    |
-| `LmdbStore`     | LMDB                 | Yes       | No             | Yes (`Pickle…`)| No    |
+| `DuckDBStore`   | DuckDB               | Yes       | Yes (`Typed…`) | No             | Yes (thread pool) |
+| `LmdbStore`     | LMDB                 | Yes       | No             | Yes (`Pickle…`)| Yes (thread pool) |
 | `RedisStore`    | Redis                | Yes       | No             | Yes (`Pickle…`)| Yes   |
 | `PostgresStore` | PostgreSQL           | Yes       | Yes (`Typed…`) | No             | Yes   |
 | `NullStore`     | None (discards everything) | No  | No             | N/A            | Yes   |
