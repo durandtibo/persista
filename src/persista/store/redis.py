@@ -208,9 +208,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
             await self._aset_many(items)
             return
 
-        to_write = await aresolve_conflicts(
-            items, on_conflict, self.acontains_many, self.aget
-        )
+        to_write = await aresolve_conflicts(items, on_conflict, self.acontains_many, self.aget)
         await self._aset_many(to_write)
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:

@@ -337,9 +337,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             await self._aset_many(items)
             return
 
-        to_write = await aresolve_conflicts(
-            items, on_conflict, self.acontains_many, self.aget
-        )
+        to_write = await aresolve_conflicts(items, on_conflict, self.acontains_many, self.aget)
         await self._aset_many(to_write)
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:

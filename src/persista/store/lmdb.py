@@ -17,7 +17,11 @@ from coola.utils.batching import batchify
 from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
-from persista.store.validation import normalize_on_conflict, resolve_conflicts, validate_batch_size
+from persista.store.validation import (
+    normalize_on_conflict,
+    resolve_conflicts,
+    validate_batch_size,
+)
 from persista.utils.imports import check_lmdb, is_lmdb_available
 
 if TYPE_CHECKING:

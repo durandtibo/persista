@@ -199,7 +199,9 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
 
     def keys(self) -> Iterator[str]:
         with self._lock:
-            rows = self._conn.execute(f"SELECT {self._key_column} FROM store").fetchall()
+            rows = self._conn.execute(
+                f"SELECT {self._key_column} FROM store"  # noqa: S608
+            ).fetchall()
         for (key,) in rows:
             yield key
 
