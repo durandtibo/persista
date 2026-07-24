@@ -19,6 +19,7 @@ from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
     normalize_on_conflict,
+    resolve_conflicts,
     validate_batch_size,
     validate_field_name,
 )
