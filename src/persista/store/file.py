@@ -119,7 +119,9 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        conflicts = set(self.contains_many(list(items))[0])
+        keys = list(items)
+        found = self.contains_many(keys)
+        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
         if conflicts and on_conflict == "raise":
             msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
             raise KeyError(msg)
@@ -161,11 +163,8 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def contains(self, key: str) -> bool:
         return self._key_to_path(key).is_file()
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
-        flags = [self._key_to_path(key).is_file() for key in keys]
-        found = [key for key, flag in zip(keys, flags, strict=True) if flag]
-        missing = [key for key, flag in zip(keys, flags, strict=True) if not flag]
-        return found, missing
+    def contains_many(self, keys: list[str]) -> list[bool]:
+        return [self._key_to_path(key).is_file() for key in keys]
 
     def _iter_files(self) -> Iterator[Path]:
         return (

@@ -136,10 +136,8 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
     def contains(self, key: str) -> bool:
         return key in self._data
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
-        found = [key for key in keys if key in self._data]
-        missing = [key for key in keys if key not in self._data]
-        return found, missing
+    def contains_many(self, keys: list[str]) -> list[bool]:
+        return [key in self._data for key in keys]
 
     def keys(self) -> Iterator[str]:
         yield from list(self._data.keys())

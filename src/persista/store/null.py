@@ -135,11 +135,11 @@ class NullStore(BaseStore, InlineDisplayMixin):
     async def acontains(self, key: str) -> bool:  # noqa: ARG002
         return False
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
-        return [], list(keys)
+    def contains_many(self, keys: list[str]) -> list[bool]:
+        return [False] * len(keys)
 
-    async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
-        return [], list(keys)
+    async def acontains_many(self, keys: list[str]) -> list[bool]:
+        return [False] * len(keys)
 
     def keys(self) -> Iterator[str]:
         return iter(())

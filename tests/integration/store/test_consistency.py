@@ -360,19 +360,15 @@ def test_clear_then_set_works(store: BaseStore) -> None:
 
 def test_contains_many_mixed(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "99", "3", "42"])
-    assert sorted(found) == ["1", "3"]
-    assert sorted(missing) == ["42", "99"]
+    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
 
 
 def test_contains_many_empty_input_returns_empty_lists(store: BaseStore) -> None:
-    assert store.contains_many([]) == ([], [])
+    assert store.contains_many([]) == []
 
 
 def test_contains_many_empty_store_returns_all_missing(store: BaseStore) -> None:
-    found, missing = store.contains_many(["1", "2"])
-    assert found == []
-    assert sorted(missing) == ["1", "2"]
+    assert store.contains_many(["1", "2"]) == [False, False]
 
 
 # --- keys / values ---
@@ -772,19 +768,15 @@ async def test_aclear_then_aset_works(store: BaseStore) -> None:
 
 async def test_acontains_many_mixed(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     await store.aset_many(items)
-    found, missing = await store.acontains_many(["1", "99", "3", "42"])
-    assert sorted(found) == ["1", "3"]
-    assert sorted(missing) == ["42", "99"]
+    assert await store.acontains_many(["1", "99", "3", "42"]) == [True, False, True, False]
 
 
 async def test_acontains_many_empty_input_returns_empty_lists(store: BaseStore) -> None:
-    assert await store.acontains_many([]) == ([], [])
+    assert await store.acontains_many([]) == []
 
 
 async def test_acontains_many_empty_store_returns_all_missing(store: BaseStore) -> None:
-    found, missing = await store.acontains_many(["1", "2"])
-    assert found == []
-    assert sorted(missing) == ["1", "2"]
+    assert await store.acontains_many(["1", "2"]) == [False, False]
 
 
 # --- akeys / avalues ---

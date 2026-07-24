@@ -316,7 +316,9 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        conflicts = set(self.contains_many(list(items))[0])
+        keys = list(items)
+        found = self.contains_many(keys)
+        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
         if conflicts and on_conflict == "raise":
             msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
             raise KeyError(msg)
@@ -345,7 +347,9 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             await self._aset_many(items)
             return
 
-        conflicts = set((await self.acontains_many(list(items)))[0])
+        keys = list(items)
+        found = await self.acontains_many(keys)
+        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
         if conflicts and on_conflict == "raise":
             msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
             raise KeyError(msg)
@@ -457,9 +461,9 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         )
         return await cursor.fetchone() is not None
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    def contains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
-            return [], []
+            return []
         placeholders = ", ".join("?" * len(keys))
         existing = {
             row[0]
@@ -469,13 +473,11 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
                 keys,
             ).fetchall()
         }
-        found = [key for key in keys if key in existing]
-        missing = [key for key in keys if key not in existing]
-        return found, missing
+        return [key in existing for key in keys]
 
-    async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    async def acontains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
-            return [], []
+            return []
         if not is_aiosqlite_available():
             return await asyncio.to_thread(self.contains_many, keys)
         conn = await self._ensure_aconn()
@@ -486,9 +488,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             keys,
         )
         existing = {row[0] for row in await cursor.fetchall()}
-        found = [key for key in keys if key in existing]
-        missing = [key for key in keys if key not in existing]
-        return found, missing
+        return [key in existing for key in keys]
 
     def keys(self) -> Iterator[str]:
         cursor = self._conn.execute(f"SELECT {self._key_column} FROM store")  # noqa: S608

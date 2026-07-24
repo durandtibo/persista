@@ -65,7 +65,7 @@ class ThreadedAsyncStoreMixin:
     async def acontains(self, key: str) -> bool:
         return await asyncio.to_thread(self.contains, key)
 
-    async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    async def acontains_many(self, keys: list[str]) -> list[bool]:
         return await asyncio.to_thread(self.contains_many, keys)
 
     async def akeys(self) -> AsyncIterator[str]:

@@ -561,48 +561,36 @@ def test_contains_false_when_store_empty(store: BaseSQLiteStore) -> None:
 
 def test_contains_many_all_found(store: BaseSQLiteStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "2", "3", "4"])
-    assert found == ["1", "2", "3", "4"]
-    assert missing == []
+    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
 
 
 def test_contains_many_all_missing(
     store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["99", "100"])
-    assert found == []
-    assert missing == ["99", "100"]
+    assert store.contains_many(["99", "100"]) == [False, False]
 
 
 def test_contains_many_mixed(store: BaseSQLiteStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "99", "3", "42"])
-    assert found == ["1", "3"]
-    assert missing == ["99", "42"]
+    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
 
 
 def test_contains_many_empty_input_returns_empty_lists(store: BaseSQLiteStore) -> None:
-    found, missing = store.contains_many([])
-    assert found == []
-    assert missing == []
+    assert store.contains_many([]) == []
 
 
 def test_contains_many_empty_store_returns_all_missing(store: BaseSQLiteStore) -> None:
-    found, missing = store.contains_many(["1", "2"])
-    assert found == []
-    assert missing == ["1", "2"]
+    assert store.contains_many(["1", "2"]) == [False, False]
 
 
-def test_contains_many_returns_tuple_of_two_lists(
+def test_contains_many_returns_list_of_bools(
     store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
     result = store.contains_many(["1", "99"])
-    assert isinstance(result, tuple)
-    assert len(result) == 2
-    assert isinstance(result[0], list)
-    assert isinstance(result[1], list)
+    assert isinstance(result, list)
+    assert all(isinstance(flag, bool) for flag in result)
 
 
 # --- columns_info ---
@@ -1138,9 +1126,7 @@ async def test_sqlite_store_acontains_false_when_store_empty(store: BaseSQLiteSt
 
 async def test_sqlite_store_acontains_many(store: BaseSQLiteStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    found, missing = await store.acontains_many(["1", "3"])
-    assert found == ["1"]
-    assert missing == ["3"]
+    assert await store.acontains_many(["1", "3"]) == [True, False]
 
 
 # --- adelete / acount ---
@@ -1334,9 +1320,7 @@ def test_sqlite_store_all_async_methods_work_without_aiosqlite(
             assert await store.aget_many(["1", "2", "9"]) == [{"a": 1}, {"a": 2}, None]
             assert len(await store.afilter()) == 3
             assert await store.acontains("1") is True
-            found, missing = await store.acontains_many(["1", "9"])
-            assert found == ["1"]
-            assert missing == ["9"]
+            assert await store.acontains_many(["1", "9"]) == [True, False]
             assert sorted([key async for key in store.akeys()]) == ["1", "2", "3"]
             batches = [batch async for batch in store.aiter_batches(batch_size=2)]
             assert sum(len(b) for b in batches) == 3
@@ -1551,7 +1535,7 @@ async def test_sqlite_store_aclear_then_aset_works(store: BaseSQLiteStore) -> No
 
 
 async def test_sqlite_store_acontains_many_empty(store: BaseSQLiteStore) -> None:
-    assert await store.acontains_many([]) == ([], [])
+    assert await store.acontains_many([]) == []
 
 
 # --- aiter_batches ---
