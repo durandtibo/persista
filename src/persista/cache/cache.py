@@ -30,10 +30,11 @@ class Cache:
     :class:`~persista.store.base.BaseStore`.
 
     Most methods have both a sync form (``get``, ``set``, ``contains``,
-    ``get_many``, ``contains_many``, ``delete``, ``get_or_compute``,
-    ``memoize``, ``clear``) and an async counterpart prefixed with
-    ``a`` (``aget``, ``aset``, ``acontains``, ``aget_many``,
-    ``acontains_many``, ``adelete``, ``aget_or_compute``, ``amemoize``,
+    ``get_many``, ``set_many``, ``contains_many``, ``delete``,
+    ``delete_many``, ``get_or_compute``, ``memoize``, ``clear``) and
+    an async counterpart prefixed with ``a`` (``aget``, ``aset``,
+    ``acontains``, ``aget_many``, ``aset_many``, ``acontains_many``,
+    ``adelete``, ``adelete_many``, ``aget_or_compute``, ``amemoize``,
     ``aclear``), so the same cache instance can be used from sync and
     async code, provided the backing store supports the interface
     being used.
@@ -486,6 +487,89 @@ class Cache:
             hits[key] = value
         return hits, expired_keys
 
+    def set_many(self, items: dict[str, Any], ttl: float | None = _UNSET) -> None:
+        """Add multiple values in a single batched store write.
+
+        Unlike calling :meth:`set` once per item, this issues one
+        ``self._store.set_many`` call for the whole batch, which
+        matters for stores where each write is a network round trip
+        (e.g. Redis, Postgres). A single ``ttl`` applies to every
+        item in the batch.
+
+        Args:
+            items: A dict mapping each key to the value to cache
+                under it. Values must be JSON-serializable if the
+                backing store serializes values (see the class
+                docstring).
+            ttl: The time-to-live, in seconds, before the entries
+                expire. See :meth:`set`.
+
+        Raises:
+            ValueError: If ``ttl`` is negative.
+
+        Example:
+            ```pycon
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> cache.set_many({"a": "hello", "b": "world"})
+            >>> sorted(cache.get_many(["a", "b"]).items())
+            [('a', 'hello'), ('b', 'world')]
+
+            ```
+        """
+        if not items:
+            return
+        resolved_ttl = self._resolve_ttl(ttl)
+        if resolved_ttl == 0:
+            self._store.delete_many(list(items.keys()))
+            return
+        expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
+        self._store.set_many(
+            {key: {"value": value, "expires_at": expires_at} for key, value in items.items()}
+        )
+
+    async def aset_many(self, items: dict[str, Any], ttl: float | None = _UNSET) -> None:
+        """Add multiple values in a single batched store write.
+
+        This is the async counterpart of :meth:`set_many`, for use
+        with an async backing store.
+
+        Args:
+            items: A dict mapping each key to the value to cache
+                under it. Values must be JSON-serializable if the
+                backing store serializes values (see the class
+                docstring).
+            ttl: The time-to-live, in seconds, before the entries
+                expire. See :meth:`aset`.
+
+        Raises:
+            ValueError: If ``ttl`` is negative.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> async def main():
+            ...     await cache.aset_many({"a": "hello", "b": "world"})
+            ...     print(sorted((await cache.aget_many(["a", "b"])).items()))
+            ...
+            >>> asyncio.run(main())
+            [('a', 'hello'), ('b', 'world')]
+
+            ```
+        """
+        if not items:
+            return
+        resolved_ttl = self._resolve_ttl(ttl)
+        if resolved_ttl == 0:
+            await self._store.adelete_many(list(items.keys()))
+            return
+        expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
+        await self._store.aset_many(
+            {key: {"value": value, "expires_at": expires_at} for key, value in items.items()}
+        )
+
     def contains_many(self, keys: list[str]) -> list[bool]:
         """Check presence of multiple keys in a single batched store
         lookup.
@@ -577,6 +661,53 @@ class Cache:
             ```
         """
         self._store.delete(key)
+
+    def delete_many(self, keys: list[str]) -> None:
+        """Remove multiple entries from the cache in a single batched
+        store write, if present.
+
+        Args:
+            keys: The keys to remove.
+
+        Example:
+            ```pycon
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> cache.set_many({"a": "hello", "b": "world"})
+            >>> cache.delete_many(["a", "b"])
+            >>> cache.get_many(["a", "b"])
+            {}
+
+            ```
+        """
+        self._store.delete_many(keys)
+
+    async def adelete_many(self, keys: list[str]) -> None:
+        """Remove multiple entries from the cache in a single batched
+        store write, if present.
+
+        This is the async counterpart of :meth:`delete_many`, for use
+        with an async backing store.
+
+        Args:
+            keys: The keys to remove.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> async def main():
+            ...     await cache.aset_many({"a": "hello", "b": "world"})
+            ...     await cache.adelete_many(["a", "b"])
+            ...     print(await cache.aget_many(["a", "b"]))
+            ...
+            >>> asyncio.run(main())
+            {}
+
+            ```
+        """
+        await self._store.adelete_many(keys)
 
     async def adelete(self, key: str) -> None:
         """Remove a single entry from the cache, if present.
