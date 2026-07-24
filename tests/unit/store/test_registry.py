@@ -5,34 +5,18 @@ from typing import TYPE_CHECKING
 import pytest
 
 from persista.store import (
-    AsyncInMemoryStore,
-    AsyncNullStore,
     InMemoryStore,
     JsonFileStore,
     NullStore,
-    async_store_from_uri,
-    register_async_scheme,
     register_scheme,
     store_from_uri,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
     from pathlib import Path
 
 
-@pytest.fixture(autouse=True)
-def _reset_registry() -> Generator[None]:
-    sync_schemes = dict(store_from_uri.__globals__["_SYNC_SCHEMES"])
-    async_schemes = dict(async_store_from_uri.__globals__["_ASYNC_SCHEMES"])
-    yield
-    store_from_uri.__globals__["_SYNC_SCHEMES"].clear()
-    store_from_uri.__globals__["_SYNC_SCHEMES"].update(sync_schemes)
-    async_store_from_uri.__globals__["_ASYNC_SCHEMES"].clear()
-    async_store_from_uri.__globals__["_ASYNC_SCHEMES"].update(async_schemes)
-
-
-def test_store_from_uri_memory() -> None:
+def test_store_from_uri_memory_scheme() -> None:
     store = store_from_uri("memory://")
     assert isinstance(store, InMemoryStore)
 
@@ -50,39 +34,82 @@ def test_store_from_uri_file_json(tmp_path: Path) -> None:
     assert store.get("1") == {"a": 1}
 
 
-def test_store_from_uri_unknown_scheme_raises() -> None:
-    with pytest.raises(ValueError, match="scheme"):
-        store_from_uri("not-a-real-scheme://whatever")
-
-
-def test_async_store_from_uri_memory() -> None:
-    store = async_store_from_uri("memory://")
-    assert isinstance(store, AsyncInMemoryStore)
-
-
-def test_async_store_from_uri_null() -> None:
-    store = async_store_from_uri("null://")
-    assert isinstance(store, AsyncNullStore)
-
-
-def test_async_store_from_uri_unknown_scheme_raises() -> None:
-    with pytest.raises(ValueError, match="scheme"):
-        async_store_from_uri("not-a-real-scheme://whatever")
+async def test_store_from_uri_result_supports_async_methods() -> None:
+    store = store_from_uri("memory://")
+    await store.aset("1", {"a": 1})
+    assert await store.aget("1") == {"a": 1}
 
 
 def test_register_scheme() -> None:
     register_scheme("custom-memory", InMemoryStore)
-    store = store_from_uri("custom-memory://")
-    assert isinstance(store, InMemoryStore)
+    try:
+        store = store_from_uri("custom-memory://")
+        assert isinstance(store, InMemoryStore)
+    finally:
+        del store_from_uri.__globals__["_SCHEMES"]["custom-memory"]
 
 
-def test_register_scheme_overwrites_existing() -> None:
-    register_scheme("memory", NullStore)
-    store = store_from_uri("memory://")
-    assert isinstance(store, NullStore)
+def test_register_scheme_overrides_existing() -> None:
+    class _CustomStore(InMemoryStore):
+        pass
+
+    register_scheme("memory", _CustomStore)
+    try:
+        store = store_from_uri("memory://")
+        assert isinstance(store, _CustomStore)
+    finally:
+        register_scheme("memory", InMemoryStore)
 
 
-def test_register_async_scheme() -> None:
-    register_async_scheme("custom-null", AsyncNullStore)
-    store = async_store_from_uri("custom-null://")
-    assert isinstance(store, AsyncNullStore)
+def test_store_from_uri_unknown_scheme_raises() -> None:
+    with pytest.raises(ValueError, match="No store registered"):
+        store_from_uri("bogus://x")
+
+
+def test_store_from_uri_forwards_read_only_true() -> None:
+    received: dict[str, bool] = {}
+
+    class _SpyStore(InMemoryStore):
+        @classmethod
+        def from_uri(cls, uri: str, *, read_only: bool = False) -> _SpyStore:  # noqa: ARG003
+            received["read_only"] = read_only
+            return cls()
+
+    register_scheme("spy-read-only", _SpyStore)
+    try:
+        store_from_uri("spy-read-only://", read_only=True)
+        assert received["read_only"] is True
+    finally:
+        del store_from_uri.__globals__["_SCHEMES"]["spy-read-only"]
+
+
+def test_store_from_uri_forwards_read_only_false_by_default() -> None:
+    received: dict[str, bool] = {}
+
+    class _SpyStore(InMemoryStore):
+        @classmethod
+        def from_uri(cls, uri: str, *, read_only: bool = False) -> _SpyStore:  # noqa: ARG003
+            received["read_only"] = read_only
+            return cls()
+
+    register_scheme("spy-default", _SpyStore)
+    try:
+        store_from_uri("spy-default://")
+        assert received["read_only"] is False
+    finally:
+        del store_from_uri.__globals__["_SCHEMES"]["spy-default"]
+
+
+def test_store_package_has_no_async_prefixed_exports() -> None:
+    import persista.store as store_pkg
+
+    assert not any(name.startswith("Async") for name in store_pkg.__all__)
+
+
+def test_store_package_exports_store_from_uri_only() -> None:
+    import persista.store as store_pkg
+
+    assert "store_from_uri" in store_pkg.__all__
+    assert "async_store_from_uri" not in store_pkg.__all__
+    assert "register_scheme" in store_pkg.__all__
+    assert "register_async_scheme" not in store_pkg.__all__

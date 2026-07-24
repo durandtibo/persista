@@ -3,18 +3,6 @@ r"""Contain stores."""
 from __future__ import annotations
 
 __all__ = [
-    "AsyncBasePostgresStore",
-    "AsyncBaseRedisStore",
-    "AsyncBaseSQLiteStore",
-    "AsyncBaseStore",
-    "AsyncInMemoryStore",
-    "AsyncNullStore",
-    "AsyncPickleRedisStore",
-    "AsyncPostgresStore",
-    "AsyncRedisStore",
-    "AsyncSQLiteStore",
-    "AsyncTypedPostgresStore",
-    "AsyncTypedSQLiteStore",
     "BaseDuckDBStore",
     "BaseFileStore",
     "BaseLmdbStore",
@@ -38,9 +26,7 @@ __all__ = [
     "TypedDuckDBStore",
     "TypedPostgresStore",
     "TypedSQLiteStore",
-    "async_store_from_uri",
     "normalize_on_conflict",
-    "register_async_scheme",
     "register_scheme",
     "store_from_uri",
     "validate_batch_size",
@@ -48,24 +34,7 @@ __all__ = [
     "validate_on_conflict",
 ]
 
-from persista.store.async_in_memory import AsyncInMemoryStore
-from persista.store.async_null import AsyncNullStore
-from persista.store.async_postgres import (
-    AsyncBasePostgresStore,
-    AsyncPostgresStore,
-    AsyncTypedPostgresStore,
-)
-from persista.store.async_redis import (
-    AsyncBaseRedisStore,
-    AsyncPickleRedisStore,
-    AsyncRedisStore,
-)
-from persista.store.async_sqlite import (
-    AsyncBaseSQLiteStore,
-    AsyncSQLiteStore,
-    AsyncTypedSQLiteStore,
-)
-from persista.store.base import AsyncBaseStore, BaseStore
+from persista.store.base import BaseStore
 from persista.store.duckdb import BaseDuckDBStore, DuckDBStore, TypedDuckDBStore
 from persista.store.file import BaseFileStore, JsonFileStore, PickleFileStore
 from persista.store.in_memory import InMemoryStore
@@ -73,12 +42,7 @@ from persista.store.lmdb import BaseLmdbStore, LmdbStore, PickleLmdbStore
 from persista.store.null import NullStore
 from persista.store.postgres import BasePostgresStore, PostgresStore, TypedPostgresStore
 from persista.store.redis import BaseRedisStore, PickleRedisStore, RedisStore
-from persista.store.registry import (
-    async_store_from_uri,
-    register_async_scheme,
-    register_scheme,
-    store_from_uri,
-)
+from persista.store.registry import register_scheme, store_from_uri
 from persista.store.sqlite import (
     BaseSQLiteStore,
     PickleSQLiteStore,

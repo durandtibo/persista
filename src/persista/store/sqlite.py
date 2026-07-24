@@ -5,6 +5,7 @@ from __future__ import annotations
 
 __all__ = ["BaseSQLiteStore", "PickleSQLiteStore", "SQLiteStore", "TypedSQLiteStore"]
 
+import asyncio
 import json
 import logging
 import pickle
@@ -22,17 +23,39 @@ from persista.store.validation import (
     validate_batch_size,
     validate_field_name,
 )
+from persista.utils.imports import is_aiosqlite_available
 from persista.utils.path import prepare_store_path
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator, Mapping
+    from collections.abc import AsyncIterator, Generator, Iterator, Mapping
     from pathlib import Path
 
     from typing_extensions import Self
 
     from persista.store.types import OnConflict
 
+if is_aiosqlite_available():  # pragma: no cover
+    import aiosqlite
+
 logger: logging.Logger = logging.getLogger(__name__)
+
+_STOP_ITERATION = object()
+
+
+def _next_or_stop(iterator: Iterator[Any]) -> Any:
+    """Advance ``iterator``, returning a sentinel instead of raising
+    ``StopIteration``.
+
+    Needed because :func:`asyncio.to_thread` runs ``next`` in a worker
+    thread and hands its result back through a :class:`asyncio.Future`,
+    which isn't allowed to carry a ``StopIteration`` (PEP 479):
+    propagating it as-is surfaces as an opaque ``RuntimeError`` instead
+    of the ``StopIteration`` callers expect to catch.
+    """
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _STOP_ITERATION
 
 
 class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
@@ -84,8 +107,47 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         self._path_for_uri: Path | str = database
         self._kwargs = kwargs
         self._closed = False
-        self._conn = sqlite3.connect(database, **kwargs)
+        self._conn = self._connect()
         self._ensure_schema()
+        self._aconn: aiosqlite.Connection | None = None
+        self._aconn_lock = asyncio.Lock()
+        self._aschema_ready = False
+
+    async def _ensure_aconn(self) -> aiosqlite.Connection:
+        """Lazily open (and schema-initialize) the aiosqlite connection.
+
+        Only called when :func:`is_aiosqlite_available` is ``True``;
+        callers must check that first and fall back to
+        ``asyncio.to_thread`` otherwise (see e.g. :meth:`aget`).
+        """
+        async with self._aconn_lock:
+            if self._aconn is None:
+                self._aconn = await aiosqlite.connect(self._database, **self._kwargs)
+            if not self._aschema_ready:
+                try:
+                    await self._aconn.execute(self._create_table_sql())
+                    await self._aconn.commit()
+                except sqlite3.OperationalError:
+                    pass
+                self._aschema_ready = True
+        return self._aconn
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open the sync ``sqlite3`` connection.
+
+        Defaults ``check_same_thread`` to ``False`` (unless the caller
+        already specified it via constructor kwargs) so that the
+        no-``aiosqlite`` fallback -- which runs the sync methods on
+        this same connection via ``asyncio.to_thread``, i.e. from a
+        worker thread rather than the thread that opened the
+        connection -- doesn't hit sqlite3's default same-thread
+        check. Callers doing genuinely concurrent multi-threaded
+        access of their own are still responsible for serializing it
+        themselves; SQLite's own per-connection lock keeps individual
+        statements safe either way.
+        """
+        connect_kwargs = {"check_same_thread": False, **self._kwargs}
+        return sqlite3.connect(self._database, **connect_kwargs)
 
     def _ensure_schema(self) -> None:
         """Create the store's table if it doesn't already exist.
@@ -126,6 +188,11 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         """Write ``items`` to the table, replacing any existing row for
         the same key."""
 
+    @abstractmethod
+    async def _aset_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        """Async equivalent of :meth:`_set_many`, using the lazily
+        opened ``aiosqlite`` connection."""
+
     @classmethod
     def from_path(cls, path: Path | str, *, read_only: bool = False, **kwargs: Any) -> Self:
         """Construct a store from a file path.
@@ -165,6 +232,18 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         return cls.from_path(path, read_only=read_only)
 
     def close(self) -> None:
+        if self._aconn is not None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(self._aconn.close())
+                self._aconn = None
+            else:
+                msg = (
+                    "An async SQLite connection is open and close() was called from "
+                    "inside a running event loop; use `await store.aclose()` instead."
+                )
+                raise RuntimeError(msg)
         if self._closed:
             return
         logger.info("Closing SQLite at %s", self._database)
@@ -182,6 +261,17 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         ).fetchone()
         return self._row_to_value(row) if row else None
 
+    async def aget(self, key: str) -> dict[str, Any] | None:
+        if not is_aiosqlite_available():
+            return await asyncio.to_thread(self.get, key)
+        conn = await self._ensure_aconn()
+        cursor = await conn.execute(
+            f"SELECT * FROM store WHERE {self._key_column} = ?",  # noqa: S608
+            (key,),
+        )
+        row = await cursor.fetchone()
+        return self._row_to_value(row) if row else None
+
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
         if not keys:
             return []
@@ -193,8 +283,28 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         by_key = {row[0]: self._row_to_value(row) for row in rows}
         return [by_key.get(key) for key in keys]
 
+    async def aget_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        if not keys:
+            return []
+        if not is_aiosqlite_available():
+            return await asyncio.to_thread(self.get_many, keys)
+        conn = await self._ensure_aconn()
+        placeholders = ", ".join("?" * len(keys))
+        cursor = await conn.execute(
+            f"SELECT * FROM store WHERE {self._key_column} IN ({placeholders})",  # noqa: S608
+            keys,
+        )
+        rows = await cursor.fetchall()
+        by_key = {row[0]: self._row_to_value(row) for row in rows}
+        return [by_key.get(key) for key in keys]
+
     def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
+
+    async def aset(
+        self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+    ) -> None:
+        await self.aset_many({key: value}, on_conflict=on_conflict)
 
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
@@ -222,6 +332,35 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
 
         self._set_many(to_write)
 
+    async def aset_many(
+        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+    ) -> None:
+        if not items:
+            return
+        if not is_aiosqlite_available():
+            await asyncio.to_thread(self.set_many, items, on_conflict)
+            return
+        on_conflict = normalize_on_conflict(on_conflict)
+        if on_conflict == "overwrite":
+            await self._aset_many(items)
+            return
+
+        conflicts = set((await self.acontains_many(list(items)))[0])
+        if conflicts and on_conflict == "raise":
+            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
+            raise KeyError(msg)
+
+        to_write: dict[str, dict[str, Any]] = {}
+        for key, value in items.items():
+            if key in conflicts:
+                if on_conflict == "skip":
+                    continue
+                to_write[key] = {**(await self.aget(key) or {}), **value}
+                continue
+            to_write[key] = value
+
+        await self._aset_many(to_write)
+
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         if not field_filters:
             rows = self._conn.execute("SELECT * FROM store").fetchall()
@@ -235,9 +374,35 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         ).fetchall()
         return [self._row_to_value(row) for row in rows]
 
+    async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        if not is_aiosqlite_available():
+            return await asyncio.to_thread(lambda: self.filter(**field_filters))
+        conn = await self._ensure_aconn()
+        if not field_filters:
+            cursor = await conn.execute("SELECT * FROM store")
+            rows = await cursor.fetchall()
+            return [self._row_to_value(row) for row in rows]
+
+        conditions = [self._build_filter_condition(key) for key in field_filters]
+        where = " AND ".join(conditions)
+        cursor = await conn.execute(
+            f"SELECT * FROM store WHERE {where}",  # noqa: S608
+            list(field_filters.values()),
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_value(row) for row in rows]
+
     def delete(self, key: str) -> None:
         self._conn.execute(f"DELETE FROM store WHERE {self._key_column} = ?", (key,))  # noqa: S608
         self._conn.commit()
+
+    async def adelete(self, key: str) -> None:
+        if not is_aiosqlite_available():
+            await asyncio.to_thread(self.delete, key)
+            return
+        conn = await self._ensure_aconn()
+        await conn.execute(f"DELETE FROM store WHERE {self._key_column} = ?", (key,))  # noqa: S608
+        await conn.commit()
 
     def delete_many(self, keys: list[str]) -> None:
         if not keys:
@@ -249,9 +414,31 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         )
         self._conn.commit()
 
+    async def adelete_many(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        if not is_aiosqlite_available():
+            await asyncio.to_thread(self.delete_many, keys)
+            return
+        conn = await self._ensure_aconn()
+        placeholders = ", ".join("?" * len(keys))
+        await conn.execute(
+            f"DELETE FROM store WHERE {self._key_column} IN ({placeholders})",  # noqa: S608
+            keys,
+        )
+        await conn.commit()
+
     def clear(self) -> None:
         self._conn.execute("DELETE FROM store")
         self._conn.commit()
+
+    async def aclear(self) -> None:
+        if not is_aiosqlite_available():
+            await asyncio.to_thread(self.clear)
+            return
+        conn = await self._ensure_aconn()
+        await conn.execute("DELETE FROM store")
+        await conn.commit()
 
     def contains(self, key: str) -> bool:
         row = self._conn.execute(
@@ -259,6 +446,16 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             [key],
         ).fetchone()
         return row is not None
+
+    async def acontains(self, key: str) -> bool:
+        if not is_aiosqlite_available():
+            return await asyncio.to_thread(self.contains, key)
+        conn = await self._ensure_aconn()
+        cursor = await conn.execute(
+            f"SELECT 1 FROM store WHERE {self._key_column} = ? LIMIT 1",  # noqa: S608
+            [key],
+        )
+        return await cursor.fetchone() is not None
 
     def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
         if not keys:
@@ -276,9 +473,39 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         missing = [key for key in keys if key not in existing]
         return found, missing
 
+    async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+        if not keys:
+            return [], []
+        if not is_aiosqlite_available():
+            return await asyncio.to_thread(self.contains_many, keys)
+        conn = await self._ensure_aconn()
+        placeholders = ", ".join("?" * len(keys))
+        cursor = await conn.execute(
+            f"SELECT {self._key_column} FROM store "  # noqa: S608
+            f"WHERE {self._key_column} IN ({placeholders})",
+            keys,
+        )
+        existing = {row[0] for row in await cursor.fetchall()}
+        found = [key for key in keys if key in existing]
+        missing = [key for key in keys if key not in existing]
+        return found, missing
+
     def keys(self) -> Iterator[str]:
         cursor = self._conn.execute(f"SELECT {self._key_column} FROM store")  # noqa: S608
         for (key,) in cursor:
+            yield key
+
+    async def akeys(self) -> AsyncIterator[str]:
+        if not is_aiosqlite_available():
+            iterator = await asyncio.to_thread(lambda: iter(self.keys()))
+            while True:
+                key = await asyncio.to_thread(_next_or_stop, iterator)
+                if key is _STOP_ITERATION:
+                    return
+                yield key
+        conn = await self._ensure_aconn()
+        cursor = await conn.execute(f"SELECT {self._key_column} FROM store")  # noqa: S608
+        async for (key,) in cursor:
             yield key
 
     def iter_batches(
@@ -289,8 +516,47 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         for batch in batchify(cursor, size=batch_size):
             yield {row[0]: self._row_to_value(row) for row in batch}
 
+    async def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
+        validate_batch_size(batch_size)
+        if not is_aiosqlite_available():
+            iterator = await asyncio.to_thread(
+                lambda: iter(self.iter_batches(batch_size=batch_size))
+            )
+            while True:
+                batch = await asyncio.to_thread(_next_or_stop, iterator)
+                if batch is _STOP_ITERATION:
+                    return
+                yield batch
+        conn = await self._ensure_aconn()
+        cursor = await conn.execute("SELECT * FROM store")
+        batch: dict[str, dict[str, Any]] = {}
+        async for row in cursor:
+            batch[row[0]] = self._row_to_value(row)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = {}
+        if batch:
+            yield batch
+
     def count(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM store").fetchone()[0]
+
+    async def acount(self) -> int:
+        if not is_aiosqlite_available():
+            return await asyncio.to_thread(self.count)
+        conn = await self._ensure_aconn()
+        cursor = await conn.execute("SELECT COUNT(*) FROM store")
+        row = await cursor.fetchone()
+        return row[0]
+
+    async def aclose(self) -> None:
+        if self._aconn is not None:
+            await self._aconn.close()
+            self._aconn = None
+        if not self._closed:
+            logger.info("Closing SQLite at %s", self._database)
+            self._conn.close()
+            self._closed = True
 
     def get_columns_info(self) -> dict[str, str]:
         """Return the column names and types of the store's table.
@@ -320,13 +586,23 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
 
     def __enter__(self) -> Self:
         if self._closed:
-            self._conn = sqlite3.connect(self._database, **self._kwargs)
+            self._conn = self._connect()
             self._closed = False
             self._ensure_schema()
         return self
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+    async def __aenter__(self) -> Self:
+        if self._closed:
+            self._conn = self._connect()
+            self._closed = False
+            self._ensure_schema()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
 
 
 _CREATE_TABLE = """
@@ -398,6 +674,16 @@ class SQLiteStore(BaseSQLiteStore):
             )
             self._conn.commit()
 
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
+    async def _aset_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        if items:
+            conn = await self._ensure_aconn()
+            await conn.executemany(
+                "INSERT OR REPLACE INTO store VALUES (?, ?)",
+                [(key, json.dumps(value)) for key, value in items.items()],
+            )
+            await conn.commit()
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
 
@@ -509,6 +795,16 @@ class TypedSQLiteStore(BaseSQLiteStore):
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
+    async def _aset_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        if items:
+            conn = await self._ensure_aconn()
+            await conn.executemany(
+                self._build_insert(),
+                [self._value_to_row(key, value) for key, value in items.items()],
+            )
+            await conn.commit()
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
     # ---------------------------------------------------------------------------
     # Private helpers
     # ---------------------------------------------------------------------------
@@ -599,6 +895,21 @@ class PickleSQLiteStore(BaseSQLiteStore):
             if all(value.get(name) == expected for name, expected in field_filters.items())
         ]
 
+    async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        if not is_aiosqlite_available():
+            return await asyncio.to_thread(lambda: self.filter(**field_filters))
+        conn = await self._ensure_aconn()
+        cursor = await conn.execute("SELECT * FROM store")
+        rows = await cursor.fetchall()
+        values = (self._row_to_value(row) for row in rows)
+        if not field_filters:
+            return list(values)
+        return [
+            value
+            for value in values
+            if all(value.get(name) == expected for name, expected in field_filters.items())
+        ]
+
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
             self._conn.executemany(
@@ -607,4 +918,14 @@ class PickleSQLiteStore(BaseSQLiteStore):
             )
             self._conn.commit()
 
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
+    async def _aset_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        if items:
+            conn = await self._ensure_aconn()
+            await conn.executemany(
+                "INSERT OR REPLACE INTO store VALUES (?, ?)",
+                [(key, pickle.dumps(value)) for key, value in items.items()],
+            )
+            await conn.commit()
         logger.debug("Added/replaced %d key-value pair(s)", len(items))

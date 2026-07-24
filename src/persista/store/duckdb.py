@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
+from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
@@ -36,7 +37,7 @@ if is_duckdb_available():  # pragma: no cover
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class BaseDuckDBStore(BaseStore, MultilineDisplayMixin):
+class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     r"""Define a base class for DuckDB-backed key-value stores.
 
     Subclasses only need to implement :meth:`_select_columns`,

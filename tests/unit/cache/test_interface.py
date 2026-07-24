@@ -355,7 +355,7 @@ async def test_async_cached_uses_shared_default_cache() -> None:
 
     await func(1)
     key = next(iter(get_async_cache()._store._data))
-    assert await get_async_cache()._store.get(key) is not None
+    assert await get_async_cache()._store.aget(key) is not None
 
 
 async def test_async_cached_respects_ttl(monkeypatch: pytest.MonkeyPatch) -> None:

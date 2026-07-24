@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import tempfile
 import uuid
-from collections.abc import Generator, Iterator
+from collections.abc import AsyncIterator, Generator, Iterator
 from typing import Any
 
 import pytest
@@ -518,6 +518,419 @@ def test_cross_store_outputs_are_identical(items: dict[str, dict[str, Any]]) -> 
             if _is_redis_store(store):
                 store.delete_many(list(store.keys()))
             store.close()
+
+    if len(results) < 2:
+        pytest.skip("Need at least two available stores to compare")
+    reference_id, reference = next(iter(results.items()))
+    for store_id, result in results.items():
+        assert result == reference, (
+            f"Store {store_id!r} produced a different result than {reference_id!r}: "
+            f"{result} != {reference}"
+        )
+
+
+#############################################################
+#     Consistency tests for the async (`a`-prefixed) API    #
+#############################################################
+
+# The tests below mirror the sync tests above, but exercise each store's
+# async methods (`aget`, `aset`, ...) using the exact same parametrized
+# `store` fixture -- there is no separate async store class, since
+# `BaseStore` supports both sync and async usage on the same instance.
+
+
+# --- aget / aset ---
+
+
+async def test_aget_missing_key_returns_none(store: BaseStore) -> None:
+    assert await store.aget("nonexistent") is None
+
+
+async def test_aset_then_aget_round_trips(store: BaseStore) -> None:
+    await store.aset("1", {"text": "hello", "n": 1})
+    assert await store.aget("1") == {"text": "hello", "n": 1}
+
+
+async def test_aset_default_overwrites_existing(store: BaseStore) -> None:
+    await store.aset("1", {"text": "original"})
+    await store.aset("1", {"text": "updated"})
+    assert await store.aget("1") == {"text": "updated"}
+    assert await store.acount() == 1
+
+
+async def test_aset_on_conflict_raise(store: BaseStore) -> None:
+    await store.aset("1", {"text": "original"})
+    with pytest.raises(KeyError, match=r"1"):
+        await store.aset("1", {"text": "updated"}, on_conflict="raise")
+    assert await store.aget("1") == {"text": "original"}
+
+
+async def test_aset_on_conflict_skip(store: BaseStore) -> None:
+    await store.aset("1", {"text": "original"})
+    await store.aset("1", {"text": "updated"}, on_conflict="skip")
+    assert await store.aget("1") == {"text": "original"}
+
+
+async def test_aset_on_conflict_overwrite(store: BaseStore) -> None:
+    await store.aset("1", {"text": "original"})
+    await store.aset("1", {"text": "updated"}, on_conflict="overwrite")
+    assert await store.aget("1") == {"text": "updated"}
+
+
+async def test_aset_on_conflict_merge(store: BaseStore) -> None:
+    await store.aset("1", {"text": "original", "author": "Alice"})
+    await store.aset("1", {"text": "updated"}, on_conflict="merge")
+    assert await store.aget("1") == {"text": "updated", "author": "Alice"}
+
+
+async def test_aset_on_conflict_invalid_raises(store: BaseStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        await store.aset("1", {"text": "hello"}, on_conflict="bogus")
+
+
+# --- aget_many ---
+
+
+async def test_aget_many_preserves_order(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    assert await store.aget_many(["3", "1", "2"]) == [items["3"], items["1"], items["2"]]
+
+
+async def test_aget_many_returns_none_for_missing(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result = await store.aget_many(["1", "99", "2"])
+    assert result[1] is None
+
+
+async def test_aget_many_empty_list_returns_empty_list(store: BaseStore) -> None:
+    assert await store.aget_many([]) == []
+
+
+# --- aset_many ---
+
+
+async def test_aset_many_increases_count(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    assert await store.acount() == len(items)
+
+
+async def test_aset_many_empty_is_no_op(store: BaseStore) -> None:
+    await store.aset_many({})
+    assert await store.acount() == 0
+
+
+async def test_aset_many_on_conflict_raise(store: BaseStore) -> None:
+    await store.aset_many({"1": {"text": "original"}, "2": {"text": "other"}})
+    with pytest.raises(KeyError, match=r"1"):
+        await store.aset_many({"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise")
+    assert await store.aget("1") == {"text": "original"}
+    assert await store.aget("3") is None
+
+
+async def test_aset_many_on_conflict_skip(store: BaseStore) -> None:
+    await store.aset_many({"1": {"text": "original"}})
+    await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
+    assert await store.aget("1") == {"text": "original"}
+    assert await store.aget("2") == {"text": "new"}
+
+
+async def test_aset_many_on_conflict_merge(store: BaseStore) -> None:
+    await store.aset_many({"1": {"text": "original", "author": "Alice"}})
+    await store.aset_many({"1": {"text": "updated"}}, on_conflict="merge")
+    assert await store.aget("1") == {"text": "updated", "author": "Alice"}
+
+
+# --- aset_batches ---
+
+
+async def test_aset_batches_writes_all_pairs(store: BaseStore) -> None:
+    await store.aset_batches([("1", {"v": 1}), ("2", {"v": 2}), ("3", {"v": 3})], batch_size=2)
+    assert await store.acount() == 3
+    assert await store.aget("2") == {"v": 2}
+
+
+async def test_aset_batches_empty_is_no_op(store: BaseStore) -> None:
+    await store.aset_batches([])
+    assert await store.acount() == 0
+
+
+# --- afilter ---
+
+
+async def test_afilter_no_args_returns_all(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    assert len(await store.afilter()) == len(items)
+
+
+async def test_afilter_single_field(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
+    await store.aset_many(items)
+    result = await store.afilter(author="Alice")
+    assert all(r["author"] == "Alice" for r in result)
+    assert len(result) == 2
+
+
+async def test_afilter_multiple_fields(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
+    await store.aset_many(items)
+    assert len(await store.afilter(author="Alice", category="Programming")) == 2
+
+
+async def test_afilter_no_match_returns_empty(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    assert await store.afilter(author="Charlie") == []
+
+
+async def test_afilter_integer_field_value(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result = await store.afilter(year=2022)
+    assert len(result) == 1
+    assert result[0]["title"] == "Intro to Python"
+
+
+async def test_afilter_empty_store_returns_empty(store: BaseStore) -> None:
+    assert await store.afilter(author="Alice") == []
+
+
+# --- adelete / adelete_many ---
+
+
+async def test_adelete_removes_value(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
+    await store.aset_many(items)
+    await store.adelete("1")
+    assert await store.acount() == len(items) - 1
+    assert await store.aget("1") is None
+
+
+async def test_adelete_nonexistent_is_silent(store: BaseStore) -> None:
+    await store.adelete("nonexistent")
+
+
+async def test_adelete_many_removes_values(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    await store.adelete_many(["1", "3"])
+    assert await store.acount() == len(items) - 2
+    assert await store.aget("1") is None
+    assert await store.aget("3") is None
+
+
+async def test_adelete_many_empty_list_is_no_op(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    await store.adelete_many([])
+    assert await store.acount() == len(items)
+
+
+async def test_adelete_many_nonexistent_keys_are_silent(store: BaseStore) -> None:
+    await store.adelete_many(["99", "100"])
+
+
+# --- aclear ---
+
+
+async def test_aclear_removes_all_values(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    await store.aclear()
+    assert await store.acount() == 0
+    assert [key async for key in store.akeys()] == []
+
+
+async def test_aclear_empty_store_is_no_op(store: BaseStore) -> None:
+    await store.aclear()
+    assert await store.acount() == 0
+
+
+async def test_aclear_returns_none(store: BaseStore) -> None:
+    assert await store.aclear() is None
+
+
+async def test_aclear_then_aset_works(store: BaseStore) -> None:
+    await store.aset("1", {"text": "hello"})
+    await store.aclear()
+    await store.aset("2", {"text": "world"})
+    assert await store.acount() == 1
+    assert await store.aget("2") == {"text": "world"}
+
+
+# --- acontains_many ---
+
+
+async def test_acontains_many_mixed(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
+    await store.aset_many(items)
+    found, missing = await store.acontains_many(["1", "99", "3", "42"])
+    assert sorted(found) == ["1", "3"]
+    assert sorted(missing) == ["42", "99"]
+
+
+async def test_acontains_many_empty_input_returns_empty_lists(store: BaseStore) -> None:
+    assert await store.acontains_many([]) == ([], [])
+
+
+async def test_acontains_many_empty_store_returns_all_missing(store: BaseStore) -> None:
+    found, missing = await store.acontains_many(["1", "2"])
+    assert found == []
+    assert sorted(missing) == ["1", "2"]
+
+
+# --- akeys / avalues ---
+
+
+async def test_akeys_empty_store_yields_nothing(store: BaseStore) -> None:
+    assert [key async for key in store.akeys()] == []
+
+
+async def test_akeys_returns_all_keys(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
+    await store.aset_many(items)
+    result = [key async for key in store.akeys()]
+    assert sorted(result) == sorted(items.keys())
+
+
+async def test_avalues_returns_all_values(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result = [value async for value in store.avalues()]
+    assert len(result) == len(items)
+    assert {v["title"] for v in result} == {v["title"] for v in items.values()}
+
+
+# --- aiter_batches ---
+
+
+async def test_aiter_batches_empty_store_yields_nothing(store: BaseStore) -> None:
+    assert [batch async for batch in store.aiter_batches()] == []
+
+
+async def test_aiter_batches_returns_async_iterator(store: BaseStore) -> None:
+    assert isinstance(store.aiter_batches(), AsyncIterator)
+
+
+async def test_aiter_batches_returns_all_key_value_pairs(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result: dict[str, dict[str, Any]] = {}
+    async for batch in store.aiter_batches(batch_size=2):
+        result.update(batch)
+    assert result == items
+
+
+async def test_aiter_batches_yields_correct_batch_sizes(
+    store: BaseStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert sorted(len(b) for b in batches) == [2, 2]
+
+
+async def test_aiter_batches_zero_batch_size_raises(store: BaseStore) -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        async for _ in store.aiter_batches(batch_size=0):
+            pass
+
+
+# --- acount ---
+
+
+async def test_acount_empty_store(store: BaseStore) -> None:
+    assert await store.acount() == 0
+
+
+async def test_acount_after_aset_many(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
+    await store.aset_many(items)
+    assert await store.acount() == len(items)
+
+
+# --- aclose / async context manager ---
+
+
+async def test_aclose_is_idempotent(store: BaseStore) -> None:
+    await store.aclose()
+    await store.aclose()  # should not raise
+
+
+async def test_aclose_returns_none(store: BaseStore) -> None:
+    assert await store.aclose() is None
+
+
+async def test_async_context_manager_usable_for_reads_and_writes(store: BaseStore) -> None:
+    await store.aset_many(
+        {
+            "1": {"text": "hello", "author": "Alice"},
+            "2": {"text": "world", "author": "Bob"},
+        }
+    )
+    assert await store.acount() == 2
+    result = await store.afilter(author="Alice")
+    assert result[0]["text"] == "hello"
+    await store.adelete("1")
+    assert await store.acount() == 1
+
+
+###################################################################
+#     Cross-store comparisons in a single test (async API)        #
+###################################################################
+
+
+async def _all_available_stores_async() -> AsyncIterator[tuple[str, BaseStore]]:
+    for factory_param in _store_factories():
+        (factory,) = factory_param.values
+        store_id = factory_param.id
+        skip_marks = [m for m in factory_param.marks if m.name == "skipif"]
+        if any(mark.args[0] for mark in skip_marks):
+            continue
+        store: BaseStore = factory()
+        if _is_redis_store(store):
+            await store.adelete_many([key async for key in store.akeys()])
+        yield store_id, store
+
+
+async def test_cross_store_outputs_are_identical_async(items: dict[str, dict[str, Any]]) -> None:
+    results: dict[str, Any] = {}
+    stores: list[BaseStore] = []
+    try:
+        async for store_id, store in _all_available_stores_async():
+            stores.append(store)
+            await store.aset_many(items)
+            await store.aset(
+                "5", {"title": "Cooking Basics", "author": "Alice", "category": "Food"}
+            )
+            await store.adelete("5")
+            await store.aset("1", {**items["1"], "year": 2099}, on_conflict="merge")
+
+            results[store_id] = {
+                "count": await store.acount(),
+                "get_1": await store.aget("1"),
+                "get_missing": await store.aget("nonexistent"),
+                "get_many": await store.aget_many(["3", "1", "99"]),
+                "filter_alice": sorted(
+                    (v["title"] for v in await store.afilter(author="Alice")),
+                ),
+                "filter_none": await store.afilter(author="Charlie"),
+                "contains_many": await store.acontains_many(["1", "99", "3"]),
+                "keys": sorted([key async for key in store.akeys()]),
+                "values_titles": sorted([v["title"] async for v in store.avalues()]),
+            }
+    finally:
+        for store in stores:
+            if _is_redis_store(store):
+                await store.adelete_many([key async for key in store.akeys()])
+            await store.aclose()
 
     if len(results) < 2:
         pytest.skip("Need at least two available stores to compare")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Iterator
+from collections.abc import AsyncIterator, Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -501,3 +501,199 @@ def test_context_manager_multiple_open_close(store_cls: type[BaseRedisStore]) ->
     finally:
         with redis_store as store:
             store.delete_many(list(store.keys()))
+
+
+# --- async round trips ---
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_aget_aset_round_trip(store: BaseRedisStore) -> None:
+    await store.aset("1", {"title": "Intro to Python"})
+    assert await store.aget("1") == {"title": "Intro to Python"}
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_afilter(store: BaseRedisStore) -> None:
+    await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
+    assert await store.afilter(author="Alice") == [{"author": "Alice"}]
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_acontains_many(store: BaseRedisStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    found, missing = await store.acontains_many(["1", "3"])
+    assert found == ["1"]
+    assert missing == ["3"]
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_akeys_aclear(store: BaseRedisStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert sorted([key async for key in store.akeys()]) == ["1", "2"]
+    await store.aclear()
+    assert await store.acount() == 0
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_aset_batches(store: BaseRedisStore) -> None:
+    await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})], batch_size=1)
+    assert await store.acount() == 2
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_adelete_many(
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    await store.adelete_many(["1", "2"])
+    assert sorted([key async for key in store.akeys()]) == ["3", "4"]
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_adelete_many_empty_is_no_op(store: BaseRedisStore) -> None:
+    await store.aset("1", {"a": 1})
+    await store.adelete_many([])
+    assert await store.acount() == 1
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_avalues(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
+    await store.aset_many(items)
+    values = [v async for v in store.avalues(batch_size=2)]
+    assert sorted(v["title"] for v in values) == sorted(item["title"] for item in items.values())
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_aiter_batches_returns_async_iterator(store: BaseRedisStore) -> None:
+    assert isinstance(store.aiter_batches(), AsyncIterator)
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_aiter_batches_returns_all_key_value_pairs(
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result: dict[str, dict[str, Any]] = {}
+    async for batch in store.aiter_batches(batch_size=2):
+        result.update(batch)
+    assert result == items
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_aiter_batches_empty_store_yields_nothing(store: BaseRedisStore) -> None:
+    assert [batch async for batch in store.aiter_batches()] == []
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_aset_many_on_conflict_raise(store: BaseRedisStore) -> None:
+    await store.aset("1", {"a": 1})
+    with pytest.raises(KeyError):
+        await store.aset_many({"1": {"a": 2}}, on_conflict="raise")
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_aset_many_on_conflict_skip(store: BaseRedisStore) -> None:
+    await store.aset("1", {"a": 1})
+    await store.aset_many({"1": {"a": 2}}, on_conflict="skip")
+    assert await store.aget("1") == {"a": 1}
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_aset_on_conflict_merge(store: BaseRedisStore) -> None:
+    await store.aset("1", {"a": 1})
+    await store.aset("1", {"b": 2}, on_conflict="merge")
+    assert await store.aget("1") == {"a": 1, "b": 2}
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_aclose_is_idempotent(store_cls: type[BaseRedisStore]) -> None:
+    async_store = store_cls(REDIS_URL)
+    await async_store.aclose()
+    await async_store.aclose()
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_async_context_manager_usable_for_reads_and_writes(
+    store_cls: type[BaseRedisStore],
+) -> None:
+    async with store_cls(REDIS_URL) as async_store:
+        await async_store.aset("1", {"text": "hello"})
+        assert await async_store.aget("1") == {"text": "hello"}
+        await async_store.adelete_many([key async for key in async_store.akeys()])
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_to_uri_from_uri_async_round_trip(
+    store_cls: type[BaseRedisStore], items: dict[str, dict[str, Any]]
+) -> None:
+    async with store_cls(REDIS_URL) as async_store:
+        await async_store.aset_many(items)
+        uri = async_store.to_uri()
+        async with store_cls.from_uri(uri) as reloaded:
+            assert await reloaded.acount() == len(items)
+        await async_store.adelete_many([key async for key in async_store.akeys()])
+
+
+@redis_available
+@redis_server_available
+async def test_async_context_manager_multiple_open_close(
+    store_cls: type[BaseRedisStore],
+) -> None:
+    """Reopening an async store after close reconnects to the same Redis
+    server, so previously written data is still there."""
+    redis_store = store_cls(REDIS_URL)
+    try:
+        async with redis_store as store:
+            await store.adelete_many([key async for key in store.akeys()])
+        for i in range(3):
+            async with redis_store as store:
+                await store.aset(str(i), {"text": "hello"})
+                assert await store.aget(str(i)) == {"text": "hello"}
+    finally:
+        async with redis_store as store:
+            await store.adelete_many([key async for key in store.akeys()])
+
+
+##########################################################
+#     PickleRedisStore-specific serialization behavior    #
+##########################################################
+
+
+@redis_available
+@redis_server_available
+async def test_pickle_store_round_trips_tuples_and_sets_async() -> None:
+    async with PickleRedisStore(REDIS_URL) as store:
+        await store.adelete_many([key async for key in store.akeys()])
+        await store.aset("1", {"coordinates": (1, 2, 3), "tags": {"python", "redis"}})
+        assert await store.aget("1") == {"coordinates": (1, 2, 3), "tags": {"python", "redis"}}
+        await store.adelete_many([key async for key in store.akeys()])
+
+
+@redis_available
+@redis_server_available
+async def test_json_store_normalizes_tuples_and_sets_are_unsupported_async() -> None:
+    async with RedisStore(REDIS_URL) as store:
+        await store.adelete_many([key async for key in store.akeys()])
+        await store.aset("1", {"coordinates": (1, 2, 3)})
+        # JSON has no tuple type, so it comes back as a list.
+        assert await store.aget("1") == {"coordinates": [1, 2, 3]}
+        with pytest.raises(TypeError, match="not JSON serializable"):
+            await store.aset("2", {"tags": {"python", "redis"}})
+        await store.adelete_many([key async for key in store.akeys()])

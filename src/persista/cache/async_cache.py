@@ -1,4 +1,4 @@
-r"""Provide an async TTL cache backed by any ``AsyncBaseStore``."""
+r"""Provide an async TTL cache backed by any ``BaseStore``."""
 
 from __future__ import annotations
 
@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from persista.cache.cache import _UNSET
 from persista.cache.utils import make_key
-from persista.store.async_in_memory import AsyncInMemoryStore
+from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from persista.store.base import AsyncBaseStore
+    from persista.store.base import BaseStore
 
 T = TypeVar("T")
 
@@ -26,7 +26,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 class AsyncCache:
     """Async cache with per-entry expiry, backed by any
-    :class:`~persista.store.base.AsyncBaseStore`.
+    :class:`~persista.store.base.BaseStore`.
 
     This is the async counterpart of :class:`~persista.cache.cache.Cache`,
     for use with an async backing store (e.g. a Redis- or
@@ -36,7 +36,7 @@ class AsyncCache:
 
     Each entry is wrapped as ``{"value": value, "expires_at":
     expires_at}`` before being written to the store, since
-    :class:`~persista.store.base.AsyncBaseStore` only accepts ``dict``
+    :class:`~persista.store.base.BaseStore` only accepts ``dict``
     values. If the backing store is one that serializes values (e.g.
     a SQLite- or Redis-backed store), cached values must be
     JSON-serializable.
@@ -50,7 +50,7 @@ class AsyncCache:
 
     Args:
         store: The backing store. Defaults to a new
-            :class:`~persista.store.async_in_memory.AsyncInMemoryStore`.
+            :class:`~persista.store.in_memory.InMemoryStore`.
         default_ttl: The default time-to-live, in seconds, applied to
             entries whose ``ttl`` is not explicitly set on
             :meth:`set` / :meth:`get_or_compute` / :meth:`memoize`.
@@ -80,14 +80,14 @@ class AsyncCache:
 
     def __init__(
         self,
-        store: AsyncBaseStore | None = None,
+        store: BaseStore | None = None,
         default_ttl: float | None = None,
         ignore_none: bool = False,
     ) -> None:
         if default_ttl is not None and default_ttl < 0:
             msg = f"default_ttl must be non-negative, got {default_ttl}"
             raise ValueError(msg)
-        self._store: AsyncBaseStore = store if store is not None else AsyncInMemoryStore()
+        self._store: BaseStore = store if store is not None else InMemoryStore()
         self.default_ttl = default_ttl
         self._ignore_none = ignore_none
 
@@ -137,12 +137,12 @@ class AsyncCache:
             ``key`` exists in the store, has not expired, and (when
             ``ignore_none`` is ``True``) its value is not ``None``.
         """
-        entry = await self._store.get(key)
+        entry = await self._store.aget(key)
         if entry is None:
             return False, None
         expires_at = entry["expires_at"]
         if expires_at is not None and time.time() > expires_at:
-            await self._store.delete(key)  # expired, evict
+            await self._store.adelete(key)  # expired, evict
             return False, None
         value = entry["value"]
         if self._ignore_none and value is None:
@@ -194,10 +194,10 @@ class AsyncCache:
             msg = f"ttl must be non-negative, got {resolved_ttl}"
             raise ValueError(msg)
         if resolved_ttl == 0:
-            await self._store.delete(key)
+            await self._store.adelete(key)
             return
         expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
-        await self._store.set(key, {"value": value, "expires_at": expires_at})
+        await self._store.aset(key, {"value": value, "expires_at": expires_at})
 
     async def contains(self, key: str) -> bool:
         """Indicate whether a key is present and unexpired.
@@ -254,7 +254,7 @@ class AsyncCache:
 
             ```
         """
-        await self._store.delete(key)
+        await self._store.adelete(key)
 
     async def get_or_compute(
         self,
@@ -269,7 +269,7 @@ class AsyncCache:
 
         ``fn`` may be a regular sync function or an ``async def``
         function; either way, the backing store is always accessed
-        through ``await`` since :class:`~persista.store.base.AsyncBaseStore`
+        through ``await`` since :class:`~persista.store.base.BaseStore`
         is an async interface.
 
         ``args``/``kwargs`` are passed as a tuple/dict rather than
@@ -424,4 +424,4 @@ class AsyncCache:
 
             ```
         """
-        await self._store.clear()
+        await self._store.aclear()
