@@ -10,10 +10,11 @@ function calls, with both synchronous and asynchronous APIs.
 
 The `persista.cache` package provides two related ways to cache data:
 
-- `Cache` / `AsyncCache`: explicit cache objects with `get`/`set`/`clear` methods, backed by
-  any `BaseStore` (an in-memory store by default)
+- `Cache`: an explicit cache object with `get`/`set`/`clear` methods, backed by any `BaseStore`
+  (an in-memory store by default). Every method also has an async counterpart, prefixed with
+  `a` (`aget`/`aset`/`aclear`/...), for use with an async backing store.
 - `cached` / `async_cached`: decorators that cache the result of a function call using a shared
-  default cache
+  default `Cache`
 
 An entry can optionally have an expiration time (TTL). Once a key's TTL has elapsed, `get`
 behaves as if the key were never set.
@@ -194,21 +195,22 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
 
 ```
 
-## Async Caching with `AsyncCache`
+## Async Caching with `Cache`'s `a`-prefixed Methods
 
-`AsyncCache` mirrors `Cache`'s `get`/`set`/`contains`/`delete`/`clear`/`memoize` API, but every
-method is a coroutine and it accesses the backing `BaseStore` through its async (`a`-prefixed)
-methods (an `InMemoryStore` by default):
+Every `Cache` method has an async counterpart, prefixed with `a`, for use with an async backing
+store (an `InMemoryStore` by default). `aget`/`aset`/`acontains`/`adelete`/`aclear` mirror their
+sync counterparts but are coroutines, accessing the backing `BaseStore` through its async
+(`a`-prefixed) methods:
 
 ```pycon
 >>> import asyncio
->>> from persista.cache import AsyncCache
+>>> from persista.cache import Cache
 >>> async def main():
-...     cache = AsyncCache(default_ttl=60)
-...     await cache.set("greeting", "hello")
-...     print(await cache.get("greeting"))
-...     await cache.clear()
-...     print(await cache.get("greeting"))
+...     cache = Cache(default_ttl=60)
+...     await cache.aset("greeting", "hello")
+...     print(await cache.aget("greeting"))
+...     await cache.aclear()
+...     print(await cache.aget("greeting"))
 ...
 >>> asyncio.run(main())
 hello
@@ -216,23 +218,22 @@ None
 
 ```
 
-One difference from `Cache`: `AsyncCache.get_or_compute` accepts either a sync or an `async def`
-function directly — awaiting it only if the result is awaitable — so there's no separate
-`aget_or_compute`. The backing store is still always accessed with `await`, via its async
+`aget_or_compute` accepts either a sync or an `async def` function directly — awaiting it only
+if the result is awaitable. The backing store is always accessed with `await`, via its async
 (`a`-prefixed) methods:
 
 ```pycon
 >>> import asyncio
->>> from persista.cache import AsyncCache
->>> cache = AsyncCache()
+>>> from persista.cache import Cache
+>>> cache = Cache()
 >>> calls = []
 >>> def compute(x):  # a plain sync function works too
 ...     calls.append(x)
 ...     return x * 2
 ...
 >>> async def main():
-...     print(await cache.get_or_compute("key", compute, (4,), {}))
-...     print(await cache.get_or_compute("key", compute, (4,), {}))  # cached
+...     print(await cache.aget_or_compute("key", compute, (4,), {}))
+...     print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
 ...
 >>> asyncio.run(main())
 8
@@ -242,25 +243,25 @@ function directly — awaiting it only if the result is awaitable — so there's
 
 ```
 
-`AsyncCache.memoize` decorates `async def` functions:
+`amemoize` decorates `async def` (or sync) functions, always returning a coroutine function:
 
 ```pycon
 >>> import asyncio
->>> from persista.cache import AsyncCache
->>> cache = AsyncCache()
+>>> from persista.cache import Cache
+>>> cache = Cache()
 >>> calls = []
->>> @cache.memoize(ttl=60)
-... async def square(x):
+>>> @cache.amemoize(ttl=60)
+... async def cube(x):
 ...     calls.append(x)
-...     return x * x
+...     return x * x * x
 ...
 >>> async def main():
-...     print(await square(4))
-...     print(await square(4))  # served from the cache, not re-computed
+...     print(await cube(4))
+...     print(await cube(4))  # served from the cache, not re-computed
 ...
 >>> asyncio.run(main())
-16
-16
+64
+64
 >>> calls
 [4]
 
@@ -269,8 +270,9 @@ function directly — awaiting it only if the result is awaitable — so there's
 ## Shared Default Caches: `cached` and `async_cached`
 
 For simple cases, `cached` and `async_cached` avoid creating and threading a `Cache` instance
-through your code. They use a shared module-level default cache, retrieved with `get_cache` /
-`get_async_cache`:
+through your code. Both use the same shared module-level default `Cache`, retrieved with
+`get_cache` — `cached` through its sync methods, `async_cached` through its async (`a`-prefixed)
+methods:
 
 ```pycon
 >>> from persista.cache import cached
@@ -294,17 +296,17 @@ through your code. They use a shared module-level default cache, retrieved with 
 >>> from persista.cache import async_cached
 >>> calls = []
 >>> @async_cached(ttl=60)
-... async def square(x):
+... async def cube(x):
 ...     calls.append(x)
-...     return x * x
+...     return x * x * x
 ...
 >>> async def main():
-...     print(await square(4))
-...     print(await square(4))  # served from the cache, not re-computed
+...     print(await cube(4))
+...     print(await cube(4))  # served from the cache, not re-computed
 ...
 >>> asyncio.run(main())
-16
-16
+64
+64
 >>> calls
 [4]
 
@@ -330,8 +332,9 @@ through your code. They use a shared module-level default cache, retrieved with 
 
 ```
 
-Use `set_cache` / `set_async_cache` to replace the shared default cache, for example to
-change its backend or default TTL globally:
+Use `set_cache` to replace the shared default cache, for example to change its backend or
+default TTL globally. Since `cached` and `async_cached` both look up the same `get_cache`, this
+affects both:
 
 ```pycon
 >>> from persista.cache import Cache

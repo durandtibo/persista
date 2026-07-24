@@ -5,9 +5,7 @@ from __future__ import annotations
 __all__ = [
     "async_cached",
     "cached",
-    "get_async_cache",
     "get_cache",
-    "set_async_cache",
     "set_cache",
 ]
 
@@ -16,7 +14,6 @@ import functools
 import inspect
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from persista.cache.async_cache import AsyncCache
 from persista.cache.cache import _UNSET, Cache
 from persista.cache.utils import make_key
 
@@ -25,7 +22,7 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
-_state = {"cache": Cache(default_ttl=300), "async_cache": AsyncCache(default_ttl=300)}
+_state = {"cache": Cache(default_ttl=300)}
 
 
 def get_cache() -> Cache:
@@ -68,52 +65,6 @@ def set_cache(cache: Cache) -> None:
         ```
     """
     _state["cache"] = cache
-
-
-def get_async_cache() -> AsyncCache:
-    """Return the shared default async cache.
-
-    Returns:
-        The shared default :class:`~persista.cache.async_cache.AsyncCache`
-        instance, used by :func:`async_cached` when no explicit cache
-        is given.
-
-    Example:
-        ```pycon
-        >>> import asyncio
-        >>> from persista.cache.interface import get_async_cache
-        >>> async def main():
-        ...     cache = get_async_cache()
-        ...     await cache.set("greeting", "hello")
-        ...     print(await cache.get("greeting"))
-        ...
-        >>> asyncio.run(main())
-        hello
-
-        ```
-    """
-    return _state["async_cache"]
-
-
-def set_async_cache(cache: AsyncCache) -> None:
-    """Replace the shared default async cache.
-
-    Args:
-        cache: The :class:`~persista.cache.async_cache.AsyncCache`
-            instance to install as the new shared default, in place of
-            the one returned by :func:`get_async_cache`.
-
-    Example:
-        ```pycon
-        >>> from persista.cache import AsyncCache
-        >>> from persista.cache import get_async_cache, set_async_cache
-        >>> set_async_cache(AsyncCache(default_ttl=60))
-        >>> get_async_cache().default_ttl
-        60
-
-        ```
-    """
-    _state["async_cache"] = cache
 
 
 def cached(
@@ -210,11 +161,11 @@ def async_cached(
     ignore_non_serializable: bool = False,
 ) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """Cache an async function's return values in the shared default
-    async cache.
+    cache.
 
-    Looks up :func:`get_async_cache` on every call, so replacing
-    the shared cache via :func:`set_async_cache` also changes
-    where already-decorated functions store their results.
+    Looks up :func:`get_cache` on every call, so replacing the
+    shared cache via :func:`set_cache` also changes where
+    already-decorated functions store their results.
 
     The cache key is derived from the decorated function's qualified
     name (``__qualname__``) and call arguments, via
@@ -223,7 +174,7 @@ def async_cached(
     Args:
         ttl: The time-to-live, in seconds, applied to cached results.
             Defaults to the cache's ``default_ttl`` when not given.
-            See :meth:`~persista.cache.async_cache.AsyncCache.set`.
+            See :meth:`~persista.cache.cache.Cache.aset`.
         strategy: The serialization strategy used to compute the
             cache key. Either ``"json"`` or ``"pickle"``. See
             :func:`~persista.cache.utils.make_key`.
@@ -245,17 +196,17 @@ def async_cached(
         >>> from persista.cache import async_cached
         >>> calls = []
         >>> @async_cached(ttl=60)
-        ... async def square(x):
+        ... async def cube(x):
         ...     calls.append(x)
-        ...     return x * x
+        ...     return x * x * x
         ...
         >>> async def main():
-        ...     print(await square(4))
-        ...     print(await square(4))  # served from the cache, not re-computed
+        ...     print(await cube(4))
+        ...     print(await cube(4))  # served from the cache, not re-computed
         ...
         >>> asyncio.run(main())
-        16
-        16
+        64
+        64
         >>> calls
         [4]
 
@@ -265,7 +216,7 @@ def async_cached(
     def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            cache = get_async_cache()
+            cache = get_cache()
             key = make_key(
                 func.__qualname__,
                 args,
@@ -273,7 +224,7 @@ def async_cached(
                 strategy=strategy,
                 ignore_non_serializable=ignore_non_serializable,
             )
-            return await cache.get_or_compute(key, func, args, kwargs, ttl=ttl)
+            return await cache.aget_or_compute(key, func, args, kwargs, ttl=ttl)
 
         return wrapper
 
