@@ -1351,6 +1351,34 @@ async def test_sqlite_store_async_context_manager_reopens_after_close(
     assert store.closed
 
 
+async def test_sqlite_store_async_op_after_reopen_recreates_schema(
+    store_cls: type[BaseSQLiteStore],
+) -> None:
+    """Regression test: reopening a closed `:memory:` store must reset the
+    async schema-ready flag, otherwise the first async op after reopening
+    sees a stale flag and skips creating the table on the new connection."""
+    store = store_cls(":memory:")
+    await store.aset("1", {"a": 1})
+    await store.aclose()
+    async with store:
+        await store.aset("2", {"a": 2})
+        assert await store.aget("2") == {"a": 2}
+    await store.aclose()
+
+
+def test_sqlite_store_aget_after_close_raises(store_cls: type[BaseSQLiteStore]) -> None:
+    """Regression test: async methods must respect a bare close() the same
+    way sync methods do, instead of silently reopening a new connection."""
+    store = store_cls(":memory:")
+    store.close()
+
+    async def _run() -> None:
+        with pytest.raises(sqlite3.ProgrammingError):
+            await store.aget("1")
+
+    asyncio.run(_run())
+
+
 # ---------------------------------------------------------------------------
 # Additional coverage: async methods on the real (available) aiosqlite path
 # that aren't exercised by the round-trip tests above.

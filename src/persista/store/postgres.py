@@ -9,13 +9,16 @@ import asyncio
 import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
 from persista.store.validation import (
+    aresolve_conflicts,
     normalize_on_conflict,
+    resolve_conflicts,
     validate_batch_size,
     validate_field_name,
     validate_table_name,
@@ -31,6 +34,7 @@ if TYPE_CHECKING:
 if is_psycopg_available():  # pragma: no cover
     import psycopg
     from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict
     from psycopg.types.json import Jsonb
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -165,7 +169,23 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         return self._closed
 
     def to_uri(self) -> str:
-        return self._conninfo
+        if urlsplit(self._conninfo).scheme in {"postgres", "postgresql"}:
+            return self._conninfo
+        # `self._conninfo` is a keyword/value DSN (e.g. "dbname=foo host=bar"),
+        # which registry.store_from_uri can't dispatch on (no URI scheme to
+        # read); convert it to an equivalent postgresql:// URI so to_uri()
+        # always returns something from_uri()/the registry can consume.
+        params = {k: str(v) for k, v in conninfo_to_dict(self._conninfo).items()}
+        user = params.pop("user", None)
+        password = params.pop("password", None)
+        host = params.pop("host", "")
+        port = params.pop("port", None)
+        dbname = params.pop("dbname", "")
+        netloc = f"{host}:{port}" if port else host
+        if user:
+            auth = f"{user}:{password}" if password else user
+            netloc = f"{auth}@{netloc}"
+        return urlunsplit(("postgresql", netloc, f"/{dbname}", urlencode(params), ""))
 
     @classmethod
     def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
@@ -233,22 +253,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        keys = list(items)
-        found = self.contains_many(keys)
-        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
-            raise KeyError(msg)
-
-        to_write: dict[str, dict[str, Any]] = {}
-        for key, value in items.items():
-            if key in conflicts:
-                if on_conflict == "skip":
-                    continue
-                to_write[key] = {**(self.get(key) or {}), **value}
-                continue
-            to_write[key] = value
-
+        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
         self._set_many(to_write)
 
     async def aset_many(
@@ -261,22 +266,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             await self._aset_many(items)
             return
 
-        keys = list(items)
-        found = await self.acontains_many(keys)
-        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
-            raise KeyError(msg)
-
-        to_write: dict[str, dict[str, Any]] = {}
-        for key, value in items.items():
-            if key in conflicts:
-                if on_conflict == "skip":
-                    continue
-                to_write[key] = {**(await self.aget(key) or {}), **value}
-                continue
-            to_write[key] = value
-
+        to_write = await aresolve_conflicts(items, on_conflict, self.acontains_many, self.aget)
         await self._aset_many(to_write)
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:

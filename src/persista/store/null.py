@@ -63,6 +63,14 @@ class NullStore(BaseStore, InlineDisplayMixin):
     def closed(self) -> bool:
         return self._closed
 
+    def __enter__(self) -> Self:
+        self._closed = False
+        return self
+
+    async def __aenter__(self) -> Self:
+        self._closed = False
+        return self
+
     def get(self, key: str) -> dict[str, Any] | None:  # noqa: ARG002
         return None
 
