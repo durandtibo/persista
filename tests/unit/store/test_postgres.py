@@ -202,7 +202,13 @@ class FakeConnection:
         return matches
 
 
-def _connect(store_cls: type[BasePostgresStore], table: str = "store", **kwargs: Any) -> Any:
+def _connect(
+    store_cls: type[BasePostgresStore],
+    table: str = "store",
+    conninfo: str = "postgresql://x",
+    from_uri: bool = False,
+    **kwargs: Any,
+) -> Any:
     """Construct a store against a fresh :class:`FakeConnection`.
 
     Also pre-populates the store's lazy async connection slot with an
@@ -212,10 +218,16 @@ def _connect(store_cls: type[BasePostgresStore], table: str = "store", **kwargs:
     ``psycopg.AsyncConnection.connect`` -- sync and async operations
     against the returned store share one consistent view of the data,
     mirroring how a real Postgres server would behave.
+
+    Pass ``from_uri=True`` to construct via ``store_cls.from_uri(conninfo,
+    **kwargs)`` instead of ``store_cls(conninfo, table=table, **kwargs)``.
     """
     conn = FakeConnection()
     with patch(f"{MODULE}.psycopg.connect", return_value=conn):
-        store = store_cls("postgresql://x", table=table, **kwargs)
+        if from_uri:
+            store = store_cls.from_uri(conninfo, **kwargs)
+        else:
+            store = store_cls(conninfo, table=table, **kwargs)
     conn.store = store
     store._aconn = _AsyncConnAdapter(conn)
     return store
@@ -345,7 +357,9 @@ def test_valid_table_name_calls_connect(store_cls: type[BasePostgresStore]) -> N
     with patch(f"{MODULE}.psycopg.connect") as mock_connect:
         mock_connect.return_value = MagicMock()
         store_cls("postgresql://x", table="mytable")
-        mock_connect.assert_called_once_with("postgresql://x", autocommit=True)
+        mock_connect.assert_called_once()
+        assert mock_connect.call_args.args == ("postgresql://x",)
+        assert mock_connect.call_args.kwargs["autocommit"] is True
 
 
 def test_init_creates_table(store: BasePostgresStore) -> None:
@@ -379,10 +393,7 @@ def test_to_uri_converts_keyword_dsn_to_uri(store_cls: type[BasePostgresStore]) 
     """Regression test: a store constructed from a keyword/value DSN (not a
     postgresql:// URI) must still produce a URI from to_uri(), so
     registry.store_from_uri can dispatch on its scheme."""
-    conn = FakeConnection()
-    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
-        store = store_cls("dbname=foo host=bar user=baz password=qux port=5433")
-    conn.store = store
+    store = _connect(store_cls, conninfo="dbname=foo host=bar user=baz password=qux port=5433")
 
     uri = store.to_uri()
 
@@ -394,10 +405,7 @@ def test_to_uri_converts_keyword_dsn_without_user_to_uri(
 ) -> None:
     """Regression test: a keyword/value DSN with no user (e.g. relying on
     peer/trust auth) must not raise or otherwise fail to build a URI."""
-    conn = FakeConnection()
-    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
-        store = store_cls("dbname=foo host=bar")
-    conn.store = store
+    store = _connect(store_cls, conninfo="dbname=foo host=bar")
 
     uri = store.to_uri()
 
@@ -406,10 +414,7 @@ def test_to_uri_converts_keyword_dsn_without_user_to_uri(
 
 def test_from_uri_constructs_with_same_conninfo(store_cls: type[BasePostgresStore]) -> None:
     conninfo = "postgresql://user:pass@localhost/dbname"
-    conn = FakeConnection()
-    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
-        new_store = store_cls.from_uri(conninfo)
-    conn.store = new_store
+    new_store = _connect(store_cls, conninfo=conninfo, from_uri=True)
     assert new_store._conninfo == conninfo
     new_store.set("1", {"text": "a"})
     assert new_store.get("1") == {"text": "a"}
@@ -417,10 +422,7 @@ def test_from_uri_constructs_with_same_conninfo(store_cls: type[BasePostgresStor
 
 def test_from_uri_ignores_read_only(store_cls: type[BasePostgresStore]) -> None:
     conninfo = "postgresql://user:pass@localhost/dbname"
-    conn = FakeConnection()
-    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
-        new_store = store_cls.from_uri(conninfo, read_only=True)
-    conn.store = new_store
+    new_store = _connect(store_cls, conninfo=conninfo, from_uri=True, read_only=True)
     assert new_store._conninfo == conninfo
     new_store.set("1", {"text": "a"})
     assert new_store.get("1") == {"text": "a"}

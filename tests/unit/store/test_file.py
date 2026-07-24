@@ -635,6 +635,7 @@ def test_close_does_not_delete_files(store: BaseFileStore) -> None:
         lambda store: list(store.iter_batches()),
         lambda store: store.count(),
     ],
+    ids=["get", "set", "delete", "clear", "contains", "keys", "iter_batches", "count"],
 )
 def test_operations_raise_on_closed_store(
     store: BaseFileStore, op: Callable[[BaseFileStore], Any]

@@ -40,13 +40,11 @@ async def test_store_from_uri_result_supports_async_methods() -> None:
     assert await store.aget("1") == {"a": 1}
 
 
-def test_register_scheme() -> None:
-    register_scheme("custom-memory", InMemoryStore)
-    try:
-        store = store_from_uri("custom-memory://")
-        assert isinstance(store, InMemoryStore)
-    finally:
-        del store_from_uri.__globals__["_SCHEMES"]["custom-memory"]
+def test_register_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
+    schemes = store_from_uri.__globals__["_SCHEMES"]
+    monkeypatch.setitem(schemes, "custom-memory", InMemoryStore)
+    store = store_from_uri("custom-memory://")
+    assert isinstance(store, InMemoryStore)
 
 
 def test_register_scheme_overrides_existing() -> None:
@@ -66,7 +64,12 @@ def test_store_from_uri_unknown_scheme_raises() -> None:
         store_from_uri("bogus://x")
 
 
-def test_store_from_uri_forwards_read_only_true() -> None:
+@pytest.mark.parametrize(
+    ("kwargs", "expected"), [({"read_only": True}, True), ({}, False)], ids=["true", "default"]
+)
+def test_store_from_uri_forwards_read_only(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, bool], expected: bool
+) -> None:
     received: dict[str, bool] = {}
 
     class _SpyStore(InMemoryStore):
@@ -75,29 +78,10 @@ def test_store_from_uri_forwards_read_only_true() -> None:
             received["read_only"] = read_only
             return cls()
 
-    register_scheme("spy-read-only", _SpyStore)
-    try:
-        store_from_uri("spy-read-only://", read_only=True)
-        assert received["read_only"] is True
-    finally:
-        del store_from_uri.__globals__["_SCHEMES"]["spy-read-only"]
-
-
-def test_store_from_uri_forwards_read_only_false_by_default() -> None:
-    received: dict[str, bool] = {}
-
-    class _SpyStore(InMemoryStore):
-        @classmethod
-        def from_uri(cls, uri: str, *, read_only: bool = False) -> _SpyStore:  # noqa: ARG003
-            received["read_only"] = read_only
-            return cls()
-
-    register_scheme("spy-default", _SpyStore)
-    try:
-        store_from_uri("spy-default://")
-        assert received["read_only"] is False
-    finally:
-        del store_from_uri.__globals__["_SCHEMES"]["spy-default"]
+    schemes = store_from_uri.__globals__["_SCHEMES"]
+    monkeypatch.setitem(schemes, "spy", _SpyStore)
+    store_from_uri("spy://", **kwargs)
+    assert received["read_only"] is expected
 
 
 def test_store_package_has_no_async_prefixed_exports() -> None:
