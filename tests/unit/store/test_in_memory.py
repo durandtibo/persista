@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Generator, Iterator
 from typing import Any
 
@@ -570,6 +571,21 @@ def test_iter_batches_does_not_mutate_store(
     assert store.count() == len(items)
 
 
+def test_iter_batches_survives_concurrent_mutation(store: InMemoryStore) -> None:
+    """iter_batches snapshots the store up front, so a set() call
+    interleaved between batches must not raise "dictionary changed size
+    during iteration"."""
+    for i in range(5):
+        store.set(str(i), {"a": i})
+    gen = store.iter_batches(batch_size=2)
+    first = next(gen)
+    store.set("new", {"a": 99})
+    remaining = list(gen)
+    assert len(first) == 2
+    assert sum(len(batch) for batch in remaining) == 3
+    assert store.count() == 6
+
+
 # --- count ---
 
 
@@ -886,3 +902,59 @@ async def test_in_memory_store_aiter_batches_negative_batch_size_raises(
 ) -> None:
     with pytest.raises(ValueError, match="batch_size must be a positive integer"):
         _ = [batch async for batch in store.aiter_batches(batch_size=-1)]
+
+
+# --- concurrency ---
+
+
+def test_concurrent_set_many_merge_does_not_lose_updates(store: InMemoryStore) -> None:
+    """Many threads each merge a distinct field into the same key.
+
+    The store's lock must serialize the check-then-act merge sequence,
+    or concurrent writers reading the same stale base value would
+    clobber each other's fields (a lost update).
+    """
+    store.set("k", {})
+    n_threads = 16
+    barrier = threading.Barrier(n_threads)
+
+    def merge_one(i: int) -> None:
+        barrier.wait()
+        store.set("k", {f"field_{i}": i}, on_conflict="merge")
+
+    threads = [threading.Thread(target=merge_one, args=(i,)) for i in range(n_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    result = store.get("k")
+    assert result == {f"field_{i}": i for i in range(n_threads)}
+
+
+def test_concurrent_set_on_conflict_raise_never_corrupts_value(store: InMemoryStore) -> None:
+    """When many threads race to create the same key with
+    on_conflict="raise", exactly one write must win and the stored value
+    must be a single writer's value, not a mix."""
+    n_threads = 16
+    barrier = threading.Barrier(n_threads)
+    successes: list[int] = []
+    lock = threading.Lock()
+
+    def create_one(i: int) -> None:
+        barrier.wait()
+        try:
+            store.set("k", {"writer": i}, on_conflict="raise")
+        except KeyError:
+            return
+        with lock:
+            successes.append(i)
+
+    threads = [threading.Thread(target=create_one, args=(i,)) for i in range(n_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(successes) == 1
+    assert store.get("k") == {"writer": successes[0]}

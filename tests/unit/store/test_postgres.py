@@ -63,6 +63,7 @@ _COL_ALL_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)"$')
 _STAR_RE = re.compile(r'^SELECT \* FROM "(\w+)"(?: WHERE (.+))?$')
 _TEXT_COND_RE = re.compile(r"^(?:value|extra)->>'([^']+)' = %s::text$")
 _COL_COND_RE = re.compile(r'^"([^"]+)" = %s$')
+_ADVISORY_LOCK_RE = re.compile(r"^SELECT pg_advisory_xact_lock\(hashtextextended\(%s, 0\)\)$")
 
 
 class FakeCursor:
@@ -104,6 +105,10 @@ class FakeConnection:
         # `_row_to_value` instead of duplicating its schema/extra logic.
         self.store: BasePostgresStore | None = None
         self.closed = False
+        # Keys advisory-locked via pg_advisory_xact_lock, in call order;
+        # lets tests assert set_many/aset_many take the per-key lock before
+        # resolving on_conflict.
+        self.advisory_locked_keys: list[str] = []
 
     def cursor(self, name: str | None = None) -> FakeCursor:  # noqa: ARG002
         return FakeCursor(self)
@@ -147,6 +152,12 @@ class FakeConnection:
         table[row[0]] = tuple(_unwrap(v) for v in row)
 
     def dispatch_read(self, text: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
+        if _ADVISORY_LOCK_RE.match(text):
+            # No real locking needed against this single-threaded fake;
+            # just acknowledge the call the same way a real server would
+            # return a row, and record which key was locked.
+            self.advisory_locked_keys.append(params[0])
+            return [(None,)]
         if m := _COUNT_RE.match(text):
             return [(len(self.tables.get(m.group(1), {})),)]
         if m := _EXISTS_RE.match(text):
@@ -547,6 +558,27 @@ def test_set_many_on_conflict_merge(store: BasePostgresStore) -> None:
     store.set_many({"1": {"text": "original", "author": "Alice"}})
     store.set_many({"1": {"text": "updated"}}, on_conflict="merge")
     assert store.get("1") == {"text": "updated", "author": "Alice"}
+
+
+def test_set_many_on_conflict_takes_advisory_lock_per_key(store: BasePostgresStore) -> None:
+    """set_many with on_conflict != "overwrite" must take a Postgres
+    advisory lock per key before resolving conflicts, so concurrent
+    writers to the same keys serialize instead of racing between the
+    conflict check and the write."""
+    store.set_many({"1": {"text": "original"}})
+    conn = store._conn
+    conn.advisory_locked_keys.clear()
+    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
+    assert set(conn.advisory_locked_keys) == {"1", "2"}
+
+
+def test_set_many_on_conflict_overwrite_does_not_take_advisory_lock(
+    store: BasePostgresStore,
+) -> None:
+    conn = store._conn
+    conn.advisory_locked_keys.clear()
+    store.set_many({"1": {"text": "original"}}, on_conflict="overwrite")
+    assert conn.advisory_locked_keys == []
 
 
 def test_set_many_on_conflict_invalid_raises(store: BasePostgresStore) -> None:
@@ -1413,6 +1445,16 @@ async def test_postgres_store_aset_on_conflict_merge(store: BasePostgresStore) -
 async def test_postgres_store_aset_on_conflict_invalid_raises(store: BasePostgresStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
         await store.aset("1", {"text": "hello"}, on_conflict="bogus")
+
+
+async def test_postgres_store_aset_many_on_conflict_takes_advisory_lock_per_key(
+    store: BasePostgresStore,
+) -> None:
+    await store.aset_many({"1": {"text": "original"}})
+    conn = store._conn
+    conn.advisory_locked_keys.clear()
+    await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
+    assert set(conn.advisory_locked_keys) == {"1", "2"}
 
 
 async def test_postgres_store_aset_many_on_conflict_invalid_raises(

@@ -266,8 +266,16 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
-        self._set_many(to_write)
+        # Check-then-act (resolve_conflicts followed by the write) isn't
+        # atomic on its own: a concurrent writer could touch one of these
+        # keys in between. Take a Postgres advisory lock per key for the
+        # duration of the transaction so a concurrent set/set_many on any
+        # of the same keys blocks until this one commits, making
+        # "raise"/"skip"/"merge" behave correctly under concurrency.
+        with self._conn.transaction():
+            self._lock_keys(self._conn, items)
+            to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
+            self._set_many(to_write)
 
     async def aset_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
@@ -279,8 +287,25 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             await self._aset_many(items)
             return
 
-        to_write = await aresolve_conflicts(items, on_conflict, self.acontains_many, self.aget)
-        await self._aset_many(to_write)
+        conn = await self._ensure_aconn()
+        async with conn.transaction():
+            await self._alock_keys(conn, items)
+            to_write = await aresolve_conflicts(items, on_conflict, self.acontains_many, self.aget)
+            await self._aset_many(to_write)
+
+    @staticmethod
+    def _lock_keys(conn: psycopg.Connection, items: Mapping[str, dict[str, Any]]) -> None:
+        with conn.cursor() as cur:
+            for key in items:
+                cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
+
+    @staticmethod
+    async def _alock_keys(
+        conn: psycopg.AsyncConnection, items: Mapping[str, dict[str, Any]]
+    ) -> None:
+        async with conn.cursor() as cur:
+            for key in items:
+                await cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         if not field_filters:

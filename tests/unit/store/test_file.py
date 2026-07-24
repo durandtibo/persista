@@ -439,6 +439,56 @@ def test_clear_then_set_works(store: BaseFileStore) -> None:
     assert store.get("2") == {"text": "world"}
 
 
+# --- empty-string key ---
+#
+# An empty key maps to a value file named e.g. ".json" -- a dotfile with no
+# visible stem. `_iter_files()` must still recognize it (via a suffix
+# match), otherwise it becomes invisible to every method built on top of it
+# even though `get`/`contains`/`delete` (which go straight to the computed
+# path) see it fine.
+
+
+def test_empty_key_get_and_contains(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    assert store.get("") == {"x": 1}
+    assert store.contains("")
+
+
+def test_empty_key_counted(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    assert store.count() == 1
+
+
+def test_empty_key_included_in_keys(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    assert list(store.keys()) == [""]
+
+
+def test_empty_key_included_in_filter(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    assert store.filter() == [{"x": 1}]
+    assert store.filter(x=1) == [{"x": 1}]
+
+
+def test_empty_key_included_in_values(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    assert list(store.values()) == [{"x": 1}]
+
+
+def test_empty_key_removed_by_clear(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    store.clear()
+    assert store.count() == 0
+    assert not store.contains("")
+
+
+def test_empty_key_alongside_other_keys(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    store.set("a", {"x": 2})
+    assert store.count() == 2
+    assert set(store.keys()) == {"", "a"}
+
+
 # --- contains ---
 
 

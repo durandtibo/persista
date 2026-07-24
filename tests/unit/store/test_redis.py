@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
@@ -7,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from persista.store import PickleRedisStore, RedisStore
+from persista.store import redis as redis_module
 
 if TYPE_CHECKING:
     from persista.store import BaseRedisStore
@@ -201,6 +203,150 @@ def test_set_many_on_conflict_merge(store: BaseRedisStore) -> None:
 def test_set_many_on_conflict_invalid_raises(store: BaseRedisStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
         store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")
+
+
+# --- reserved key ---
+#
+# "__keys__" is the internal Redis set this store uses to track which data
+# keys exist. Writing a user value under that same name would overwrite the
+# set with a string, corrupting keys()/count()/contains()/values() for the
+# whole store, so it must be rejected up front.
+
+
+def test_set_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.set("__keys__", {"x": 1})
+
+
+def test_set_many_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.set_many({"1": {"x": 1}, "__keys__": {"x": 2}})
+
+
+def test_set_reserved_key_does_not_corrupt_store(store: BaseRedisStore) -> None:
+    store.set("a", {"x": 1})
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.set("__keys__", {"x": 2})
+    # The internal tracking set must be untouched: keys()/count() still work.
+    assert store.count() == 1
+    assert list(store.keys()) == ["a"]
+
+
+async def test_aset_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        await store.aset("__keys__", {"x": 1})
+
+
+async def test_aset_many_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        await store.aset_many({"1": {"x": 1}, "__keys__": {"x": 2}})
+
+
+# --- concurrency ---
+
+
+def test_concurrent_set_on_conflict_raise_never_corrupts_value(store: BaseRedisStore) -> None:
+    """Many threads race to create the same key with
+    on_conflict="raise".
+
+    set_many resolves conflicts under a WATCH/MULTI transaction retried
+    on WatchError, so exactly one write must win; the stored value must
+    be a single writer's value, not lost or interleaved.
+    """
+    n_threads = 8
+    barrier = threading.Barrier(n_threads)
+    successes: list[int] = []
+    lock = threading.Lock()
+
+    def create_one(i: int) -> None:
+        barrier.wait()
+        try:
+            store.set("k", {"writer": i}, on_conflict="raise")
+        except KeyError:
+            return
+        with lock:
+            successes.append(i)
+
+    threads = [threading.Thread(target=create_one, args=(i,)) for i in range(n_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(successes) == 1
+    assert store.get("k") == {"writer": successes[0]}
+
+
+def test_set_many_on_conflict_skip_all_conflicting_writes_nothing(store: BaseRedisStore) -> None:
+    """When every key in the batch already exists and
+    on_conflict="skip", the WATCH/MULTI transaction in set_many resolves
+    to an empty to_write mapping and must leave every existing value
+    untouched."""
+    store.set_many({"1": {"text": "original"}, "2": {"text": "original"}})
+    store.set_many(
+        {"1": {"text": "updated"}, "2": {"text": "updated"}},
+        on_conflict="skip",
+    )
+    assert store.get("1") == {"text": "original"}
+    assert store.get("2") == {"text": "original"}
+
+
+async def test_aset_many_on_conflict_skip_all_conflicting_writes_nothing(
+    store: BaseRedisStore,
+) -> None:
+    await store.aset_many({"1": {"text": "original"}, "2": {"text": "original"}})
+    await store.aset_many(
+        {"1": {"text": "updated"}, "2": {"text": "updated"}},
+        on_conflict="skip",
+    )
+    assert await store.aget("1") == {"text": "original"}
+    assert await store.aget("2") == {"text": "original"}
+
+
+# --- _set_many / _aset_many (private "overwrite" helper) ---
+#
+# set_many/aset_many only call these directly on the on_conflict="overwrite"
+# fast path, where items is always non-empty (set_many/aset_many return
+# early on an empty mapping). The "if items:" no-op guard inside them is
+# still part of their contract as standalone helpers, so it's covered
+# directly here rather than indirectly through the public API.
+
+
+def test_set_many_helper_empty_items_is_a_no_op(store: BaseRedisStore) -> None:
+    store._set_many({})
+    assert store.count() == 0
+
+
+async def test_aset_many_helper_empty_items_is_a_no_op(store: BaseRedisStore) -> None:
+    await store._aset_many({})
+    assert await store.acount() == 0
+
+
+async def test_aset_many_retries_on_watch_error(
+    store: BaseRedisStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deterministically force a WatchError on the first attempt (by
+    mutating a watched key out from under the pipeline mid-resolve) and
+    assert aset_many retries the whole resolve+write cycle instead of
+    corrupting state or propagating the error."""
+    store.set("1", {"text": "original"})
+    original_aresolve_conflicts = redis_module.aresolve_conflicts
+    call_count = 0
+
+    async def flaky_aresolve_conflicts(*args: Any, **kwargs: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            aclient = await store._ensure_aclient()
+            await aclient.set("1", store._encode({"text": "external"}))
+        return await original_aresolve_conflicts(*args, **kwargs)
+
+    monkeypatch.setattr(f"{MODULE}.aresolve_conflicts", flaky_aresolve_conflicts)
+
+    await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
+
+    assert call_count == 2
+    assert await store.aget("2") == {"text": "new"}
 
 
 # --- set_batches ---
