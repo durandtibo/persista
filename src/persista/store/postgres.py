@@ -636,7 +636,7 @@ class TypedPostgresStore(BasePostgresStore):
         typed_cols = sql.SQL("").join(
             sql.SQL(", {col} {dtype}").format(
                 col=sql.Identifier(name),
-                dtype=sql.SQL(dtype),  # pyright: ignore[reportArgumentType]
+                dtype=sql.SQL(dtype),
             )
             for name, dtype in self._schema.items()
         )
