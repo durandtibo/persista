@@ -486,7 +486,7 @@ class Cache:
             hits[key] = value
         return hits, expired_keys
 
-    def contains_many(self, keys: list[str]) -> set[str]:
+    def contains_many(self, keys: list[str]) -> list[bool]:
         """Check presence of multiple keys in a single batched store
         lookup.
 
@@ -499,10 +499,12 @@ class Cache:
             keys: The keys to check.
 
         Returns:
-            The subset of ``keys`` that are a hit -- present,
-            unexpired, and (when ``ignore_none`` is ``True``) not a
-            cached ``None``. Expired entries are evicted from the
-            backing store as a side effect of this call, as in
+            A list of booleans, in the same order as ``keys``, where
+            each entry is ``True`` if the corresponding key is a hit
+            -- present, unexpired, and (when ``ignore_none`` is
+            ``True``) not a cached ``None`` -- and ``False``
+            otherwise. Expired entries are evicted from the backing
+            store as a side effect of this call, as in
             :meth:`get_many`.
 
         Example:
@@ -510,14 +512,15 @@ class Cache:
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
             >>> cache.set("a", "hello")
-            >>> sorted(cache.contains_many(["a", "b"]))
-            ['a']
+            >>> cache.contains_many(["a", "b"])
+            [True, False]
 
             ```
         """
-        return set(self.get_many(keys))
+        hits = self.get_many(keys)
+        return [key in hits for key in keys]
 
-    async def acontains_many(self, keys: list[str]) -> set[str]:
+    async def acontains_many(self, keys: list[str]) -> list[bool]:
         """Check presence of multiple keys in a single batched store
         lookup.
 
@@ -528,10 +531,12 @@ class Cache:
             keys: The keys to check.
 
         Returns:
-            The subset of ``keys`` that are a hit -- present,
-            unexpired, and (when ``ignore_none`` is ``True``) not a
-            cached ``None``. Expired entries are evicted from the
-            backing store as a side effect of this call, as in
+            A list of booleans, in the same order as ``keys``, where
+            each entry is ``True`` if the corresponding key is a hit
+            -- present, unexpired, and (when ``ignore_none`` is
+            ``True``) not a cached ``None`` -- and ``False``
+            otherwise. Expired entries are evicted from the backing
+            store as a side effect of this call, as in
             :meth:`aget_many`.
 
         Example:
@@ -541,14 +546,15 @@ class Cache:
             >>> cache = Cache()
             >>> async def main():
             ...     await cache.aset("a", "hello")
-            ...     print(sorted(await cache.acontains_many(["a", "b"])))
+            ...     print(await cache.acontains_many(["a", "b"]))
             ...
             >>> asyncio.run(main())
-            ['a']
+            [True, False]
 
             ```
         """
-        return set(await self.aget_many(keys))
+        hits = await self.aget_many(keys)
+        return [key in hits for key in keys]
 
     def delete(self, key: str) -> None:
         """Remove a single entry from the cache, if present.

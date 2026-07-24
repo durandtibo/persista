@@ -188,25 +188,25 @@ def test_get_many_cached_none_is_omitted_with_ignore_none() -> None:
 # --- contains_many ---
 
 
-def test_contains_many_empty_keys_returns_empty_set(cache: Cache) -> None:
-    assert cache.contains_many([]) == set()
+def test_contains_many_empty_keys_returns_empty_list(cache: Cache) -> None:
+    assert cache.contains_many([]) == []
 
 
 def test_contains_many_all_missing(cache: Cache) -> None:
-    assert cache.contains_many(["a", "b"]) == set()
+    assert cache.contains_many(["a", "b"]) == [False, False]
 
 
 def test_contains_many_mixed_hits_and_misses(cache: Cache) -> None:
     cache.set("a", "1")
     cache.set("b", "2")
-    assert cache.contains_many(["a", "b", "missing"]) == {"a", "b"}
+    assert cache.contains_many(["a", "b", "missing"]) == [True, True, False]
 
 
 def test_contains_many_expired_key_omitted(cache: Cache, fake_time: list[float]) -> None:
     cache.set("a", "1", ttl=10)
     cache.set("b", "2", ttl=None)
     fake_time[0] += 11
-    assert cache.contains_many(["a", "b"]) == {"b"}
+    assert cache.contains_many(["a", "b"]) == [False, True]
 
 
 def test_contains_many_expired_key_evicted_as_side_effect(
@@ -220,14 +220,14 @@ def test_contains_many_expired_key_evicted_as_side_effect(
 
 def test_contains_many_cached_none_is_hit_by_default(cache: Cache) -> None:
     cache.set("a", None, ttl=None)
-    assert cache.contains_many(["a"]) == {"a"}
+    assert cache.contains_many(["a"]) == [True]
 
 
 def test_contains_many_cached_none_is_omitted_with_ignore_none() -> None:
     cache = Cache(ignore_none=True)
     cache.set("a", None, ttl=None)
     cache.set("b", "2")
-    assert cache.contains_many(["a", "b"]) == {"b"}
+    assert cache.contains_many(["a", "b"]) == [False, True]
 
 
 # --- delete ---
@@ -941,25 +941,25 @@ async def test_aget_many_cached_none_is_omitted_with_ignore_none() -> None:
 # --- acontains_many ---
 
 
-async def test_acontains_many_empty_keys_returns_empty_set(cache: Cache) -> None:
-    assert await cache.acontains_many([]) == set()
+async def test_acontains_many_empty_keys_returns_empty_list(cache: Cache) -> None:
+    assert await cache.acontains_many([]) == []
 
 
 async def test_acontains_many_all_missing(cache: Cache) -> None:
-    assert await cache.acontains_many(["a", "b"]) == set()
+    assert await cache.acontains_many(["a", "b"]) == [False, False]
 
 
 async def test_acontains_many_mixed_hits_and_misses(cache: Cache) -> None:
     await cache.aset("a", "1")
     await cache.aset("b", "2")
-    assert await cache.acontains_many(["a", "b", "missing"]) == {"a", "b"}
+    assert await cache.acontains_many(["a", "b", "missing"]) == [True, True, False]
 
 
 async def test_acontains_many_expired_key_omitted(cache: Cache, fake_time: list[float]) -> None:
     await cache.aset("a", "1", ttl=10)
     await cache.aset("b", "2", ttl=None)
     fake_time[0] += 11
-    assert await cache.acontains_many(["a", "b"]) == {"b"}
+    assert await cache.acontains_many(["a", "b"]) == [False, True]
 
 
 async def test_acontains_many_expired_key_evicted_as_side_effect(
@@ -973,14 +973,14 @@ async def test_acontains_many_expired_key_evicted_as_side_effect(
 
 async def test_acontains_many_cached_none_is_hit_by_default(cache: Cache) -> None:
     await cache.aset("a", None, ttl=None)
-    assert await cache.acontains_many(["a"]) == {"a"}
+    assert await cache.acontains_many(["a"]) == [True]
 
 
 async def test_acontains_many_cached_none_is_omitted_with_ignore_none() -> None:
     cache = Cache(ignore_none=True)
     await cache.aset("a", None, ttl=None)
     await cache.aset("b", "2")
-    assert await cache.acontains_many(["a", "b"]) == {"b"}
+    assert await cache.acontains_many(["a", "b"]) == [False, True]
 
 
 # --- delete ---
