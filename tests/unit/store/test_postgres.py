@@ -409,6 +409,21 @@ def test_to_uri_converts_keyword_dsn_to_uri(store_cls: type[BasePostgresStore]) 
     assert uri.startswith("postgresql://baz:qux@bar:5433/foo")
 
 
+def test_to_uri_converts_keyword_dsn_without_user_to_uri(
+    store_cls: type[BasePostgresStore],
+) -> None:
+    """Regression test: a keyword/value DSN with no user (e.g. relying on
+    peer/trust auth) must not raise or otherwise fail to build a URI."""
+    conn = FakeConnection()
+    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
+        store = store_cls("dbname=foo host=bar")
+    conn.store = store
+
+    uri = store.to_uri()
+
+    assert uri.startswith("postgresql://bar/foo")
+
+
 def test_from_uri_constructs_with_same_conninfo(store_cls: type[BasePostgresStore]) -> None:
     conninfo = "postgresql://user:pass@localhost/dbname"
     conn = FakeConnection()
