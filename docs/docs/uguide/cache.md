@@ -61,6 +61,25 @@ False
 
 ```
 
+`get_many`, `set_many`, `contains_many`, and `delete_many` operate on several keys at once, each
+issuing a single batched call to the backing store instead of one call per key — this matters for
+stores where each call is a network round trip (e.g. Redis, Postgres). A single `ttl` applies to
+every item passed to `set_many`:
+
+```pycon
+>>> from persista.cache import Cache
+>>> cache = Cache()
+>>> cache.set_many({"a": "hello", "b": "world"}, ttl=60)
+>>> sorted(cache.get_many(["a", "b", "missing"]).items())
+[('a', 'hello'), ('b', 'world')]
+>>> cache.contains_many(["a", "missing"])
+[True, False]
+>>> cache.delete_many(["a", "b"])
+>>> cache.get_many(["a", "b"])
+{}
+
+```
+
 `clear` removes every entry:
 
 ```pycon
@@ -198,9 +217,10 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
 ## Async Caching with `Cache`'s `a`-prefixed Methods
 
 Every `Cache` method has an async counterpart, prefixed with `a`, for use with an async backing
-store (an `InMemoryStore` by default). `aget`/`aset`/`acontains`/`adelete`/`aclear` mirror their
-sync counterparts but are coroutines, accessing the backing `BaseStore` through its async
-(`a`-prefixed) methods:
+store (an `InMemoryStore` by default).
+`aget`/`aset`/`acontains`/`aget_many`/`aset_many`/`acontains_many`/`adelete`/`adelete_many`/`aclear`
+mirror their sync counterparts but are coroutines, accessing the backing `BaseStore` through its
+async (`a`-prefixed) methods:
 
 ```pycon
 >>> import asyncio

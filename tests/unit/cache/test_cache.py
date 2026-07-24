@@ -230,6 +230,83 @@ def test_contains_many_cached_none_is_omitted_with_ignore_none() -> None:
     assert cache.contains_many(["a", "b"]) == [False, True]
 
 
+# --- set_many ---
+
+
+def test_set_many_empty_items_noop(cache: Cache) -> None:
+    cache.set_many({})
+    assert cache.get_many(["a"]) == {}
+
+
+def test_set_many_then_get_many(cache: Cache) -> None:
+    cache.set_many({"a": "1", "b": "2"})
+    assert cache.get_many(["a", "b"]) == {"a": "1", "b": "2"}
+
+
+def test_set_many_overwrites(cache: Cache) -> None:
+    cache.set("a", "1")
+    cache.set_many({"a": "2"})
+    assert cache.get("a") == "2"
+
+
+def test_set_many_ttl_none_never_expires(cache: Cache, fake_time: list[float]) -> None:
+    cache.set_many({"a": "1"}, ttl=None)
+    fake_time[0] += 10_000
+    assert cache.get("a") == "1"
+
+
+def test_set_many_ttl_zero_not_stored(cache: Cache) -> None:
+    cache.set_many({"a": "1"}, ttl=0)
+    assert cache.get("a") is None
+
+
+def test_set_many_ttl_zero_evicts_existing_entries(cache: Cache) -> None:
+    cache.set_many({"a": "1"}, ttl=60)
+    cache.set_many({"a": "2"}, ttl=0)
+    assert cache.get("a") is None
+
+
+def test_set_many_ttl_positive_expires(cache: Cache, fake_time: list[float]) -> None:
+    cache.set_many({"a": "1"}, ttl=10)
+    assert cache.get("a") == "1"
+    fake_time[0] += 11
+    assert cache.get("a") is None
+
+
+def test_set_many_ttl_negative_raises(cache: Cache) -> None:
+    with pytest.raises(ValueError, match=r"ttl must be non-negative, got -1"):
+        cache.set_many({"a": "1"}, ttl=-1)
+
+
+def test_set_many_uses_default_ttl() -> None:
+    cache = Cache(default_ttl=60)
+    cache.set_many({"a": "1"})
+    assert cache.contains("a") is True
+
+
+# --- delete_many ---
+
+
+def test_delete_many_empty_keys_noop(cache: Cache) -> None:
+    cache.delete_many([])
+
+
+def test_delete_many_existing_keys(cache: Cache) -> None:
+    cache.set_many({"a": "1", "b": "2"})
+    cache.delete_many(["a", "b"])
+    assert cache.get_many(["a", "b"]) == {}
+
+
+def test_delete_many_missing_keys(cache: Cache) -> None:
+    cache.delete_many(["missing"])
+
+
+def test_delete_many_mixed_keys(cache: Cache) -> None:
+    cache.set("a", "1")
+    cache.delete_many(["a", "missing"])
+    assert cache.get("a") is None
+
+
 # --- delete ---
 
 
@@ -981,6 +1058,83 @@ async def test_acontains_many_cached_none_is_omitted_with_ignore_none() -> None:
     await cache.aset("a", None, ttl=None)
     await cache.aset("b", "2")
     assert await cache.acontains_many(["a", "b"]) == [False, True]
+
+
+# --- aset_many ---
+
+
+async def test_aset_many_empty_items_noop(cache: Cache) -> None:
+    await cache.aset_many({})
+    assert await cache.aget_many(["a"]) == {}
+
+
+async def test_aset_many_then_aget_many(cache: Cache) -> None:
+    await cache.aset_many({"a": "1", "b": "2"})
+    assert await cache.aget_many(["a", "b"]) == {"a": "1", "b": "2"}
+
+
+async def test_aset_many_overwrites(cache: Cache) -> None:
+    await cache.aset("a", "1")
+    await cache.aset_many({"a": "2"})
+    assert await cache.aget("a") == "2"
+
+
+async def test_aset_many_ttl_none_never_expires(cache: Cache, fake_time: list[float]) -> None:
+    await cache.aset_many({"a": "1"}, ttl=None)
+    fake_time[0] += 10_000
+    assert await cache.aget("a") == "1"
+
+
+async def test_aset_many_ttl_zero_not_stored(cache: Cache) -> None:
+    await cache.aset_many({"a": "1"}, ttl=0)
+    assert await cache.aget("a") is None
+
+
+async def test_aset_many_ttl_zero_evicts_existing_entries(cache: Cache) -> None:
+    await cache.aset_many({"a": "1"}, ttl=60)
+    await cache.aset_many({"a": "2"}, ttl=0)
+    assert await cache.aget("a") is None
+
+
+async def test_aset_many_ttl_positive_expires(cache: Cache, fake_time: list[float]) -> None:
+    await cache.aset_many({"a": "1"}, ttl=10)
+    assert await cache.aget("a") == "1"
+    fake_time[0] += 11
+    assert await cache.aget("a") is None
+
+
+async def test_aset_many_ttl_negative_raises(cache: Cache) -> None:
+    with pytest.raises(ValueError, match=r"ttl must be non-negative, got -1"):
+        await cache.aset_many({"a": "1"}, ttl=-1)
+
+
+async def test_aset_many_uses_default_ttl() -> None:
+    cache = Cache(default_ttl=60)
+    await cache.aset_many({"a": "1"})
+    assert await cache.acontains("a") is True
+
+
+# --- adelete_many ---
+
+
+async def test_adelete_many_empty_keys_noop(cache: Cache) -> None:
+    await cache.adelete_many([])
+
+
+async def test_adelete_many_existing_keys(cache: Cache) -> None:
+    await cache.aset_many({"a": "1", "b": "2"})
+    await cache.adelete_many(["a", "b"])
+    assert await cache.aget_many(["a", "b"]) == {}
+
+
+async def test_adelete_many_missing_keys(cache: Cache) -> None:
+    await cache.adelete_many(["missing"])
+
+
+async def test_adelete_many_mixed_keys(cache: Cache) -> None:
+    await cache.aset("a", "1")
+    await cache.adelete_many(["a", "missing"])
+    assert await cache.aget("a") is None
 
 
 # --- delete ---
