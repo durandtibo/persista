@@ -19,7 +19,9 @@ from coola.utils.batching import batchify
 from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
+    aresolve_conflicts,
     normalize_on_conflict,
+    resolve_conflicts,
     validate_batch_size,
     validate_field_name,
 )
@@ -319,22 +321,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        keys = list(items)
-        found = self.contains_many(keys)
-        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
-            raise KeyError(msg)
-
-        to_write: dict[str, dict[str, Any]] = {}
-        for key, value in items.items():
-            if key in conflicts:
-                if on_conflict == "skip":
-                    continue
-                to_write[key] = {**(self.get(key) or {}), **value}
-                continue
-            to_write[key] = value
-
+        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
         self._set_many(to_write)
 
     async def aset_many(
@@ -350,22 +337,9 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             await self._aset_many(items)
             return
 
-        keys = list(items)
-        found = await self.acontains_many(keys)
-        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
-            raise KeyError(msg)
-
-        to_write: dict[str, dict[str, Any]] = {}
-        for key, value in items.items():
-            if key in conflicts:
-                if on_conflict == "skip":
-                    continue
-                to_write[key] = {**(await self.aget(key) or {}), **value}
-                continue
-            to_write[key] = value
-
+        to_write = await aresolve_conflicts(
+            items, on_conflict, self.acontains_many, self.aget
+        )
         await self._aset_many(to_write)
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:

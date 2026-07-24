@@ -150,22 +150,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             self._set_many(items)
             return
 
-        keys = list(items)
-        found = self.contains_many(keys)
-        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
-            raise KeyError(msg)
-
-        to_write: dict[str, dict[str, Any]] = {}
-        for key, value in items.items():
-            if key in conflicts:
-                if on_conflict == "skip":
-                    continue
-                to_write[key] = {**(self.get(key) or {}), **value}
-                continue
-            to_write[key] = value
-
+        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
         self._set_many(to_write)
 
     def delete(self, key: str) -> None:
