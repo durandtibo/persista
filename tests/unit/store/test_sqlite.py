@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 from collections.abc import Generator, Iterator
 from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -799,6 +800,22 @@ async def test_close_from_running_event_loop_raises(store: BaseSQLiteStore) -> N
     await store._ensure_aconn()
     with pytest.raises(RuntimeError, match="inside a running event loop"):
         store.close()
+
+
+def test_close_with_already_closed_event_loop_logs_and_clears_aconn(
+    store: BaseSQLiteStore,
+) -> None:
+    """If the event loop that owned the async connection is already
+    closed by the time ``close()`` runs synchronously,
+    ``asyncio.run(...)`` raises ``RuntimeError``; ``close()`` should
+    swallow it, log, and still clear ``_aconn``."""
+    store._aconn = MagicMock()
+    with patch(
+        f"{sqlite_module.__name__}.asyncio.run", side_effect=RuntimeError("event loop is closed")
+    ):
+        store.close()
+    assert store._aconn is None
+    assert store.closed
 
 
 # --- closed ---

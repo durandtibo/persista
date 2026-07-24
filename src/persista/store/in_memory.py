@@ -13,7 +13,11 @@ from coola.utils.batching import batchify
 
 from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
-from persista.store.validation import normalize_on_conflict, validate_batch_size
+from persista.store.validation import (
+    normalize_on_conflict,
+    resolve_conflicts,
+    validate_batch_size,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -105,20 +109,11 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
             logger.debug("Added/replaced %d key-value pair(s)", len(items))
             return
 
-        conflicts = [key for key in items if key in self._data]
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {conflicts}"
-            raise KeyError(msg)
-
-        for key, value in items.items():
-            if key in self._data:
-                if on_conflict == "skip":
-                    continue
-                self._data[key] = {**self._data[key], **copy.deepcopy(value)}
-                continue
+        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
+        for key, value in to_write.items():
             self._data[key] = copy.deepcopy(value)
 
-        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+        logger.debug("Added/replaced %d key-value pair(s)", len(to_write))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         if not field_filters:

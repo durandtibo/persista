@@ -249,7 +249,18 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                asyncio.run(self._aconn.close())
+                try:
+                    asyncio.run(self._aconn.close())
+                except RuntimeError:
+                    # The event loop that owned the async connection (e.g. a
+                    # per-test loop managed by pytest-asyncio) is already
+                    # closed, so the underlying connection is already gone;
+                    # there is nothing more to clean up.
+                    logger.debug(
+                        "Async SQLite connection for %s could not be closed "
+                        "cleanly because its event loop is already closed",
+                        self._database,
+                    )
                 self._aconn = None
             else:
                 msg = (
