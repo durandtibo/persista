@@ -726,6 +726,37 @@ def test_context_manager_multiple_open_close_same_path(
             assert store.count() == i + 1
 
 
+# --- async context manager ---
+
+
+async def test_async_context_manager_returns_self(
+    store: BaseFileStore, store_cls: type[BaseFileStore]
+) -> None:
+    async with store as opened:
+        assert isinstance(opened, store_cls)
+
+
+async def test_async_context_manager_closes_on_normal_exit(
+    tmp_path: Path, store_cls: type[BaseFileStore]
+) -> None:
+    async with store_cls(tmp_path / "db") as store:
+        store.set("1", {"text": "hello"})
+        assert store.count() == 1
+    assert store.closed
+
+
+async def test_async_context_manager_multiple_open_close_same_path(
+    tmp_path: Path, store_cls: type[BaseFileStore]
+) -> None:
+    """Reopening after close via ``async with`` reuses the same
+    directory on disk, so previously written data is still there."""
+    file_store = store_cls(tmp_path / "db")
+    for i in range(3):
+        async with file_store as store:
+            store.set(str(i), {"text": "hello"})
+            assert store.count() == i + 1
+
+
 #########################################################
 #     PickleFileStore-specific serialization behavior     #
 #########################################################

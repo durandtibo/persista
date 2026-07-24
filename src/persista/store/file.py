@@ -218,6 +218,13 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    async def __aenter__(self) -> Self:
+        self._closed = False
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
 
 class JsonFileStore(BaseFileStore):
     """A file-based key-value store that serializes each value to its

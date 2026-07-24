@@ -30,7 +30,10 @@ class NullStore(BaseStore, InlineDisplayMixin):
 
     Every :meth:`set`/:meth:`aset`/:meth:`set_many`/:meth:`aset_many`
     call is silently discarded, so :meth:`get`/:meth:`aget` always
-    report a miss and the store always reports as empty. This is
+    report a miss and the store always reports as empty. Because
+    nothing is ever stored, ``on_conflict="raise"`` can never
+    actually raise ``KeyError`` here, unlike other
+    :class:`~persista.store.base.BaseStore` implementations. This is
     primarily useful for plugging into
     :class:`~persista.cache.cache.Cache` to disable caching without
     changing any calling code: every lookup misses, so
