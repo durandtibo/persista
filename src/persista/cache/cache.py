@@ -32,10 +32,11 @@ class Cache:
     Most methods have both a sync form (``get``, ``set``, ``contains``,
     ``get_many``, ``contains_many``, ``delete``, ``get_or_compute``,
     ``memoize``, ``clear``) and an async counterpart prefixed with
-    ``a`` (``aget``, ``aset``, ``acontains``, ``acontains_many``,
-    ``adelete``, ``aget_or_compute``, ``amemoize``, ``aclear``), so
-    the same cache instance can be used from sync and async code,
-    provided the backing store supports the interface being used.
+    ``a`` (``aget``, ``aset``, ``acontains``, ``aget_many``,
+    ``acontains_many``, ``adelete``, ``aget_or_compute``, ``amemoize``,
+    ``aclear``), so the same cache instance can be used from sync and
+    async code, provided the backing store supports the interface
+    being used.
 
     Each entry is wrapped as ``{"value": value, "expires_at":
     expires_at}`` before being written to the store, since
@@ -153,6 +154,25 @@ class Cache:
         logger.debug("Cache hit: %s", key)
         return True, value
 
+    def _resolve_ttl(self, ttl: float | None) -> float | None:
+        """Resolve a ``ttl`` argument against ``self._default_ttl``.
+
+        Args:
+            ttl: The ``ttl`` passed to :meth:`set` / :meth:`aset`, or
+                ``_UNSET`` to fall back to ``self._default_ttl``.
+
+        Returns:
+            The resolved ttl.
+
+        Raises:
+            ValueError: If the resolved ttl is negative.
+        """
+        resolved_ttl = self._default_ttl if ttl is _UNSET else ttl
+        if resolved_ttl is not None and resolved_ttl < 0:
+            msg = f"ttl must be non-negative, got {resolved_ttl}"
+            raise ValueError(msg)
+        return resolved_ttl
+
     def set(self, key: str, value: Any, ttl: float | None = _UNSET) -> None:
         """Add a value to the cache.
 
@@ -188,10 +208,7 @@ class Cache:
 
             ```
         """
-        resolved_ttl = self._default_ttl if ttl is _UNSET else ttl
-        if resolved_ttl is not None and resolved_ttl < 0:
-            msg = f"ttl must be non-negative, got {resolved_ttl}"
-            raise ValueError(msg)
+        resolved_ttl = self._resolve_ttl(ttl)
         if resolved_ttl == 0:
             self._store.delete(key)
             return
@@ -291,10 +308,7 @@ class Cache:
 
             ```
         """
-        resolved_ttl = self._default_ttl if ttl is _UNSET else ttl
-        if resolved_ttl is not None and resolved_ttl < 0:
-            msg = f"ttl must be non-negative, got {resolved_ttl}"
-            raise ValueError(msg)
+        resolved_ttl = self._resolve_ttl(ttl)
         if resolved_ttl == 0:
             await self._store.adelete(key)
             return
@@ -398,8 +412,65 @@ class Cache:
         if not keys:
             return {}
         entries = self._store.get_many(keys)
+        results, expired_keys = self._split_many(keys, entries)
+        if expired_keys:
+            self._store.delete_many(expired_keys)
+        return results
+
+    async def aget_many(self, keys: list[str]) -> dict[str, Any]:
+        """Retrieve multiple values in a single batched store lookup.
+
+        This is the async counterpart of :meth:`get_many`, for use
+        with an async backing store.
+
+        Args:
+            keys: The keys to look up.
+
+        Returns:
+            A dict mapping each key that is a hit to its cached value.
+            See :meth:`get_many` for the exact hit/miss semantics.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> async def main():
+            ...     await cache.aset("a", "hello")
+            ...     await cache.aset("b", "world")
+            ...     print(sorted((await cache.aget_many(["a", "b", "missing"])).items()))
+            ...
+            >>> asyncio.run(main())
+            [('a', 'hello'), ('b', 'world')]
+
+            ```
+        """
+        if not keys:
+            return {}
+        entries = await self._store.aget_many(keys)
+        results, expired_keys = self._split_many(keys, entries)
+        if expired_keys:
+            await self._store.adelete_many(expired_keys)
+        return results
+
+    def _split_many(
+        self, keys: list[str], entries: list[dict[str, Any] | None]
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Split a batch of raw store entries into hits and expired
+        keys.
+
+        Args:
+            keys: The keys that were looked up.
+            entries: The raw store entries for ``keys``, in the same
+                order, with ``None`` for keys that were missing.
+
+        Returns:
+            A ``(hits, expired_keys)`` tuple. ``hits`` maps each key
+            that is a hit to its cached value. ``expired_keys`` lists
+            the keys whose entry has expired and should be evicted.
+        """
         now = time.time()
-        results: dict[str, Any] = {}
+        hits: dict[str, Any] = {}
         expired_keys: list[str] = []
         for key, entry in zip(keys, entries, strict=True):
             if entry is None:
@@ -412,10 +483,8 @@ class Cache:
             if self._ignore_none and value is None:
                 logger.debug("Ignoring cached None: %s", key)
                 continue
-            results[key] = value
-        if expired_keys:
-            self._store.delete_many(expired_keys)
-        return results
+            hits[key] = value
+        return hits, expired_keys
 
     def contains_many(self, keys: list[str]) -> set[str]:
         """Check presence of multiple keys in a single batched store
@@ -446,26 +515,7 @@ class Cache:
 
             ```
         """
-        if not keys:
-            return set()
-        entries = self._store.get_many(keys)
-        now = time.time()
-        hits: set[str] = set()
-        expired_keys: list[str] = []
-        for key, entry in zip(keys, entries, strict=True):
-            if entry is None:
-                continue
-            expires_at = entry["expires_at"]
-            if expires_at is not None and now > expires_at:
-                expired_keys.append(key)
-                continue
-            if self._ignore_none and entry["value"] is None:
-                logger.debug("Ignoring cached None: %s", key)
-                continue
-            hits.add(key)
-        if expired_keys:
-            self._store.delete_many(expired_keys)
-        return hits
+        return set(self.get_many(keys))
 
     async def acontains_many(self, keys: list[str]) -> set[str]:
         """Check presence of multiple keys in a single batched store
@@ -498,26 +548,7 @@ class Cache:
 
             ```
         """
-        if not keys:
-            return set()
-        entries = await self._store.aget_many(keys)
-        now = time.time()
-        hits: set[str] = set()
-        expired_keys: list[str] = []
-        for key, entry in zip(keys, entries, strict=True):
-            if entry is None:
-                continue
-            expires_at = entry["expires_at"]
-            if expires_at is not None and now > expires_at:
-                expired_keys.append(key)
-                continue
-            if self._ignore_none and entry["value"] is None:
-                logger.debug("Ignoring cached None: %s", key)
-                continue
-            hits.add(key)
-        if expired_keys:
-            await self._store.adelete_many(expired_keys)
-        return hits
+        return set(await self.aget_many(keys))
 
     def delete(self, key: str) -> None:
         """Remove a single entry from the cache, if present.
