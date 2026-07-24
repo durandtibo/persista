@@ -798,6 +798,19 @@ async def test_async_context_manager_reopens_after_close(
     assert duckdb_store.closed
 
 
+async def test_async_context_manager_reentry_on_open_store_does_not_reset(
+    store_cls: type[BaseDuckDBStore],
+) -> None:
+    """``__aenter__`` on a store that isn't closed must be a no-op --
+    it should not reopen the connection or reset its contents."""
+    async with store_cls(":memory:") as store:
+        await store.aset("1", {"text": "hello"})
+        async with store as reentered:
+            assert reentered is store
+            assert not store.closed
+            assert await store.acount() == 1
+
+
 ##########################################################
 #     TypedDuckDBStore-specific schema behavior          #
 ##########################################################
