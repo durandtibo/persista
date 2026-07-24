@@ -975,15 +975,23 @@ def test_from_uri_read_only(
 
 # --- async methods ---
 
+# --- aget / aset ---
+
 
 async def test_duckdb_store_aget_aset_round_trip(store: BaseDuckDBStore) -> None:
     await store.aset("1", {"a": 1})
     assert await store.aget("1") == {"a": 1}
 
 
+# --- afilter ---
+
+
 async def test_duckdb_store_afilter(store: BaseDuckDBStore) -> None:
     await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
     assert await store.afilter(author="Alice") == [{"author": "Alice"}]
+
+
+# --- acount ---
 
 
 async def test_duckdb_store_acount(store: BaseDuckDBStore) -> None:

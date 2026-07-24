@@ -397,6 +397,9 @@ def test_from_uri_read_only_rejects_writes(
 # ---------------------------------------------------------------------------
 
 
+# --- async methods without aiosqlite ---
+
+
 async def test_async_methods_work_without_aiosqlite(
     monkeypatch: pytest.MonkeyPatch, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -408,6 +411,9 @@ async def test_async_methods_work_without_aiosqlite(
         assert await store.acount() == len(items)
         result = await store.afilter(author="Alice")
         assert len(result) == 2
+
+
+# --- async context manager ---
 
 
 async def test_async_context_manager_reopens_after_close() -> None:
@@ -429,6 +435,9 @@ async def test_async_context_manager_entering_already_open_store_is_a_noop() -> 
     assert store.closed
 
 
+# --- afilter ---
+
+
 async def test_afilter_with_real_aiosqlite(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
     await store.aset_many(items)
@@ -436,6 +445,9 @@ async def test_afilter_with_real_aiosqlite(items: dict[str, dict[str, Any]]) -> 
     result = await store.afilter(author="Alice")
     assert len(result) == 2
     await store.aclose()
+
+
+# --- aset_many ---
 
 
 async def test_aset_many_internal_with_empty_items_is_a_noop() -> None:

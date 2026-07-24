@@ -744,10 +744,16 @@ def test_to_uri_from_uri_does_not_carry_data(
 # --- async (via ThreadedAsyncStoreMixin) ---
 
 
+# --- aget / aset ---
+
+
 async def test_in_memory_store_aget_aset_round_trip() -> None:
     store = InMemoryStore()
     await store.aset("1", {"text": "hello"})
     assert await store.aget("1") == {"text": "hello"}
+
+
+# --- aset_many ---
 
 
 async def test_in_memory_store_aset_many_on_conflict_merge() -> None:
@@ -757,10 +763,16 @@ async def test_in_memory_store_aset_many_on_conflict_merge() -> None:
     assert await store.aget("1") == {"a": 1, "b": 2}
 
 
+# --- afilter ---
+
+
 async def test_in_memory_store_afilter() -> None:
     store = InMemoryStore()
     await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
     assert await store.afilter(author="Alice") == [{"author": "Alice"}]
+
+
+# --- acount / aclear ---
 
 
 async def test_in_memory_store_acount_and_aclear() -> None:
@@ -771,10 +783,16 @@ async def test_in_memory_store_acount_and_aclear() -> None:
     assert await store.acount() == 0
 
 
+# --- akeys ---
+
+
 async def test_in_memory_store_akeys() -> None:
     store = InMemoryStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     assert sorted([key async for key in store.akeys()]) == ["1", "2"]
+
+
+# --- aclose ---
 
 
 async def test_in_memory_store_aclose_clears_data() -> None:
@@ -784,6 +802,9 @@ async def test_in_memory_store_aclose_clears_data() -> None:
     assert store.closed
 
 
+# --- avalues ---
+
+
 async def test_in_memory_store_avalues_iterates_all() -> None:
     store = InMemoryStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
@@ -791,10 +812,16 @@ async def test_in_memory_store_avalues_iterates_all() -> None:
     assert sorted(v["a"] for v in values) == [1, 2, 3]
 
 
+# --- aset_batches ---
+
+
 async def test_in_memory_store_aset_batches() -> None:
     store = InMemoryStore()
     await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})], batch_size=1)
     assert await store.acount() == 2
+
+
+# --- adelete_many ---
 
 
 async def test_in_memory_store_adelete_many() -> None:
@@ -804,12 +831,18 @@ async def test_in_memory_store_adelete_many() -> None:
     assert sorted([key async for key in store.akeys()]) == ["3"]
 
 
+# --- acontains_many ---
+
+
 async def test_in_memory_store_acontains_many() -> None:
     store = InMemoryStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     found, missing = await store.acontains_many(["1", "2", "3"])
     assert sorted(found) == ["1", "2"]
     assert missing == ["3"]
+
+
+# --- context manager ---
 
 
 async def test_in_memory_store_async_context_manager_returns_self() -> None:
@@ -834,11 +867,17 @@ async def test_in_memory_store_async_context_manager_closes_on_exception() -> No
     assert await store.acount() == 0
 
 
+# --- aiter_batches ---
+
+
 async def test_in_memory_store_aiter_batches_yields_correct_batch_sizes() -> None:
     store = InMemoryStore()
     await store.aset_many({str(i): {"a": i} for i in range(5)})
     batches = [batch async for batch in store.aiter_batches(batch_size=2)]
     assert [len(batch) for batch in batches] == [2, 2, 1]
+
+
+# --- aset / aget edge cases ---
 
 
 async def test_in_memory_store_aset_does_not_alias_input() -> None:

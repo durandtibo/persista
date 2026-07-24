@@ -1340,10 +1340,16 @@ def test_typed_round_trip_empty_value(typed_sql_store: TypedPostgresStore) -> No
 # ---------------------------------------------------------------------------
 
 
+# --- aget / aset ---
+
+
 async def test_postgres_store_aget_aset_round_trip(store: BasePostgresStore) -> None:
     await store.aset("1", {"title": "Intro to Python"})
     assert await store.aget("1") == {"title": "Intro to Python"}
     assert await store.aget("missing") is None
+
+
+# --- aset_many / afilter ---
 
 
 async def test_postgres_store_aset_many_and_afilter(store: BasePostgresStore) -> None:
@@ -1355,6 +1361,9 @@ async def test_postgres_store_aset_many_and_afilter(store: BasePostgresStore) ->
     )
     assert len(await store.afilter(author="Alice")) == 1
     assert len(await store.afilter(category="History")) == 1
+
+
+# --- aset (conflict variants) ---
 
 
 async def test_postgres_store_aset_on_conflict_raise(store: BasePostgresStore) -> None:
@@ -1382,10 +1391,16 @@ async def test_postgres_store_aset_many_on_conflict_invalid_raises(
         await store.aset_many({"1": {"text": "hello"}}, on_conflict="bogus")
 
 
+# --- adelete / acount ---
+
+
 async def test_postgres_store_adelete_acount(store: BasePostgresStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     await store.adelete("1")
     assert await store.acount() == 1
+
+
+# --- adelete_many ---
 
 
 async def test_postgres_store_adelete_many(store: BasePostgresStore) -> None:
@@ -1395,10 +1410,16 @@ async def test_postgres_store_adelete_many(store: BasePostgresStore) -> None:
     assert await store.aget("2") is not None
 
 
+# --- aclear ---
+
+
 async def test_postgres_store_aclear(store: BasePostgresStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     await store.aclear()
     assert await store.acount() == 0
+
+
+# --- acontains ---
 
 
 async def test_postgres_store_acontains(store: BasePostgresStore) -> None:
@@ -1407,11 +1428,17 @@ async def test_postgres_store_acontains(store: BasePostgresStore) -> None:
     assert not await store.acontains("99")
 
 
+# --- acontains_many ---
+
+
 async def test_postgres_store_acontains_many(store: BasePostgresStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     found, missing = await store.acontains_many(["1", "3"])
     assert found == ["1"]
     assert missing == ["3"]
+
+
+# --- akeys / aiter_batches ---
 
 
 async def test_postgres_store_akeys_aiter_batches(store: BasePostgresStore) -> None:
@@ -1427,6 +1454,9 @@ async def test_postgres_store_aiter_batches_zero_batch_size_raises(
     with pytest.raises(ValueError, match="batch_size must be a positive integer"):
         async for _ in store.aiter_batches(batch_size=0):
             pass
+
+
+# --- close ---
 
 
 async def test_postgres_store_aclose_without_ever_connecting_is_safe(
@@ -1453,6 +1483,9 @@ async def test_postgres_store_aclose_returns_none(store: BasePostgresStore) -> N
     assert await store.aclose() is None
 
 
+# --- context manager ---
+
+
 async def test_postgres_store_async_context_manager(store_cls: type[BasePostgresStore]) -> None:
     store = _connect(store_cls)
     async with store as astore:
@@ -1475,6 +1508,9 @@ async def test_postgres_store_async_context_manager(store_cls: type[BasePostgres
 # ---------------------------------------------------------------------------
 
 
+# --- constructor ---
+
+
 async def test_ensure_aconn_opens_connection_lazily(
     store_cls: type[BasePostgresStore],
 ) -> None:
@@ -1494,6 +1530,9 @@ async def test_ensure_aconn_opens_connection_lazily(
     assert store._aconn is aconn
 
 
+# --- aget_many ---
+
+
 async def test_postgres_store_aget_many_empty(store: BasePostgresStore) -> None:
     assert await store.aget_many([]) == []
 
@@ -1506,8 +1545,14 @@ async def test_postgres_store_aget_many(store: BasePostgresStore) -> None:
     assert result[2] == {"a": 2}
 
 
+# --- aset_many ---
+
+
 async def test_postgres_store_aset_many_empty_items(store: BasePostgresStore) -> None:
     assert await store.aset_many({}) is None
+
+
+# --- aset (conflict variants) ---
 
 
 async def test_postgres_store_aset_on_conflict_skip(store: BasePostgresStore) -> None:
@@ -1515,6 +1560,9 @@ async def test_postgres_store_aset_on_conflict_skip(store: BasePostgresStore) ->
     await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
     assert await store.aget("1") == {"text": "original"}
     assert await store.aget("2") == {"text": "new"}
+
+
+# --- aset_many (conflict variants) ---
 
 
 async def test_postgres_store_aset_many_merge_with_new_key(store: BasePostgresStore) -> None:
@@ -1540,6 +1588,9 @@ async def test_postgres_store_aset_many_skip_all_writes_nothing(
     assert await store.aget("1") == {"text": "original"}
 
 
+# --- afilter ---
+
+
 async def test_postgres_store_afilter_no_filters(store: BasePostgresStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     result = await store.afilter()
@@ -1562,12 +1613,21 @@ async def test_postgres_store_afilter_rejects_malicious_field_name(
         await store.afilter(**{"bad; DROP TABLE store;--": "x"})
 
 
+# --- adelete_many ---
+
+
 async def test_postgres_store_adelete_many_empty(store: BasePostgresStore) -> None:
     assert await store.adelete_many([]) is None
 
 
+# --- acontains_many ---
+
+
 async def test_postgres_store_acontains_many_empty(store: BasePostgresStore) -> None:
     assert await store.acontains_many([]) == ([], [])
+
+
+# --- aiter_batches ---
 
 
 async def test_postgres_store_aiter_batches_exact_multiple(
@@ -1581,10 +1641,16 @@ async def test_postgres_store_aiter_batches_exact_multiple(
     assert sum(len(b) for b in batches) == 2
 
 
+# --- avalues ---
+
+
 async def test_postgres_store_avalues(store: BasePostgresStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
     values = [v async for v in store.avalues(batch_size=2)]
     assert sorted(v["a"] for v in values) == [1, 2, 3]
+
+
+# --- aset_batches ---
 
 
 async def test_postgres_store_aset_batches(store: BasePostgresStore) -> None:
@@ -1597,11 +1663,17 @@ async def test_postgres_store_aset_batches(store: BasePostgresStore) -> None:
 # ---------------------------------------------------------------------------
 
 
+# --- aget ---
+
+
 async def test_typed_postgres_store_aget_round_trips_typed_schema_fields(
     typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await typed_store.aset_many(items)
     assert await typed_store.aget("1") == items["1"]
+
+
+# --- aset ---
 
 
 async def test_typed_postgres_store_aset_on_conflict_merge_with_typed_schema(
@@ -1614,6 +1686,9 @@ async def test_typed_postgres_store_aset_on_conflict_merge_with_typed_schema(
         "year": 2022,
         "category": "Programming",
     }
+
+
+# --- afilter ---
 
 
 async def test_typed_postgres_store_afilter_single_typed_field(
@@ -1632,6 +1707,9 @@ async def test_typed_postgres_store_afilter_integer_typed_column(
     assert {item["title"] for item in result} == {"Intro to Python"}
 
 
+# --- aiter_batches ---
+
+
 async def test_typed_postgres_store_aiter_batches_with_typed_schema(
     typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -1642,12 +1720,18 @@ async def test_typed_postgres_store_aiter_batches_with_typed_schema(
     assert result == items
 
 
+# --- avalues ---
+
+
 async def test_typed_postgres_store_avalues_with_typed_schema(
     typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await typed_store.aset_many(items)
     values = [v async for v in typed_store.avalues(batch_size=2)]
     assert sorted(v["title"] for v in values) == sorted(item["title"] for item in items.values())
+
+
+# --- aset (conflict variants) ---
 
 
 async def test_typed_postgres_store_aset_on_conflict_raise_with_typed_schema(
@@ -1673,6 +1757,9 @@ async def test_typed_postgres_store_aset_on_conflict_overwrite_with_typed_schema
     await typed_store.aset("1", {"author": "Alice"})
     await typed_store.aset("1", {"author": "Bob"}, on_conflict="overwrite")
     assert await typed_store.aget("1") == {"author": "Bob"}
+
+
+# --- afilter (extra fields) ---
 
 
 async def test_typed_postgres_store_afilter_multiple_typed_fields(

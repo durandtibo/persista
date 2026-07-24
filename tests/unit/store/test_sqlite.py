@@ -1068,10 +1068,16 @@ def test_from_uri_read_only_rejects_writes(
 # ---------------------------------------------------------------------------
 
 
+# --- aget / aset ---
+
+
 async def test_sqlite_store_aget_aset_round_trip(store: BaseSQLiteStore) -> None:
     await store.aset("1", {"title": "Intro to Python"})
     assert await store.aget("1") == {"title": "Intro to Python"}
     assert await store.aget("missing") is None
+
+
+# --- aset_many / afilter ---
 
 
 async def test_sqlite_store_aset_many_and_afilter(store: BaseSQLiteStore) -> None:
@@ -1083,6 +1089,9 @@ async def test_sqlite_store_aset_many_and_afilter(store: BaseSQLiteStore) -> Non
     )
     assert len(await store.afilter(author="Alice")) == 1
     assert len(await store.afilter(category="History")) == 1
+
+
+# --- constructor / from_path ---
 
 
 async def test_sqlite_store_aensure_aconn_read_only_swallows_operational_error(
@@ -1104,10 +1113,16 @@ async def test_sqlite_store_aensure_aconn_read_only_swallows_operational_error(
     store.close()
 
 
+# --- acontains ---
+
+
 async def test_sqlite_store_acontains(store: BaseSQLiteStore) -> None:
     await store.aset("1", {"a": 1})
     assert await store.acontains("1") is True
     assert await store.acontains("9") is False
+
+
+# --- acontains_many ---
 
 
 async def test_sqlite_store_acontains_many(store: BaseSQLiteStore) -> None:
@@ -1117,10 +1132,16 @@ async def test_sqlite_store_acontains_many(store: BaseSQLiteStore) -> None:
     assert missing == ["3"]
 
 
+# --- adelete / acount ---
+
+
 async def test_sqlite_store_adelete_acount(store: BaseSQLiteStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     await store.adelete("1")
     assert await store.acount() == 1
+
+
+# --- akeys / aiter_batches ---
 
 
 async def test_sqlite_store_akeys_and_aiter_batches(store: BaseSQLiteStore) -> None:
@@ -1128,6 +1149,9 @@ async def test_sqlite_store_akeys_and_aiter_batches(store: BaseSQLiteStore) -> N
     assert sorted([key async for key in store.akeys()]) == ["1", "2", "3"]
     batches = [batch async for batch in store.aiter_batches(batch_size=2)]
     assert sum(len(b) for b in batches) == 3
+
+
+# --- close ---
 
 
 async def test_sqlite_store_aclose_is_idempotent(store_cls: type[BaseSQLiteStore]) -> None:
@@ -1138,11 +1162,17 @@ async def test_sqlite_store_aclose_is_idempotent(store_cls: type[BaseSQLiteStore
     assert store.closed
 
 
+# --- constructor ---
+
+
 @aiosqlite_available
 async def test_init_accepts_aiosqlite_connect_kwargs(store_cls: type[BaseSQLiteStore]) -> None:
     store = store_cls(":memory:", timeout=5.0)
     assert await store.acount() == 0
     await store.aclose()
+
+
+# --- async methods without aiosqlite ---
 
 
 def test_sqlite_store_async_methods_work_without_aiosqlite(
@@ -1188,6 +1218,9 @@ def test_sqlite_store_all_async_methods_work_without_aiosqlite(
         asyncio.run(_run())
 
 
+# --- context manager ---
+
+
 async def test_sqlite_store_async_context_manager_reopens_after_close(
     store_cls: type[BaseSQLiteStore],
 ) -> None:
@@ -1206,6 +1239,9 @@ async def test_sqlite_store_async_context_manager_reopens_after_close(
 # ---------------------------------------------------------------------------
 
 
+# --- aget_many ---
+
+
 async def test_sqlite_store_aget_many_empty(store: BaseSQLiteStore) -> None:
     assert await store.aget_many([]) == []
 
@@ -1216,8 +1252,14 @@ async def test_sqlite_store_aget_many(store: BaseSQLiteStore) -> None:
     assert result == [{"a": 1}, None, {"a": 2}]
 
 
+# --- aset_many ---
+
+
 async def test_sqlite_store_aset_many_empty_items(store: BaseSQLiteStore) -> None:
     assert await store.aset_many({}) is None
+
+
+# --- aset ---
 
 
 async def test_sqlite_store_aset_on_conflict_raise(store: BaseSQLiteStore) -> None:
@@ -1246,6 +1288,9 @@ async def test_sqlite_store_aset_on_conflict_merge(store: BaseSQLiteStore) -> No
     assert await store.aget("1") == {"text": "updated", "author": "Alice"}
 
 
+# --- aset_many (conflict variants) ---
+
+
 async def test_sqlite_store_aset_many_merge_with_new_key(store: BaseSQLiteStore) -> None:
     """Exercises the non-conflicting-key branch of ``aset_many`` when
     ``on_conflict != 'overwrite'`` (a key not already present is written
@@ -1265,6 +1310,9 @@ async def test_sqlite_store_aset_many_skip_all_writes_nothing(store: BaseSQLiteS
     await store.aset("1", {"text": "original"})
     await store.aset_many({"1": {"text": "updated"}}, on_conflict="skip")
     assert await store.aget("1") == {"text": "original"}
+
+
+# --- afilter ---
 
 
 async def test_sqlite_store_afilter_no_filters(store: BaseSQLiteStore) -> None:
@@ -1289,6 +1337,9 @@ async def test_sqlite_store_afilter_rejects_malicious_field_name(
         await store.afilter(**{"x') OR 1=1 OR ('": "nonmatching"})
 
 
+# --- adelete_many ---
+
+
 async def test_sqlite_store_adelete_many_empty(store: BaseSQLiteStore) -> None:
     assert await store.adelete_many([]) is None
 
@@ -1300,14 +1351,23 @@ async def test_sqlite_store_adelete_many(store: BaseSQLiteStore) -> None:
     assert await store.aget("2") is not None
 
 
+# --- aclear ---
+
+
 async def test_sqlite_store_aclear(store: BaseSQLiteStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     await store.aclear()
     assert await store.acount() == 0
 
 
+# --- acontains_many ---
+
+
 async def test_sqlite_store_acontains_many_empty(store: BaseSQLiteStore) -> None:
     assert await store.acontains_many([]) == ([], [])
+
+
+# --- aiter_batches ---
 
 
 async def test_sqlite_store_aiter_batches_exact_multiple(store: BaseSQLiteStore) -> None:
@@ -1319,10 +1379,16 @@ async def test_sqlite_store_aiter_batches_exact_multiple(store: BaseSQLiteStore)
     assert sum(len(b) for b in batches) == 2
 
 
+# --- avalues ---
+
+
 async def test_sqlite_store_avalues(store: BaseSQLiteStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
     values = [v async for v in store.avalues(batch_size=2)]
     assert sorted(v["a"] for v in values) == [1, 2, 3]
+
+
+# --- aset_batches ---
 
 
 async def test_sqlite_store_aset_batches(store: BaseSQLiteStore) -> None:
@@ -1335,11 +1401,17 @@ async def test_sqlite_store_aset_batches(store: BaseSQLiteStore) -> None:
 # ---------------------------------------------------------------------------
 
 
+# --- aget ---
+
+
 async def test_typed_sqlite_store_aget_round_trips_typed_schema_fields(
     typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await typed_store.aset_many(items)
     assert await typed_store.aget("1") == items["1"]
+
+
+# --- aset ---
 
 
 async def test_typed_sqlite_store_aset_on_conflict_merge_with_typed_schema(
@@ -1352,6 +1424,9 @@ async def test_typed_sqlite_store_aset_on_conflict_merge_with_typed_schema(
         "year": 2022,
         "category": "Programming",
     }
+
+
+# --- afilter ---
 
 
 async def test_typed_sqlite_store_afilter_single_typed_field(
@@ -1370,6 +1445,9 @@ async def test_typed_sqlite_store_afilter_integer_typed_column(
     assert {item["title"] for item in result} == {"Intro to Python"}
 
 
+# --- aiter_batches ---
+
+
 async def test_typed_sqlite_store_aiter_batches_with_typed_schema(
     typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
 ) -> None:
@@ -1380,12 +1458,18 @@ async def test_typed_sqlite_store_aiter_batches_with_typed_schema(
     assert result == items
 
 
+# --- avalues ---
+
+
 async def test_typed_sqlite_store_avalues_with_typed_schema(
     typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await typed_store.aset_many(items)
     values = [v async for v in typed_store.avalues(batch_size=2)]
     assert sorted(v["title"] for v in values) == sorted(item["title"] for item in items.values())
+
+
+# --- aset (conflict variants) ---
 
 
 async def test_typed_sqlite_store_aset_on_conflict_raise_with_typed_schema(
@@ -1411,6 +1495,9 @@ async def test_typed_sqlite_store_aset_on_conflict_overwrite_with_typed_schema(
     await typed_store.aset("1", {"author": "Alice"})
     await typed_store.aset("1", {"author": "Bob"}, on_conflict="overwrite")
     assert await typed_store.aget("1") == {"author": "Bob"}
+
+
+# --- afilter (extra fields) ---
 
 
 async def test_typed_sqlite_store_afilter_multiple_typed_fields(
@@ -1452,12 +1539,18 @@ async def test_typed_sqlite_store_afilter_integer_typed_column_no_match(
     assert await typed_store.afilter(year=9999) == []
 
 
+# --- columns_info ---
+
+
 async def test_typed_sqlite_store_aget_columns_info_has_schema_columns(
     typed_store: TypedSQLiteStore,
 ) -> None:
     columns = typed_store.get_columns_info()
     assert "author" in columns
     assert "year" in columns
+
+
+# --- to_uri/from_uri ---
 
 
 async def test_typed_sqlite_store_to_uri_from_uri_async_round_trip(
