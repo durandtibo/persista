@@ -29,13 +29,13 @@ class Cache:
     """Cache with per-entry expiry, backed by any
     :class:`~persista.store.base.BaseStore`.
 
-    Every method has both a sync form (``get``, ``set``, ``contains``,
-    ``delete``, ``get_or_compute``, ``memoize``, ``clear``) and an
-    async counterpart prefixed with ``a`` (``aget``, ``aset``,
-    ``acontains``, ``adelete``, ``aget_or_compute``, ``amemoize``,
-    ``aclear``), so the same cache instance can be used from sync and
-    async code, provided the backing store supports the interface
-    being used.
+    Most methods have both a sync form (``get``, ``set``, ``contains``,
+    ``get_many``, ``contains_many``, ``delete``, ``get_or_compute``,
+    ``memoize``, ``clear``) and an async counterpart prefixed with
+    ``a`` (``aget``, ``aset``, ``acontains``, ``acontains_many``,
+    ``adelete``, ``aget_or_compute``, ``amemoize``, ``aclear``), so
+    the same cache instance can be used from sync and async code,
+    provided the backing store supports the interface being used.
 
     Each entry is wrapped as ``{"value": value, "expires_at":
     expires_at}`` before being written to the store, since
@@ -416,6 +416,108 @@ class Cache:
         if expired_keys:
             self._store.delete_many(expired_keys)
         return results
+
+    def contains_many(self, keys: list[str]) -> set[str]:
+        """Check presence of multiple keys in a single batched store
+        lookup.
+
+        Unlike calling :meth:`contains` once per key, this issues one
+        ``self._store.get_many`` call for the whole batch, which
+        matters for stores where each lookup is a network round trip
+        (e.g. Redis, Postgres).
+
+        Args:
+            keys: The keys to check.
+
+        Returns:
+            The subset of ``keys`` that are a hit -- present,
+            unexpired, and (when ``ignore_none`` is ``True``) not a
+            cached ``None``. Expired entries are evicted from the
+            backing store as a side effect of this call, as in
+            :meth:`get_many`.
+
+        Example:
+            ```pycon
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> cache.set("a", "hello")
+            >>> sorted(cache.contains_many(["a", "b"]))
+            ['a']
+
+            ```
+        """
+        if not keys:
+            return set()
+        entries = self._store.get_many(keys)
+        now = time.time()
+        hits: set[str] = set()
+        expired_keys: list[str] = []
+        for key, entry in zip(keys, entries, strict=True):
+            if entry is None:
+                continue
+            expires_at = entry["expires_at"]
+            if expires_at is not None and now > expires_at:
+                expired_keys.append(key)
+                continue
+            if self._ignore_none and entry["value"] is None:
+                logger.debug("Ignoring cached None: %s", key)
+                continue
+            hits.add(key)
+        if expired_keys:
+            self._store.delete_many(expired_keys)
+        return hits
+
+    async def acontains_many(self, keys: list[str]) -> set[str]:
+        """Check presence of multiple keys in a single batched store
+        lookup.
+
+        This is the async counterpart of :meth:`contains_many`, for
+        use with an async backing store.
+
+        Args:
+            keys: The keys to check.
+
+        Returns:
+            The subset of ``keys`` that are a hit -- present,
+            unexpired, and (when ``ignore_none`` is ``True``) not a
+            cached ``None``. Expired entries are evicted from the
+            backing store as a side effect of this call, as in
+            :meth:`aget_many`.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> async def main():
+            ...     await cache.aset("a", "hello")
+            ...     print(sorted(await cache.acontains_many(["a", "b"])))
+            ...
+            >>> asyncio.run(main())
+            ['a']
+
+            ```
+        """
+        if not keys:
+            return set()
+        entries = await self._store.aget_many(keys)
+        now = time.time()
+        hits: set[str] = set()
+        expired_keys: list[str] = []
+        for key, entry in zip(keys, entries, strict=True):
+            if entry is None:
+                continue
+            expires_at = entry["expires_at"]
+            if expires_at is not None and now > expires_at:
+                expired_keys.append(key)
+                continue
+            if self._ignore_none and entry["value"] is None:
+                logger.debug("Ignoring cached None: %s", key)
+                continue
+            hits.add(key)
+        if expired_keys:
+            await self._store.adelete_many(expired_keys)
+        return hits
 
     def delete(self, key: str) -> None:
         """Remove a single entry from the cache, if present.
