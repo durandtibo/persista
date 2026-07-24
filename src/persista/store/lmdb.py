@@ -128,7 +128,9 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        conflicts = set(self.contains_many(list(items))[0])
+        keys = list(items)
+        found = self.contains_many(keys)
+        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
         if conflicts and on_conflict == "raise":
             msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
             raise KeyError(msg)
@@ -178,14 +180,11 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         with self._env.begin() as txn:
             return txn.get(self._key_bytes(key)) is not None
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    def contains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
-            return [], []
+            return []
         with self._env.begin() as txn:
-            flags = [txn.get(self._key_bytes(key)) is not None for key in keys]
-        found = [key for key, flag in zip(keys, flags, strict=True) if flag]
-        missing = [key for key, flag in zip(keys, flags, strict=True) if not flag]
-        return found, missing
+            return [txn.get(self._key_bytes(key)) is not None for key in keys]
 
     def keys(self) -> Iterator[str]:
         with self._env.begin() as txn, txn.cursor() as cursor:

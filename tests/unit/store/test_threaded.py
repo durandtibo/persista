@@ -80,10 +80,8 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
     def contains(self, key: str) -> bool:
         return key in self._data
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
-        found = [key for key in keys if key in self._data]
-        missing = [key for key in keys if key not in self._data]
-        return found, missing
+    def contains_many(self, keys: list[str]) -> list[bool]:
+        return [key in self._data for key in keys]
 
     def keys(self) -> Iterator[str]:
         yield from list(self._data.keys())
@@ -118,9 +116,7 @@ async def test_threaded_mixin_aget_aset_round_trip() -> None:
 async def test_threaded_mixin_aset_many_and_acontains_many() -> None:
     store = _ThreadedTestStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    found, missing = await store.acontains_many(["1", "3"])
-    assert found == ["1"]
-    assert missing == ["3"]
+    assert await store.acontains_many(["1", "3"]) == [True, False]
 
 
 # --- akeys ---

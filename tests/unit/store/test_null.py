@@ -120,15 +120,11 @@ def test_contains_always_false(store: NullStore) -> None:
 
 def test_contains_many_all_missing(store: NullStore) -> None:
     store.set("1", {"text": "hello"})
-    found, missing = store.contains_many(["1", "2"])
-    assert found == []
-    assert missing == ["1", "2"]
+    assert store.contains_many(["1", "2"]) == [False, False]
 
 
 def test_contains_many_empty_input_returns_empty_lists(store: NullStore) -> None:
-    found, missing = store.contains_many([])
-    assert found == []
-    assert missing == []
+    assert store.contains_many([]) == []
 
 
 # --- keys ---
@@ -287,9 +283,7 @@ async def test_null_store_acount_always_zero() -> None:
 
 async def test_null_store_acontains_many_empty_input_returns_empty_lists() -> None:
     store = NullStore()
-    found, missing = await store.acontains_many([])
-    assert found == []
-    assert missing == []
+    assert await store.acontains_many([]) == []
 
 
 async def test_null_store_akeys_empty() -> None:
@@ -355,9 +349,7 @@ async def test_null_store_aclear_returns_none() -> None:
 async def test_null_store_acontains_many_all_missing() -> None:
     store = NullStore()
     await store.aset("1", {"a": 1})
-    found, missing = await store.acontains_many(["1", "2"])
-    assert found == []
-    assert missing == ["1", "2"]
+    assert await store.acontains_many(["1", "2"]) == [False, False]
 
 
 async def test_null_store_aiter_batches_returns_async_iterator() -> None:

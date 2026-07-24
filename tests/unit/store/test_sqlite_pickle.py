@@ -126,9 +126,7 @@ def test_contains(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]) ->
 
 def test_contains_many(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "missing"])
-    assert found == ["1"]
-    assert missing == ["missing"]
+    assert store.contains_many(["1", "missing"]) == [True, False]
 
 
 def test_keys(store: PickleSQLiteStore, items: dict[str, dict[str, Any]]) -> None:
@@ -220,7 +218,7 @@ def test_delete_many_empty_list_is_no_op(
 
 
 def test_contains_many_empty_list_returns_empty_lists(store: PickleSQLiteStore) -> None:
-    assert store.contains_many([]) == ([], [])
+    assert store.contains_many([]) == []
 
 
 def test_filter_empty_store_returns_empty(store: PickleSQLiteStore) -> None:
@@ -558,9 +556,7 @@ async def test_acontains(items: dict[str, dict[str, Any]]) -> None:
 async def test_acontains_many(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
     await store.aset_many(items)
-    found, missing = await store.acontains_many(["1", "missing"])
-    assert found == ["1"]
-    assert missing == ["missing"]
+    assert await store.acontains_many(["1", "missing"]) == [True, False]
     await store.aclose()
 
 
@@ -664,7 +660,7 @@ async def test_adelete_many_empty_list_is_no_op(items: dict[str, dict[str, Any]]
 
 async def test_acontains_many_empty_list_returns_empty_lists() -> None:
     store = PickleSQLiteStore(":memory:")
-    assert await store.acontains_many([]) == ([], [])
+    assert await store.acontains_many([]) == []
     await store.aclose()
 
 

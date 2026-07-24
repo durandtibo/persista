@@ -261,20 +261,20 @@ class BaseStore(ABC):
         """Async equivalent of :meth:`contains`."""
 
     @abstractmethod
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    def contains_many(self, keys: list[str]) -> list[bool]:
         """Check which keys exist in the store.
 
         Args:
             keys: The keys to check.
 
         Returns:
-            A tuple of two lists: ``(found, missing)`` where ``found``
-            contains the keys that exist in the store and ``missing``
-            contains the keys that do not.
+            A list of booleans, in the same order as ``keys``, where
+            each entry is ``True`` if the corresponding key exists in
+            the store and ``False`` otherwise.
         """
 
     @abstractmethod
-    async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    async def acontains_many(self, keys: list[str]) -> list[bool]:
         """Async equivalent of :meth:`contains_many`."""
 
     @abstractmethod

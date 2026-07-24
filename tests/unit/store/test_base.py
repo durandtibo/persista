@@ -112,12 +112,10 @@ class InMemoryTestStore(BaseStore):
     async def acontains(self, key: str) -> bool:
         return self.contains(key)
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
-        found = [key for key in keys if key in self._data]
-        missing = [key for key in keys if key not in self._data]
-        return found, missing
+    def contains_many(self, keys: list[str]) -> list[bool]:
+        return [key in self._data for key in keys]
 
-    async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    async def acontains_many(self, keys: list[str]) -> list[bool]:
         return self.contains_many(keys)
 
     def keys(self) -> Iterator[str]:
@@ -347,13 +345,10 @@ def test_base_store_is_abstract_missing_to_uri_from_uri() -> None:
         async def acontains(self, key: str) -> bool:
             return self.contains(key)
 
-        def contains_many(
-            self,
-            keys: list[str],  # noqa: ARG002
-        ) -> tuple[list[str], list[str]]:
-            return [], []
+        def contains_many(self, keys: list[str]) -> list[bool]:
+            return [False] * len(keys)
 
-        async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+        async def acontains_many(self, keys: list[str]) -> list[bool]:
             return self.contains_many(keys)
 
         def keys(self) -> Iterator[str]:

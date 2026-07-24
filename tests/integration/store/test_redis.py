@@ -352,17 +352,13 @@ def test_delete_many_empty_list_is_no_op(
 @redis_server_available
 def test_contains_many_mixed(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "99", "3", "42"])
-    assert sorted(found) == ["1", "3"]
-    assert sorted(missing) == ["42", "99"]
+    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
 
 
 @redis_available
 @redis_server_available
 def test_contains_many_empty_input_returns_empty_lists(store: BaseRedisStore) -> None:
-    found, missing = store.contains_many([])
-    assert found == []
-    assert missing == []
+    assert store.contains_many([]) == []
 
 
 # --- keys / values ---
@@ -524,9 +520,7 @@ async def test_redis_store_afilter(store: BaseRedisStore) -> None:
 @redis_server_available
 async def test_redis_store_acontains_many(store: BaseRedisStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    found, missing = await store.acontains_many(["1", "3"])
-    assert found == ["1"]
-    assert missing == ["3"]
+    assert await store.acontains_many(["1", "3"]) == [True, False]
 
 
 @redis_available

@@ -233,7 +233,9 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        conflicts = set(self.contains_many(list(items))[0])
+        keys = list(items)
+        found = self.contains_many(keys)
+        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
         if conflicts and on_conflict == "raise":
             msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
             raise KeyError(msg)
@@ -259,7 +261,9 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             await self._aset_many(items)
             return
 
-        conflicts = set((await self.acontains_many(list(items)))[0])
+        keys = list(items)
+        found = await self.acontains_many(keys)
+        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
         if conflicts and on_conflict == "raise":
             msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
             raise KeyError(msg)
@@ -368,22 +372,20 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             await cur.execute(query, (key,))
             return await cur.fetchone() is not None
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    def contains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
-            return [], []
+            return []
         query = sql.SQL("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)").format(
             table=self._table_ident, key_col=sql.Identifier(self._key_column)
         )
         with self._conn.cursor() as cur:
             cur.execute(query, (keys,))
             existing = {row[0] for row in cur.fetchall()}
-        found = [key for key in keys if key in existing]
-        missing = [key for key in keys if key not in existing]
-        return found, missing
+        return [key in existing for key in keys]
 
-    async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    async def acontains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
-            return [], []
+            return []
         conn = await self._ensure_aconn()
         query = sql.SQL("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)").format(
             table=self._table_ident, key_col=sql.Identifier(self._key_column)
@@ -391,9 +393,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         async with conn.cursor() as cur:
             await cur.execute(query, (keys,))
             existing = {row[0] for row in await cur.fetchall()}
-        found = [key for key in keys if key in existing]
-        missing = [key for key in keys if key not in existing]
-        return found, missing
+        return [key in existing for key in keys]
 
     def keys(self) -> Iterator[str]:
         query = sql.SQL("SELECT {key_col} FROM {table}").format(

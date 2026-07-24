@@ -141,7 +141,9 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             self._set_many(items)
             return
 
-        conflicts = set(self.contains_many(list(items))[0])
+        keys = list(items)
+        found = self.contains_many(keys)
+        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
         if conflicts and on_conflict == "raise":
             msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
             raise KeyError(msg)
@@ -179,9 +181,9 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         ).fetchone()
         return row is not None
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    def contains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
-            return [], []
+            return []
         placeholders = ", ".join("?" * len(keys))
         existing = {
             row[0]
@@ -191,9 +193,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
                 keys,
             ).fetchall()
         }
-        found = [key for key in keys if key in existing]
-        missing = [key for key in keys if key not in existing]
-        return found, missing
+        return [key in existing for key in keys]
 
     def keys(self) -> Iterator[str]:
         rows = self._conn.execute(f"SELECT {self._key_column} FROM store").fetchall()  # noqa: S608

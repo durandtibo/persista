@@ -190,7 +190,9 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        conflicts = set(self.contains_many(list(items))[0])
+        keys = list(items)
+        found = self.contains_many(keys)
+        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
         if conflicts and on_conflict == "raise":
             msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
             raise KeyError(msg)
@@ -216,7 +218,9 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
             await self._aset_many(items)
             return
 
-        conflicts = set((await self.acontains_many(list(items)))[0])
+        keys = list(items)
+        found = await self.acontains_many(keys)
+        conflicts = {key for key, exists in zip(keys, found, strict=True) if exists}
         if conflicts and on_conflict == "raise":
             msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
             raise KeyError(msg)
@@ -309,22 +313,18 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         client = await self._ensure_aclient()
         return bool(await client.sismember(_KEYS_SET, key))
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    def contains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
-            return [], []
+            return []
         flags = self._client.smismember(_KEYS_SET, keys)
-        found = [key for key, flag in zip(keys, flags, strict=True) if flag]
-        missing = [key for key, flag in zip(keys, flags, strict=True) if not flag]
-        return found, missing
+        return [bool(flag) for flag in flags]
 
-    async def acontains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    async def acontains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
-            return [], []
+            return []
         client = await self._ensure_aclient()
         flags = await client.smismember(_KEYS_SET, keys)
-        found = [key for key, flag in zip(keys, flags, strict=True) if flag]
-        missing = [key for key, flag in zip(keys, flags, strict=True) if not flag]
-        return found, missing
+        return [bool(flag) for flag in flags]
 
     def keys(self) -> Iterator[str]:
         for key in self._client.smembers(_KEYS_SET):

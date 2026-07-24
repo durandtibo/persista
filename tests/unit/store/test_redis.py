@@ -500,46 +500,34 @@ def test_contains_false_when_store_empty(store: BaseRedisStore) -> None:
 
 def test_contains_many_all_found(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "2", "3", "4"])
-    assert sorted(found) == ["1", "2", "3", "4"]
-    assert missing == []
+    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
 
 
 def test_contains_many_all_missing(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["99", "100"])
-    assert found == []
-    assert sorted(missing) == ["100", "99"]
+    assert store.contains_many(["99", "100"]) == [False, False]
 
 
 def test_contains_many_mixed(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "99", "3", "42"])
-    assert sorted(found) == ["1", "3"]
-    assert sorted(missing) == ["42", "99"]
+    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
 
 
 def test_contains_many_empty_input_returns_empty_lists(store: BaseRedisStore) -> None:
-    found, missing = store.contains_many([])
-    assert found == []
-    assert missing == []
+    assert store.contains_many([]) == []
 
 
 def test_contains_many_empty_store_returns_all_missing(store: BaseRedisStore) -> None:
-    found, missing = store.contains_many(["1", "2"])
-    assert found == []
-    assert sorted(missing) == ["1", "2"]
+    assert store.contains_many(["1", "2"]) == [False, False]
 
 
-def test_contains_many_returns_tuple_of_two_lists(
+def test_contains_many_returns_list_of_bools(
     store: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
     result = store.contains_many(["1", "99"])
-    assert isinstance(result, tuple)
-    assert len(result) == 2
-    assert isinstance(result[0], list)
-    assert isinstance(result[1], list)
+    assert isinstance(result, list)
+    assert all(isinstance(flag, bool) for flag in result)
 
 
 # --- keys ---
@@ -1225,50 +1213,38 @@ async def test_acontains_many_all_found(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await astore.aset_many(items)
-    found, missing = await astore.acontains_many(["1", "2", "3", "4"])
-    assert sorted(found) == ["1", "2", "3", "4"]
-    assert missing == []
+    assert await astore.acontains_many(["1", "2", "3", "4"]) == [True, True, True, True]
 
 
 async def test_acontains_many_all_missing(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await astore.aset_many(items)
-    found, missing = await astore.acontains_many(["99", "100"])
-    assert found == []
-    assert sorted(missing) == ["100", "99"]
+    assert await astore.acontains_many(["99", "100"]) == [False, False]
 
 
 async def test_acontains_many_mixed(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await astore.aset_many(items)
-    found, missing = await astore.acontains_many(["1", "99", "3", "42"])
-    assert sorted(found) == ["1", "3"]
-    assert sorted(missing) == ["42", "99"]
+    assert await astore.acontains_many(["1", "99", "3", "42"]) == [True, False, True, False]
 
 
 async def test_acontains_many_empty_input_returns_empty_lists(astore: BaseRedisStore) -> None:
-    found, missing = await astore.acontains_many([])
-    assert found == []
-    assert missing == []
+    assert await astore.acontains_many([]) == []
 
 
 async def test_acontains_many_empty_store_returns_all_missing(astore: BaseRedisStore) -> None:
-    found, missing = await astore.acontains_many(["1", "2"])
-    assert found == []
-    assert sorted(missing) == ["1", "2"]
+    assert await astore.acontains_many(["1", "2"]) == [False, False]
 
 
-async def test_acontains_many_returns_tuple_of_two_lists(
+async def test_acontains_many_returns_list_of_bools(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await astore.aset_many(items)
     result = await astore.acontains_many(["1", "99"])
-    assert isinstance(result, tuple)
-    assert len(result) == 2
-    assert isinstance(result[0], list)
-    assert isinstance(result[1], list)
+    assert isinstance(result, list)
+    assert all(isinstance(flag, bool) for flag in result)
 
 
 # --- akeys / avalues ---
