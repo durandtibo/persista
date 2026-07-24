@@ -424,11 +424,11 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
         # A named (server-side) cursor requires an explicit transaction
         # block even on an autocommit connection. The name includes a
-        # uuid4 (not just id(self)) so concurrent calls on the same store
-        # don't collide on the same server-side cursor name.
+        # uuid4 so concurrent calls don't collide on the same server-side
+        # cursor name.
         with (
             self._conn.transaction(),
-            self._conn.cursor(name=f"iter_batches_{id(self)}_{uuid.uuid4().hex}") as cur,
+            self._conn.cursor(name=f"iter_batches_{uuid.uuid4().hex}") as cur,
         ):
             cur.itersize = batch_size
             cur.execute(query)
@@ -441,7 +441,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
         async with (
             conn.transaction(),
-            conn.cursor(name=f"aiter_batches_{id(self)}_{uuid.uuid4().hex}") as cur,
+            conn.cursor(name=f"aiter_batches_{uuid.uuid4().hex}") as cur,
         ):
             cur.itersize = batch_size
             await cur.execute(query)

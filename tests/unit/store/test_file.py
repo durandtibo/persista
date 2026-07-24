@@ -29,26 +29,6 @@ def store(tmp_path: Path, store_cls: type[BaseFileStore]) -> Generator[BaseFileS
         yield store
 
 
-@pytest.fixture(scope="module")
-def items() -> dict[str, dict[str, Any]]:
-    return {
-        "1": {
-            "title": "Intro to Python",
-            "author": "Alice",
-            "year": 2022,
-            "category": "Programming",
-        },
-        "2": {
-            "title": "Advanced Python",
-            "author": "Alice",
-            "year": 2023,
-            "category": "Programming",
-        },
-        "3": {"title": "History of Rome", "author": "Bob", "year": 2021, "category": "History"},
-        "4": {"title": "History of Greece", "author": "Bob", "year": 2020, "category": "History"},
-    }
-
-
 ###################################
 #     Tests for file stores      #
 ###################################
@@ -655,6 +635,7 @@ def test_close_does_not_delete_files(store: BaseFileStore) -> None:
         lambda store: list(store.iter_batches()),
         lambda store: store.count(),
     ],
+    ids=["get", "set", "delete", "clear", "contains", "keys", "iter_batches", "count"],
 )
 def test_operations_raise_on_closed_store(
     store: BaseFileStore, op: Callable[[BaseFileStore], Any]
