@@ -802,7 +802,7 @@ async def test_aget_default_ttl_none_means_forever_by_default(
 
 
 async def test_aset_ttl_none_means_forever(cache: Cache, fake_time: list[float]) -> None:
-    cache.default_ttl = 10
+    cache._default_ttl = 10
     await cache.aset("key", "value", ttl=None)
     fake_time[0] += 1_000_000
     assert await cache.aget("key") == "value"

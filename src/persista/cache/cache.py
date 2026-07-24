@@ -87,8 +87,15 @@ class Cache:
             msg = f"default_ttl must be non-negative, got {default_ttl}"
             raise ValueError(msg)
         self._store: BaseStore = store if store is not None else InMemoryStore()
-        self.default_ttl = default_ttl
+        self._default_ttl = default_ttl
         self._ignore_none = ignore_none
+
+    @property
+    def default_ttl(self) -> float | None:
+        """The default time-to-live, in seconds, applied to entries
+        whose ``ttl`` is not explicitly set on :meth:`set` /
+        :meth:`get_or_compute` / :meth:`memoize`."""
+        return self._default_ttl
 
     def get(self, key: str) -> Any | None:
         """Retrieve a value by its key.
@@ -158,7 +165,7 @@ class Cache:
                 the backing store serializes values (see the class
                 docstring).
             ttl: The time-to-live, in seconds, before the entry
-                expires. Defaults to ``self.default_ttl`` when not
+                expires. Defaults to ``self._default_ttl`` when not
                 given. ``None`` means the entry never expires. ``0``
                 means the value is not written to the store at all,
                 evicting any existing entry for ``key`` instead. Must
@@ -181,7 +188,7 @@ class Cache:
 
             ```
         """
-        resolved_ttl = self.default_ttl if ttl is _UNSET else ttl
+        resolved_ttl = self._default_ttl if ttl is _UNSET else ttl
         if resolved_ttl is not None and resolved_ttl < 0:
             msg = f"ttl must be non-negative, got {resolved_ttl}"
             raise ValueError(msg)
@@ -261,7 +268,7 @@ class Cache:
                 the backing store serializes values (see the class
                 docstring).
             ttl: The time-to-live, in seconds, before the entry
-                expires. Defaults to ``self.default_ttl`` when not
+                expires. Defaults to ``self._default_ttl`` when not
                 given. ``None`` means the entry never expires. ``0``
                 means the value is not written to the store at all,
                 evicting any existing entry for ``key`` instead. Must
@@ -284,7 +291,7 @@ class Cache:
 
             ```
         """
-        resolved_ttl = self.default_ttl if ttl is _UNSET else ttl
+        resolved_ttl = self._default_ttl if ttl is _UNSET else ttl
         if resolved_ttl is not None and resolved_ttl < 0:
             msg = f"ttl must be non-negative, got {resolved_ttl}"
             raise ValueError(msg)
