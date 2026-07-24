@@ -31,6 +31,7 @@ nav:
       - uguide/testing.md
   - Reference:
       - refs/cache.md
+      - refs/http.md
       - refs/store.md
       - refs/testing.md
       - refs/utils.md
