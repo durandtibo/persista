@@ -453,6 +453,21 @@ def test_filter_integer_value_no_match_returns_empty(
     assert store.filter(year=9999) == []
 
 
+def test_filter_matches_explicit_json_null(store: BaseSQLiteStore) -> None:
+    """``NULL = ?`` never matches even when the bound parameter is
+    ``NULL``, so filtering on an explicit ``None`` value must use ``IS
+    NULL`` instead."""
+    store.set("1", {"author": None, "title": "Untitled"})
+    store.set("2", {"author": "Alice", "title": "Titled"})
+    assert store.filter(author=None) == [{"author": None, "title": "Untitled"}]
+
+
+async def test_afilter_matches_explicit_json_null(store: BaseSQLiteStore) -> None:
+    await store.aset("1", {"author": None, "title": "Untitled"})
+    await store.aset("2", {"author": "Alice", "title": "Titled"})
+    assert await store.afilter(author=None) == [{"author": None, "title": "Untitled"}]
+
+
 # --- delete ---
 
 
@@ -881,6 +896,19 @@ def test_init_with_schema_creates_typed_columns(typed_store: TypedSQLiteStore) -
 def test_init_schema_with_reserved_key_column_raises() -> None:
     with pytest.raises(ValueError, match="reserved key column name"):
         TypedSQLiteStore(":memory:", value_schema={"_KEY_": "TEXT"})
+
+
+def test_init_schema_rejects_malicious_field_name() -> None:
+    """A schema field name is interpolated directly into CREATE TABLE
+    and filter SQL, so it must be validated up front to prevent SQL
+    injection through a caller-supplied ``value_schema``."""
+    with pytest.raises(ValueError, match="Invalid filter field name"):
+        TypedSQLiteStore(":memory:", value_schema={"x); DROP TABLE store;--": "TEXT"})
+
+
+def test_init_schema_rejects_malicious_column_type() -> None:
+    with pytest.raises(ValueError, match="Invalid column type"):
+        TypedSQLiteStore(":memory:", value_schema={"author": "TEXT); DROP TABLE store;--"})
 
 
 def test_value_field_named_key_does_not_collide_with_primary_key(

@@ -22,6 +22,7 @@ from persista.store.validation import (
     resolve_conflicts,
     validate_batch_size,
     validate_field_name,
+    validate_value_schema,
 )
 from persista.utils.imports import check_duckdb, is_duckdb_available
 from persista.utils.path import prepare_store_path
@@ -263,6 +264,17 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    async def __aenter__(self) -> Self:
+        if self._closed:
+            with self._lock:
+                self._conn = duckdb.connect(str(self._path), **self._kwargs)
+            self._closed = False
+            self._ensure_schema()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
 
 _CREATE_TABLE = """
     CREATE TABLE IF NOT EXISTS store (
@@ -340,12 +352,19 @@ class DuckDBStore(BaseDuckDBStore):
 
         for key in field_filters:
             validate_field_name(key)
-        conditions = [f"json_extract_string(value, '$.{key}') = ?" for key in field_filters]
+        conditions, values = [], []
+        for key, expected in field_filters.items():
+            expr = f"json_extract_string(value, '$.{key}')"
+            if expected is None:
+                conditions.append(f"{expr} IS NULL")
+            else:
+                conditions.append(f"{expr} = ?")
+                values.append(expected)
         where = " AND ".join(conditions)
         with self._lock:
             rows = self._conn.execute(
                 f"SELECT value FROM store WHERE {where}",  # noqa: S608
-                list(field_filters.values()),
+                values,
             ).fetchall()
         return [json.loads(value) for (value,) in rows]
 
@@ -419,6 +438,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
         if _KEY_COLUMN in value_schema:
             msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
             raise ValueError(msg)
+        validate_value_schema(value_schema)
         super().__init__(path, **kwargs)
         self._schema: dict[str, str] = value_schema
         self._ensure_schema()
@@ -451,13 +471,16 @@ class TypedDuckDBStore(BaseDuckDBStore):
             return [self._row_to_value(row) for row in rows]
 
         conditions, values = [], []
-        for key, value in field_filters.items():
-            if key in self._schema:
-                conditions.append(f"{key} = ?")
-            else:
+        for key, expected in field_filters.items():
+            expr = key if key in self._schema else None
+            if expr is None:
                 validate_field_name(key)
-                conditions.append(f"json_extract_string(extra, '$.{key}') = ?")
-            values.append(value)
+                expr = f"json_extract_string(extra, '$.{key}')"
+            if expected is None:
+                conditions.append(f"{expr} IS NULL")
+            else:
+                conditions.append(f"{expr} = ?")
+                values.append(expected)
 
         where = " AND ".join(conditions)
         with self._lock:

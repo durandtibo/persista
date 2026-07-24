@@ -389,6 +389,15 @@ def test_filter_integer_value_no_match_returns_empty(
     assert store.filter(year=9999) == []
 
 
+def test_filter_matches_explicit_json_null(store: BaseDuckDBStore) -> None:
+    """``NULL = ?`` never matches even when the bound parameter is
+    ``NULL``, so filtering on an explicit ``None`` value must use ``IS
+    NULL`` instead."""
+    store.set("1", {"author": None, "title": "Untitled"})
+    store.set("2", {"author": "Alice", "title": "Titled"})
+    assert store.filter(author=None) == [{"author": None, "title": "Untitled"}]
+
+
 # --- delete ---
 
 
@@ -773,6 +782,35 @@ def test_context_manager_multiple_open_close_persistent(
             assert store.count() == i + 1
 
 
+async def test_async_context_manager_reopens_after_close(
+    store_cls: type[BaseDuckDBStore],
+) -> None:
+    """``async with`` on a closed store must reopen the connection the
+    same way the sync ``with`` does, rather than operating on a stale,
+    closed connection."""
+    duckdb_store = store_cls(":memory:")
+    duckdb_store.close()
+    assert duckdb_store.closed
+    async with duckdb_store as store:
+        assert not store.closed
+        await store.aset("1", {"text": "hello"})
+        assert await store.acount() == 1
+    assert duckdb_store.closed
+
+
+async def test_async_context_manager_reentry_on_open_store_does_not_reset(
+    store_cls: type[BaseDuckDBStore],
+) -> None:
+    """``__aenter__`` on a store that isn't closed must be a no-op --
+    it should not reopen the connection or reset its contents."""
+    async with store_cls(":memory:") as store:
+        await store.aset("1", {"text": "hello"})
+        async with store as reentered:
+            assert reentered is store
+            assert not store.closed
+            assert await store.acount() == 1
+
+
 ##########################################################
 #     TypedDuckDBStore-specific schema behavior          #
 ##########################################################
@@ -798,6 +836,19 @@ def test_init_with_schema_creates_typed_columns(typed_store: TypedDuckDBStore) -
 def test_init_schema_with_reserved_key_column_raises() -> None:
     with pytest.raises(ValueError, match="reserved key column name"):
         TypedDuckDBStore(":memory:", value_schema={"_KEY_": "VARCHAR"})
+
+
+def test_init_schema_rejects_malicious_field_name() -> None:
+    """A schema field name is interpolated directly into CREATE TABLE
+    and filter SQL, so it must be validated up front to prevent SQL
+    injection through a caller-supplied ``value_schema``."""
+    with pytest.raises(ValueError, match="Invalid filter field name"):
+        TypedDuckDBStore(":memory:", value_schema={"x); DROP TABLE store;--": "VARCHAR"})
+
+
+def test_init_schema_rejects_malicious_column_type() -> None:
+    with pytest.raises(ValueError, match="Invalid column type"):
+        TypedDuckDBStore(":memory:", value_schema={"author": "VARCHAR); DROP TABLE store;--"})
 
 
 def test_value_field_named_key_does_not_collide_with_primary_key() -> None:

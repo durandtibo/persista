@@ -159,6 +159,14 @@ def test_set_many_empty_is_no_op(store: BaseLmdbStore) -> None:
     assert store.count() == 0
 
 
+def test_private_set_many_empty_is_no_op(store: BaseLmdbStore) -> None:
+    """``_set_many`` is normally only reached with non-empty ``items``
+    (``set_many`` returns early otherwise), so call it directly to cover
+    its own empty-input guard."""
+    store._set_many({})
+    assert store.count() == 0
+
+
 def test_set_many_default_overwrites_existing(store: BaseLmdbStore) -> None:
     store.set_many({"1": {"text": "original"}})
     store.set_many({"1": {"text": "updated"}})

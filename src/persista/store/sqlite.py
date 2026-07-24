@@ -24,6 +24,7 @@ from persista.store.validation import (
     resolve_conflicts,
     validate_batch_size,
     validate_field_name,
+    validate_value_schema,
 )
 from persista.utils.imports import is_aiosqlite_available
 from persista.utils.path import prepare_store_path
@@ -73,7 +74,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     duplicating any of the surrounding query logic.
 
     Subclasses only need to implement :meth:`_create_table_sql`,
-    :meth:`_row_to_value`, :meth:`_build_filter_condition`, and
+    :meth:`_row_to_value`, :meth:`_filter_expr`, and
     :meth:`_set_many` (see :class:`SQLiteStore` for a JSON-only
     layout and :class:`~persista.store.sqlite_typed.TypedSQLiteStore`
     for an optionally typed one).
@@ -183,10 +184,17 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         dict."""
 
     @abstractmethod
-    def _build_filter_condition(self, key: str) -> str:
-        """Build the SQL condition fragment (with a single ``?``
-        placeholder) that matches value field ``key`` against a bound
-        parameter."""
+    def _filter_expr(self, key: str) -> str:
+        """Build the SQL expression that extracts value field ``key``
+        for use in a ``filter()``/``afilter()`` condition.
+
+        The expression is combined with either ``= ?`` (with the
+        expected value bound as a parameter) or ``IS NULL`` (with no
+        bound parameter), depending on whether the expected value for
+        ``key`` is ``None`` -- SQL's ``NULL = ?`` never evaluates to
+        true even when the bound parameter is ``NULL``, so matching an
+        explicitly-stored JSON ``null`` requires ``IS NULL`` instead.
+        """
 
     @abstractmethod
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
@@ -340,16 +348,30 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         to_write = await aresolve_conflicts(items, on_conflict, self.acontains_many, self.aget)
         await self._aset_many(to_write)
 
+    def _build_filter_where(self, field_filters: Mapping[str, Any]) -> tuple[str, list[Any]]:
+        """Build the ``WHERE`` clause and bound parameters for
+        ``field_filters``, matching ``None`` expected values against
+        ``IS NULL`` instead of a bound ``= ?`` parameter."""
+        conditions: list[str] = []
+        values: list[Any] = []
+        for key, expected in field_filters.items():
+            expr = self._filter_expr(key)
+            if expected is None:
+                conditions.append(f"{expr} IS NULL")
+            else:
+                conditions.append(f"{expr} = ?")
+                values.append(expected)
+        return " AND ".join(conditions), values
+
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         if not field_filters:
             rows = self._conn.execute("SELECT * FROM store").fetchall()
             return [self._row_to_value(row) for row in rows]
 
-        conditions = [self._build_filter_condition(key) for key in field_filters]
-        where = " AND ".join(conditions)
+        where, values = self._build_filter_where(field_filters)
         rows = self._conn.execute(
             f"SELECT * FROM store WHERE {where}",  # noqa: S608
-            list(field_filters.values()),
+            values,
         ).fetchall()
         return [self._row_to_value(row) for row in rows]
 
@@ -362,11 +384,10 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             rows = await cursor.fetchall()
             return [self._row_to_value(row) for row in rows]
 
-        conditions = [self._build_filter_condition(key) for key in field_filters]
-        where = " AND ".join(conditions)
+        where, values = self._build_filter_where(field_filters)
         cursor = await conn.execute(
             f"SELECT * FROM store WHERE {where}",  # noqa: S608
-            list(field_filters.values()),
+            values,
         )
         rows = await cursor.fetchall()
         return [self._row_to_value(row) for row in rows]
@@ -639,9 +660,9 @@ class SQLiteStore(BaseSQLiteStore):
     def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
         return json.loads(row[1])
 
-    def _build_filter_condition(self, key: str) -> str:
+    def _filter_expr(self, key: str) -> str:
         validate_field_name(key)
-        return f"json_extract(value, '$.{key}') = ?"
+        return f"json_extract(value, '$.{key}')"
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
@@ -737,6 +758,7 @@ class TypedSQLiteStore(BaseSQLiteStore):
         if _KEY_COLUMN in value_schema:
             msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
             raise ValueError(msg)
+        validate_value_schema(value_schema)
         self._schema: dict[str, str] = value_schema
         super().__init__(database, **kwargs)
 
@@ -756,11 +778,11 @@ class TypedSQLiteStore(BaseSQLiteStore):
             value.update(json.loads(extra_json))
         return value
 
-    def _build_filter_condition(self, key: str) -> str:
+    def _filter_expr(self, key: str) -> str:
         if key in self._schema:
-            return f"{key} = ?"
+            return key
         validate_field_name(key)
-        return f"json_extract(extra, '$.{key}') = ?"
+        return f"json_extract(extra, '$.{key}')"
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
@@ -853,7 +875,7 @@ class PickleSQLiteStore(BaseSQLiteStore):
     def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
         return pickle.loads(row[1])  # noqa: S301
 
-    def _build_filter_condition(self, key: str) -> str:
+    def _filter_expr(self, key: str) -> str:
         msg = (
             "PickleSQLiteStore stores values as opaque pickled blobs, so field "
             "filters can't be pushed down to SQL; filter() overrides the base "

@@ -60,6 +60,12 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     """
 
     def __init__(self, path: str | PathLike[str], **kwargs: Any) -> None:
+        if not self.extension:
+            msg = (
+                "extension must be a non-empty string: an empty extension would let a "
+                "key like '..' escape the store's directory."
+            )
+            raise ValueError(msg)
         self._path = sanitize_path(path)
         if self._path.exists() and not self._path.is_dir():
             msg = f"path must be a directory: {self._path}"
@@ -103,7 +109,13 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def closed(self) -> bool:
         return self._closed
 
+    def _check_open(self) -> None:
+        if self._closed:
+            msg = "Cannot operate on a closed store."
+            raise ValueError(msg)
+
     def get(self, key: str) -> dict[str, Any] | None:
+        self._check_open()
         file_path = self._key_to_path(key)
         return self._load(file_path) if file_path.is_file() else None
 
@@ -116,6 +128,7 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
+        self._check_open()
         if not items:
             return
         on_conflict = normalize_on_conflict(on_conflict)
@@ -139,6 +152,7 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         ]
 
     def delete(self, key: str) -> None:
+        self._check_open()
         self._key_to_path(key).unlink(missing_ok=True)
 
     def delete_many(self, keys: list[str]) -> None:
@@ -146,14 +160,16 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             self.delete(key)
 
     def clear(self) -> None:
+        self._check_open()
         for file_path in self._iter_files():
             file_path.unlink(missing_ok=True)
 
     def contains(self, key: str) -> bool:
+        self._check_open()
         return self._key_to_path(key).is_file()
 
     def contains_many(self, keys: list[str]) -> list[bool]:
-        return [self._key_to_path(key).is_file() for key in keys]
+        return [self.contains(key) for key in keys]
 
     def _iter_files(self) -> Iterator[Path]:
         return (
@@ -163,20 +179,23 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         )
 
     def keys(self) -> Iterator[str]:
+        self._check_open()
         yield from (self._path_to_key(file_path) for file_path in self._iter_files())
 
     def iter_batches(
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
-        all_items = [
+        self._check_open()
+        items = (
             (self._path_to_key(file_path), self._load(file_path))
             for file_path in self._iter_files()
-        ]
-        for batch in batchify(all_items, size=batch_size):
+        )
+        for batch in batchify(items, size=batch_size):
             yield dict(batch)
 
     def count(self) -> int:
+        self._check_open()
         return sum(1 for _ in self._iter_files())
 
     def to_uri(self) -> str:

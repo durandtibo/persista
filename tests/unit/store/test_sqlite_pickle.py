@@ -352,13 +352,13 @@ def test_reenter_after_close_reopens_file_backed_store(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _build_filter_condition
+# _filter_expr
 # ---------------------------------------------------------------------------
 
 
-def test_build_filter_condition_raises_not_implemented(store: PickleSQLiteStore) -> None:
+def test_filter_expr_raises_not_implemented(store: PickleSQLiteStore) -> None:
     with pytest.raises(NotImplementedError, match="opaque pickled blobs"):
-        store._build_filter_condition("author")
+        store._filter_expr("author")
 
 
 # ---------------------------------------------------------------------------
