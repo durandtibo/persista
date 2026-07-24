@@ -19,7 +19,6 @@ from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
     normalize_on_conflict,
-    resolve_conflicts,
     validate_batch_size,
 )
 from persista.utils.imports import check_lmdb, is_lmdb_available
@@ -132,8 +131,25 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
-        self._set_many(to_write)
+        # Resolved and written within a single write transaction (LMDB
+        # serializes writers), so the check-then-write isn't racy against
+        # other writers the way separate contains_many()/get()/_set_many()
+        # calls would be.
+        keys = list(items)
+        with self._env.begin(write=True) as txn:
+            conflicts = {key for key in keys if txn.get(self._key_bytes(key)) is not None}
+            if conflicts and on_conflict == "raise":
+                msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
+                raise KeyError(msg)
+            for key, value in items.items():
+                to_write = value
+                if key in conflicts:
+                    if on_conflict == "skip":
+                        continue
+                    raw = txn.get(self._key_bytes(key))
+                    to_write = {**self._decode(raw), **value}
+                txn.put(self._key_bytes(key), self._encode(to_write))
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
@@ -176,17 +192,32 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             return [txn.get(self._key_bytes(key)) is not None for key in keys]
 
     def keys(self) -> Iterator[str]:
+        # The full key list is materialized (and the transaction/cursor
+        # closed) before anything is yielded, rather than holding a live
+        # LMDB transaction open across yields: py-lmdb transactions are
+        # thread-affine, and ThreadedAsyncStoreMixin.akeys() resumes this
+        # generator via asyncio.to_thread(), which offers no guarantee that
+        # the same worker thread services every call.
         with self._env.begin() as txn, txn.cursor() as cursor:
-            yield from (self._key_str(key) for key in cursor.iternext(values=False))
+            all_keys = [self._key_str(key) for key in cursor.iternext(values=False)]
+        yield from all_keys
 
     def iter_batches(
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
+        # Only the (cheap) key list is materialized upfront; each batch's
+        # values are decoded from a fresh, short-lived read transaction
+        # opened when that batch is pulled, so the whole store's values
+        # are never held in memory at once and no transaction is kept
+        # open across yields (see keys() for why that matters for async
+        # callers).
         with self._env.begin() as txn, txn.cursor() as cursor:
-            all_items = [(self._key_str(key), self._decode(raw)) for key, raw in cursor.iternext()]
-        for batch in batchify(all_items, size=batch_size):
-            yield dict(batch)
+            all_keys = [self._key_str(key) for key in cursor.iternext(values=False)]
+        for batch_keys in batchify(all_keys, size=batch_size):
+            with self._env.begin() as txn:
+                raws = [(key, txn.get(self._key_bytes(key))) for key in batch_keys]
+            yield {key: self._decode(raw) for key, raw in raws if raw is not None}
 
     def count(self) -> int:
         with self._env.begin() as txn:

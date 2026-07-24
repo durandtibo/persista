@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -80,6 +80,26 @@ def test_init_path_that_is_a_file_raises(tmp_path: Path, store_cls: type[BaseFil
     path.write_text("not a directory")
     with pytest.raises(NotADirectoryError, match="path must be a directory"):
         store_cls(path)
+
+
+def test_init_rejects_empty_extension(tmp_path: Path) -> None:
+    """An empty extension would let a key like ``".."`` map to a
+    filename that escapes the store's directory."""
+    from persista.store.file import BaseFileStore as _BaseFileStore
+
+    class _NoExtensionStore(_BaseFileStore):
+        @property
+        def extension(self) -> str:
+            return ""
+
+        def _save(self, path: Path, value: dict[str, Any]) -> None:
+            raise NotImplementedError
+
+        def _load(self, path: Path) -> dict[str, Any]:
+            raise NotImplementedError
+
+    with pytest.raises(ValueError, match="extension must be a non-empty string"):
+        _NoExtensionStore(tmp_path / "db")
 
 
 # --- path ---
@@ -620,7 +640,28 @@ def test_close_returns_none(store: BaseFileStore) -> None:
 def test_close_does_not_delete_files(store: BaseFileStore) -> None:
     store.set("1", {"text": "hello"})
     store.close()
-    assert store.count() == 1
+    assert list(store.path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda store: store.get("1"),
+        lambda store: store.set("1", {"text": "hello"}),
+        lambda store: store.delete("1"),
+        lambda store: store.clear(),
+        lambda store: store.contains("1"),
+        lambda store: list(store.keys()),
+        lambda store: list(store.iter_batches()),
+        lambda store: store.count(),
+    ],
+)
+def test_operations_raise_on_closed_store(
+    store: BaseFileStore, op: Callable[[BaseFileStore], Any]
+) -> None:
+    store.close()
+    with pytest.raises(ValueError, match="closed"):
+        op(store)
 
 
 # --- closed ---

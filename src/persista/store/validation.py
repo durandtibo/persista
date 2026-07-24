@@ -9,9 +9,11 @@ __all__ = [
     "normalize_on_conflict",
     "resolve_conflicts",
     "validate_batch_size",
+    "validate_column_type",
     "validate_field_name",
     "validate_on_conflict",
     "validate_table_name",
+    "validate_value_schema",
 ]
 
 import re
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
 ON_CONFLICT_VALUES = sorted(get_args(OnConflict))
 
 _FIELD_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_COLUMN_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9_ ()]+$")
 
 
 def normalize_on_conflict(on_conflict: str) -> OnConflict:
@@ -82,6 +85,40 @@ def validate_field_name(name: str) -> None:
     if not _FIELD_NAME_PATTERN.match(name):
         msg = f"Invalid filter field name: {name!r}. Field names must match {_FIELD_NAME_PATTERN.pattern!r}"
         raise ValueError(msg)
+
+
+def validate_column_type(dtype: str) -> None:
+    """Validate that a value is safe to interpolate into SQL as a column
+    type declaration.
+
+    Args:
+        dtype: The column type string to validate (e.g. ``"VARCHAR"``,
+            ``"VARCHAR(255)"``, ``"DOUBLE PRECISION"``).
+
+    Raises:
+        ValueError: If ``dtype`` contains characters outside letters,
+            digits, underscores, spaces, and parentheses.
+    """
+    if not _COLUMN_TYPE_PATTERN.match(dtype):
+        msg = f"Invalid column type: {dtype!r}. Column types must match {_COLUMN_TYPE_PATTERN.pattern!r}"
+        raise ValueError(msg)
+
+
+def validate_value_schema(value_schema: Mapping[str, str]) -> None:
+    """Validate that a ``value_schema`` mapping is safe to interpolate
+    into SQL for a typed store's column names and types.
+
+    Args:
+        value_schema: Mapping of value field names to column type
+            strings, as accepted by the typed store constructors.
+
+    Raises:
+        ValueError: If any key is not a valid field/column identifier,
+            or any value is not a valid column type declaration.
+    """
+    for name, dtype in value_schema.items():
+        validate_field_name(name)
+        validate_column_type(dtype)
 
 
 def validate_table_name(name: str) -> None:
