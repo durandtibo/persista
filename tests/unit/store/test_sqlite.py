@@ -1234,6 +1234,12 @@ async def test_sqlite_store_aset_on_conflict_skip(store: BaseSQLiteStore) -> Non
     assert await store.aget("2") == {"text": "new"}
 
 
+async def test_sqlite_store_aset_on_conflict_merge(store: BaseSQLiteStore) -> None:
+    await store.aset("1", {"text": "original", "author": "Alice"})
+    await store.aset("1", {"text": "updated"}, on_conflict="merge")
+    assert await store.aget("1") == {"text": "updated", "author": "Alice"}
+
+
 async def test_sqlite_store_aset_many_merge_with_new_key(store: BaseSQLiteStore) -> None:
     """Exercises the non-conflicting-key branch of ``aset_many`` when
     ``on_conflict != 'overwrite'`` (a key not already present is written
@@ -1259,6 +1265,22 @@ async def test_sqlite_store_afilter_no_filters(store: BaseSQLiteStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     result = await store.afilter()
     assert len(result) == 2
+
+
+async def test_sqlite_store_afilter_multiple_fields(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result = await store.afilter(author="Alice", category="Programming")
+    assert len(result) == 2
+
+
+async def test_sqlite_store_afilter_rejects_malicious_field_name(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    with pytest.raises(ValueError, match="Invalid filter field name"):
+        await store.afilter(**{"x') OR 1=1 OR ('": "nonmatching"})
 
 
 async def test_sqlite_store_adelete_many_empty(store: BaseSQLiteStore) -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Iterator
+from collections.abc import AsyncIterator, Generator, Iterator
 
 import pytest
 
@@ -291,6 +291,11 @@ async def test_null_store_acontains_many_all_missing() -> None:
     found, missing = await store.acontains_many(["1", "2"])
     assert found == []
     assert missing == ["1", "2"]
+
+
+async def test_null_store_aiter_batches_returns_async_iterator() -> None:
+    store = NullStore()
+    assert isinstance(store.aiter_batches(), AsyncIterator)
 
 
 async def test_null_store_async_context_manager() -> None:

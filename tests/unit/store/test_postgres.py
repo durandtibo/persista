@@ -1370,6 +1370,18 @@ async def test_postgres_store_aset_on_conflict_merge(store: BasePostgresStore) -
     assert await store.aget("1") == {"text": "updated", "author": "Alice"}
 
 
+async def test_postgres_store_aset_on_conflict_invalid_raises(store: BasePostgresStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        await store.aset("1", {"text": "hello"}, on_conflict="bogus")
+
+
+async def test_postgres_store_aset_many_on_conflict_invalid_raises(
+    store: BasePostgresStore,
+) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        await store.aset_many({"1": {"text": "hello"}}, on_conflict="bogus")
+
+
 async def test_postgres_store_adelete_acount(store: BasePostgresStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     await store.adelete("1")
@@ -1532,6 +1544,22 @@ async def test_postgres_store_afilter_no_filters(store: BasePostgresStore) -> No
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     result = await store.afilter()
     assert len(result) == 2
+
+
+async def test_postgres_store_afilter_multiple_fields(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result = await store.afilter(author="Alice", category="Programming")
+    assert len(result) == 2
+
+
+async def test_postgres_store_afilter_rejects_malicious_field_name(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    with pytest.raises(ValueError, match=r"Invalid filter field name"):
+        await store.afilter(**{"bad; DROP TABLE store;--": "x"})
 
 
 async def test_postgres_store_adelete_many_empty(store: BasePostgresStore) -> None:

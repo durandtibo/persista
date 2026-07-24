@@ -176,6 +176,18 @@ async def test_base_store_aset_batches() -> None:
     assert await store.acount() == 2
 
 
+def test_base_store_set_batches_default_batch_size() -> None:
+    store = InMemoryTestStore()
+    store.set_batches([("1", {"a": 1}), ("2", {"a": 2})])
+    assert store.count() == 2
+
+
+async def test_base_store_aset_batches_default_batch_size() -> None:
+    store = InMemoryTestStore()
+    await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})])
+    assert await store.acount() == 2
+
+
 def test_base_store_sync_context_manager_calls_close() -> None:
     with InMemoryTestStore() as store:
         assert not store.closed
