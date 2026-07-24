@@ -66,6 +66,40 @@ def test_store_from_uri_unknown_scheme_raises() -> None:
         store_from_uri("bogus://x")
 
 
+def test_store_from_uri_forwards_read_only_true() -> None:
+    received: dict[str, bool] = {}
+
+    class _SpyStore(InMemoryStore):
+        @classmethod
+        def from_uri(cls, uri: str, *, read_only: bool = False) -> _SpyStore:  # noqa: ARG003
+            received["read_only"] = read_only
+            return cls()
+
+    register_scheme("spy-read-only", _SpyStore)
+    try:
+        store_from_uri("spy-read-only://", read_only=True)
+        assert received["read_only"] is True
+    finally:
+        del store_from_uri.__globals__["_SCHEMES"]["spy-read-only"]
+
+
+def test_store_from_uri_forwards_read_only_false_by_default() -> None:
+    received: dict[str, bool] = {}
+
+    class _SpyStore(InMemoryStore):
+        @classmethod
+        def from_uri(cls, uri: str, *, read_only: bool = False) -> _SpyStore:  # noqa: ARG003
+            received["read_only"] = read_only
+            return cls()
+
+    register_scheme("spy-default", _SpyStore)
+    try:
+        store_from_uri("spy-default://")
+        assert received["read_only"] is False
+    finally:
+        del store_from_uri.__globals__["_SCHEMES"]["spy-default"]
+
+
 def test_store_package_has_no_async_prefixed_exports() -> None:
     import persista.store as store_pkg
 

@@ -277,6 +277,16 @@ def test_get_missing_key_returns_none(store: BaseRedisStore) -> None:
     assert store.get("nonexistent") is None
 
 
+def test_get_propagates_connection_error(store: BaseRedisStore) -> None:
+    import redis as redis_module
+
+    with (
+        patch.object(store._client, "get", side_effect=redis_module.ConnectionError("boom")),
+        pytest.raises(redis_module.ConnectionError, match="boom"),
+    ):
+        store.get("1")
+
+
 # --- get_many ---
 
 
@@ -303,6 +313,14 @@ def test_get_many_preserves_order(store: BaseRedisStore, items: dict[str, dict[s
 
 def test_get_many_empty_list_returns_empty_list(store: BaseRedisStore) -> None:
     assert store.get_many([]) == []
+
+
+def test_get_many_duplicate_keys_returns_value_for_each_occurrence(
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    result = store.get_many(["1", "1"])
+    assert result == [items["1"], items["1"]]
 
 
 # --- filter ---
@@ -427,6 +445,16 @@ def test_clear_removes_all_values(store: BaseRedisStore, items: dict[str, dict[s
     store.clear()
     assert store.count() == 0
     assert list(store.keys()) == []
+
+
+def test_clear_removes_raw_value_keys_from_server(
+    store: BaseRedisStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    store.clear()
+    # Every value key (not just the "__keys__" tracking set) must be gone
+    # from the underlying server, not merely absent from the tracking set.
+    assert store._client.keys("*") == []
 
 
 def test_clear_empty_store_is_no_op(store: BaseRedisStore) -> None:

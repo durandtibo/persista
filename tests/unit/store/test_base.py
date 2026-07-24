@@ -160,11 +160,26 @@ def test_base_store_values_iterates_all() -> None:
     assert sorted(v["a"] for v in store.values(batch_size=2)) == [1, 2, 3]
 
 
+def test_base_store_values_matches_iter_batches_order() -> None:
+    store = InMemoryTestStore()
+    store.set_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    expected = [v for batch in store.iter_batches(batch_size=2) for v in batch.values()]
+    assert list(store.values(batch_size=2)) == expected
+
+
 async def test_base_store_avalues_iterates_all() -> None:
     store = InMemoryTestStore()
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
     values = [v async for v in store.avalues(batch_size=2)]
     assert sorted(v["a"] for v in values) == [1, 2, 3]
+
+
+async def test_base_store_avalues_matches_aiter_batches_order() -> None:
+    store = InMemoryTestStore()
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    expected = [v async for batch in store.aiter_batches(batch_size=2) for v in batch.values()]
+    actual = [v async for v in store.avalues(batch_size=2)]
+    assert actual == expected
 
 
 # --- set_batches/aset_batches ---

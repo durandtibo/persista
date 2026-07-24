@@ -253,6 +253,16 @@ def test_get_missing_key_returns_none(store: BaseLmdbStore) -> None:
     assert store.get("nonexistent") is None
 
 
+def test_set_get_unicode_key(store: BaseLmdbStore) -> None:
+    store.set("héllo-中文-🎉", {"text": "hello"})
+    assert store.get("héllo-中文-🎉") == {"text": "hello"}
+
+
+def test_set_empty_string_key_raises(store: BaseLmdbStore) -> None:
+    with pytest.raises(lmdb.BadValsizeError):
+        store.set("", {"text": "hello"})
+
+
 # --- get_many ---
 
 
@@ -761,3 +771,22 @@ async def test_lmdb_store_aiter_batches(store: BaseLmdbStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
     batches = [batch async for batch in store.aiter_batches(batch_size=2)]
     assert sum(len(b) for b in batches) == 3
+
+
+###############################
+#     Error paths             #
+###############################
+
+
+def test_set_raises_when_map_size_exhausted(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> None:
+    with store_cls(tmp_path / "db", map_size=64 * 1024) as store, pytest.raises(lmdb.MapFullError):
+        for i in range(100_000):
+            store.set(str(i), {"text": "x" * 1000})
+
+
+def test_pickle_store_decode_raises_on_corrupted_bytes(tmp_path: Path) -> None:
+    with PickleLmdbStore(tmp_path / "db") as store:
+        with store._env.begin(write=True) as txn:
+            txn.put(b"1", b"not-a-valid-pickle-blob")
+        with pytest.raises(Exception):  # noqa: B017, PT011
+            store.get("1")

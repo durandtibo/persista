@@ -634,6 +634,19 @@ def test_close_returns_none(store: InMemoryStore) -> None:
     assert store.close() is None
 
 
+def test_get_after_close_returns_none(store: InMemoryStore) -> None:
+    store.set("1", {"text": "hello"})
+    store.close()
+    assert store.get("1") is None
+
+
+def test_set_after_close_is_usable_again(store: InMemoryStore) -> None:
+    store.close()
+    store.set("1", {"text": "hello"})
+    assert store.get("1") == {"text": "hello"}
+    assert store.count() == 1
+
+
 # --- closed ---
 
 

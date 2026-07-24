@@ -627,6 +627,24 @@ def test_get_many_empty_list_returns_empty_list(store: BasePostgresStore) -> Non
     assert store.get_many([]) == []
 
 
+def test_get_many_duplicate_keys_returns_value_for_each_occurrence(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    result = store.get_many(["1", "1"])
+    assert result == [items["1"], items["1"]]
+
+
+def test_get_propagates_connection_error(store: BasePostgresStore) -> None:
+    with (
+        patch.object(
+            store._conn, "cursor", side_effect=psycopg.OperationalError("connection lost")
+        ),
+        pytest.raises(psycopg.OperationalError, match="connection lost"),
+    ):
+        store.get("1")
+
+
 # --- filter ---
 
 
