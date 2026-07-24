@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -985,3 +986,20 @@ async def test_duckdb_store_afilter(store: BaseDuckDBStore) -> None:
 async def test_duckdb_store_acount(store: BaseDuckDBStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     assert await store.acount() == 2
+
+
+async def test_duckdb_store_concurrent_async_access_does_not_corrupt(
+    store: BaseDuckDBStore,
+) -> None:
+    """Regression test: async calls run via ThreadedAsyncStoreMixin on
+    worker threads, but DuckDB connections aren't safe for concurrent use
+    from multiple threads; concurrent async calls must not corrupt the
+    store's query state or crash the underlying driver."""
+
+    async def _writer(i: int) -> None:
+        await store.aset(str(i), {"a": i})
+
+    await asyncio.gather(*(_writer(i) for i in range(50)))
+    assert await store.acount() == 50
+    for i in range(50):
+        assert await store.aget(str(i)) == {"a": i}

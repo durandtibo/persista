@@ -120,6 +120,9 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         callers must check that first and fall back to
         ``asyncio.to_thread`` otherwise (see e.g. :meth:`aget`).
         """
+        if self._closed:
+            msg = "Cannot operate on a closed database."
+            raise sqlite3.ProgrammingError(msg)
         async with self._aconn_lock:
             if self._aconn is None:
                 self._aconn = await aiosqlite.connect(self._database, **self._kwargs)
@@ -589,6 +592,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             self._conn = self._connect()
             self._closed = False
             self._ensure_schema()
+            self._aschema_ready = False
         return self
 
     def __exit__(self, *exc_info: object) -> None:
@@ -599,6 +603,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             self._conn = self._connect()
             self._closed = False
             self._ensure_schema()
+            self._aschema_ready = False
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:

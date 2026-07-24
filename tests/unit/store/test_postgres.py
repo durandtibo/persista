@@ -395,6 +395,20 @@ def test_to_uri_returns_conninfo_unchanged(store: BasePostgresStore) -> None:
     assert store.to_uri() == store._conninfo
 
 
+def test_to_uri_converts_keyword_dsn_to_uri(store_cls: type[BasePostgresStore]) -> None:
+    """Regression test: a store constructed from a keyword/value DSN (not a
+    postgresql:// URI) must still produce a URI from to_uri(), so
+    registry.store_from_uri can dispatch on its scheme."""
+    conn = FakeConnection()
+    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
+        store = store_cls("dbname=foo host=bar user=baz password=qux port=5433")
+    conn.store = store
+
+    uri = store.to_uri()
+
+    assert uri.startswith("postgresql://baz:qux@bar:5433/foo")
+
+
 def test_from_uri_constructs_with_same_conninfo(store_cls: type[BasePostgresStore]) -> None:
     conninfo = "postgresql://user:pass@localhost/dbname"
     conn = FakeConnection()

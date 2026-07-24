@@ -9,6 +9,7 @@ import asyncio
 import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 if is_psycopg_available():  # pragma: no cover
     import psycopg
     from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict
     from psycopg.types.json import Jsonb
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -165,7 +167,23 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         return self._closed
 
     def to_uri(self) -> str:
-        return self._conninfo
+        if urlsplit(self._conninfo).scheme in {"postgres", "postgresql"}:
+            return self._conninfo
+        # `self._conninfo` is a keyword/value DSN (e.g. "dbname=foo host=bar"),
+        # which registry.store_from_uri can't dispatch on (no URI scheme to
+        # read); convert it to an equivalent postgresql:// URI so to_uri()
+        # always returns something from_uri()/the registry can consume.
+        params = {k: str(v) for k, v in conninfo_to_dict(self._conninfo).items()}
+        user = params.pop("user", None)
+        password = params.pop("password", None)
+        host = params.pop("host", "")
+        port = params.pop("port", None)
+        dbname = params.pop("dbname", "")
+        netloc = f"{host}:{port}" if port else host
+        if user:
+            auth = f"{user}:{password}" if password else user
+            netloc = f"{auth}@{netloc}"
+        return urlunsplit(("postgresql", netloc, f"/{dbname}", urlencode(params), ""))
 
     @classmethod
     def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
