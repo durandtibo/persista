@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import threading
 from collections.abc import Generator, Iterator
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
@@ -282,6 +283,41 @@ def test_set_many_on_conflict_invalid_raises(store: BaseSQLiteStore) -> None:
         store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")
 
 
+# --- concurrency ---
+
+
+def test_concurrent_set_on_conflict_raise_never_corrupts_value(store: BaseSQLiteStore) -> None:
+    """Many threads race to create the same key with on_conflict="raise"
+    against the same connection (exercised by the no-aiosqlite async
+    fallback in practice).
+
+    Exactly one write must win; the stored value must be a single
+    writer's value, not lost or interleaved.
+    """
+    n_threads = 16
+    barrier = threading.Barrier(n_threads)
+    successes: list[int] = []
+    lock = threading.Lock()
+
+    def create_one(i: int) -> None:
+        barrier.wait()
+        try:
+            store.set("k", {"writer": i}, on_conflict="raise")
+        except KeyError:
+            return
+        with lock:
+            successes.append(i)
+
+    threads = [threading.Thread(target=create_one, args=(i,)) for i in range(n_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(successes) == 1
+    assert store.get("k") == {"writer": successes[0]}
+
+
 # --- set_batches ---
 
 
@@ -362,6 +398,21 @@ def test_get_many_preserves_order(store: BaseSQLiteStore, items: dict[str, dict[
 
 def test_get_many_empty_list_returns_empty_list(store: BaseSQLiteStore) -> None:
     assert store.get_many([]) == []
+
+
+def test_get_many_chunks_large_key_lists(
+    store: BaseSQLiteStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_many must chunk IN (...) clauses so it doesn't exceed
+    SQLite's bound-parameter limit for large batches; force a tiny chunk
+    size to exercise the chunking path without needing 900+ real
+    keys."""
+    monkeypatch.setattr(sqlite_module, "_MAX_SQL_VARIABLES", 3)
+    items = {str(i): {"a": i} for i in range(10)}
+    store.set_many(items)
+    keys = [str(i) for i in range(10)] + ["missing"]
+    result = store.get_many(keys)
+    assert result == [items[str(i)] for i in range(10)] + [None]
 
 
 # --- filter ---
@@ -493,6 +544,16 @@ def test_delete_many_empty_list_is_no_op(
     assert store.count() == len(items)
 
 
+def test_delete_many_chunks_large_key_lists(
+    store: BaseSQLiteStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sqlite_module, "_MAX_SQL_VARIABLES", 3)
+    items = {str(i): {"a": i} for i in range(10)}
+    store.set_many(items)
+    store.delete_many([str(i) for i in range(10)])
+    assert store.count() == 0
+
+
 def test_delete_many_nonexistent_keys_are_silent(store: BaseSQLiteStore) -> None:
     store.delete_many(["99", "100"])
 
@@ -574,6 +635,17 @@ def test_contains_many_mixed(store: BaseSQLiteStore, items: dict[str, dict[str, 
 
 def test_contains_many_empty_input_returns_empty_lists(store: BaseSQLiteStore) -> None:
     assert store.contains_many([]) == []
+
+
+def test_contains_many_chunks_large_key_lists(
+    store: BaseSQLiteStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sqlite_module, "_MAX_SQL_VARIABLES", 3)
+    items = {str(i): {"a": i} for i in range(10)}
+    store.set_many(items)
+    keys = [str(i) for i in range(10)] + ["missing"]
+    result = store.contains_many(keys)
+    assert result == [True] * 10 + [False]
 
 
 def test_contains_many_empty_store_returns_all_missing(store: BaseSQLiteStore) -> None:
@@ -731,6 +803,21 @@ def test_iter_batches_batches_are_dicts(
     store.set_many(items)
     batches = list(store.iter_batches(batch_size=2))
     assert all(isinstance(batch, dict) for batch in batches)
+
+
+def test_iter_batches_no_duplicate_or_skipped_rows_across_many_batches(
+    store: BaseSQLiteStore,
+) -> None:
+    """iter_batches pages through the table with LIMIT/OFFSET; make sure
+    that scheme doesn't skip or duplicate rows across a batch count that
+    doesn't evenly divide the page size."""
+    n = 103
+    store.set_many({str(i): {"a": i} for i in range(n)})
+    seen: list[str] = []
+    for batch in store.iter_batches(batch_size=7):
+        seen.extend(batch.keys())
+    assert sorted(seen, key=int) == [str(i) for i in range(n)]
+    assert len(seen) == len(set(seen))
 
 
 def test_iter_batches_zero_batch_size_raises(store: BaseSQLiteStore) -> None:

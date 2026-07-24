@@ -672,6 +672,30 @@ def test_iter_batches_does_not_mutate_store(
     assert store.count() == len(items)
 
 
+def test_iter_batches_paginates_instead_of_loading_everything(store: BaseDuckDBStore) -> None:
+    """iter_batches must page through the table with LIMIT/OFFSET rather
+    than fetchall()-ing the whole table up front, so it stays bounded in
+    memory regardless of table size."""
+    n = 25
+    store.set_many({str(i): {"a": i} for i in range(n)})
+    batches = list(store.iter_batches(batch_size=10))
+    assert [len(batch) for batch in batches] == [10, 10, 5]
+    all_pairs = {key: value for batch in batches for key, value in batch.items()}
+    assert all_pairs == {str(i): {"a": i} for i in range(n)}
+
+
+def test_iter_batches_no_duplicate_or_skipped_rows_across_many_batches(
+    store: BaseDuckDBStore,
+) -> None:
+    n = 103
+    store.set_many({str(i): {"a": i} for i in range(n)})
+    seen: list[str] = []
+    for batch in store.iter_batches(batch_size=7):
+        seen.extend(batch.keys())
+    assert sorted(seen, key=int) == [str(i) for i in range(n)]
+    assert len(seen) == len(set(seen))
+
+
 # --- close ---
 
 

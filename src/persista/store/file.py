@@ -175,7 +175,7 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         return (
             file_path
             for file_path in self._path.iterdir()
-            if file_path.is_file() and file_path.suffix == self.extension
+            if file_path.is_file() and file_path.name.endswith(self.extension)
         )
 
     def keys(self) -> Iterator[str]:

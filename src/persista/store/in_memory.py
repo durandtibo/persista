@@ -6,6 +6,7 @@ __all__ = ["InMemoryStore"]
 
 import copy
 import logging
+import threading
 from typing import TYPE_CHECKING, Any
 
 from coola.display import InlineDisplayMixin
@@ -63,6 +64,7 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
     def __init__(self) -> None:
         self._data: dict[str, dict[str, Any]] = {}
         self._closed = False
+        self._lock = threading.RLock()
 
     @property
     def data(self) -> dict[str, dict[str, Any]]:
@@ -73,8 +75,9 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
         # persist, so closing (and later reopening via the context
         # manager) it is equivalent to starting over with a fresh,
         # empty store.
-        self._data.clear()
-        self._closed = True
+        with self._lock:
+            self._data.clear()
+            self._closed = True
 
     @property
     def closed(self) -> bool:
@@ -89,11 +92,13 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
         return self
 
     def get(self, key: str) -> dict[str, Any] | None:
-        value = self._data.get(key)
-        return copy.deepcopy(value) if value is not None else None
+        with self._lock:
+            value = self._data.get(key)
+            return copy.deepcopy(value) if value is not None else None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
-        return [self.get(key) for key in keys]
+        with self._lock:
+            return [self.get(key) for key in keys]
 
     def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
@@ -103,55 +108,67 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
     ) -> None:
         on_conflict = normalize_on_conflict(on_conflict)
 
-        if on_conflict == "overwrite":
-            for key, value in items.items():
+        with self._lock:
+            if on_conflict == "overwrite":
+                for key, value in items.items():
+                    self._data[key] = copy.deepcopy(value)
+                logger.debug("Added/replaced %d key-value pair(s)", len(items))
+                return
+
+            to_write = resolve_conflicts(items, on_conflict, self.contains_many, self._data.get)
+            for key, value in to_write.items():
                 self._data[key] = copy.deepcopy(value)
-            logger.debug("Added/replaced %d key-value pair(s)", len(items))
-            return
 
-        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self._data.get)
-        for key, value in to_write.items():
-            self._data[key] = copy.deepcopy(value)
-
-        logger.debug("Added/replaced %d key-value pair(s)", len(to_write))
+            logger.debug("Added/replaced %d key-value pair(s)", len(to_write))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
-        if not field_filters:
-            return [copy.deepcopy(value) for value in self._data.values()]
+        with self._lock:
+            if not field_filters:
+                return [copy.deepcopy(value) for value in self._data.values()]
 
-        matches = [
-            value
-            for value in self._data.values()
-            if all(value.get(key) == val for key, val in field_filters.items())
-        ]
-        return [copy.deepcopy(value) for value in matches]
+            matches = [
+                value
+                for value in self._data.values()
+                if all(value.get(key) == val for key, val in field_filters.items())
+            ]
+            return [copy.deepcopy(value) for value in matches]
 
     def delete(self, key: str) -> None:
-        self._data.pop(key, None)
+        with self._lock:
+            self._data.pop(key, None)
 
     def delete_many(self, keys: list[str]) -> None:
-        for key in keys:
-            self.delete(key)
+        with self._lock:
+            for key in keys:
+                self.delete(key)
 
     def clear(self) -> None:
-        self._data.clear()
+        with self._lock:
+            self._data.clear()
 
     def contains(self, key: str) -> bool:
-        return key in self._data
+        with self._lock:
+            return key in self._data
 
     def contains_many(self, keys: list[str]) -> list[bool]:
-        return [key in self._data for key in keys]
+        with self._lock:
+            return [key in self._data for key in keys]
 
     def keys(self) -> Iterator[str]:
-        yield from list(self._data.keys())
+        with self._lock:
+            snapshot = list(self._data.keys())
+        yield from snapshot
 
     def iter_batches(self, batch_size: int = 32) -> Iterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
-        for batch in batchify(self._data.items(), size=batch_size):
+        with self._lock:
+            snapshot = list(self._data.items())
+        for batch in batchify(snapshot, size=batch_size):
             yield dict(batch)
 
     def count(self) -> int:
-        return len(self._data)
+        with self._lock:
+            return len(self._data)
 
     def to_uri(self) -> str:
         return "memory://"

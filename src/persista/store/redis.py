@@ -185,31 +185,79 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
     ) -> None:
         await self.aset_many({key: value}, on_conflict=on_conflict)
 
+    @staticmethod
+    def _check_no_reserved_keys(items: Mapping[str, dict[str, Any]]) -> None:
+        if _KEYS_SET in items:
+            msg = (
+                f"key {_KEYS_SET!r} is reserved for this store's internal keys-tracking "
+                f"set and cannot be used as a data key"
+            )
+            raise ValueError(msg)
+
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
         if not items:
             return
+        self._check_no_reserved_keys(items)
         on_conflict = normalize_on_conflict(on_conflict)
         if on_conflict == "overwrite":
             self._set_many(items)
             return
 
-        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
-        self._set_many(to_write)
+        # Check-then-act (resolve_conflicts followed by the write) isn't
+        # atomic on its own: a concurrent writer could touch one of these
+        # keys in between. WATCH the target keys and retry the whole
+        # resolve+write cycle if any of them changed before we could
+        # commit, so "raise"/"skip"/"merge" behave correctly even under
+        # concurrent access from other clients/processes.
+        keys = list(items.keys())
+        with self._client.pipeline() as pipe:
+            while True:
+                pipe.watch(*keys)
+                try:
+                    to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
+                    pipe.multi()
+                    for key, value in to_write.items():
+                        pipe.set(key, self._encode(value))
+                    if to_write:
+                        pipe.sadd(_KEYS_SET, *to_write.keys())
+                    pipe.execute()
+                except redis.WatchError:
+                    continue
+                else:
+                    return
 
     async def aset_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
         if not items:
             return
+        self._check_no_reserved_keys(items)
         on_conflict = normalize_on_conflict(on_conflict)
         if on_conflict == "overwrite":
             await self._aset_many(items)
             return
 
-        to_write = await aresolve_conflicts(items, on_conflict, self.acontains_many, self.aget)
-        await self._aset_many(to_write)
+        keys = list(items.keys())
+        client = await self._ensure_aclient()
+        async with client.pipeline() as pipe:
+            while True:
+                await pipe.watch(*keys)
+                try:
+                    to_write = await aresolve_conflicts(
+                        items, on_conflict, self.acontains_many, self.aget
+                    )
+                    pipe.multi()
+                    for key, value in to_write.items():
+                        pipe.set(key, self._encode(value))
+                    if to_write:
+                        pipe.sadd(_KEYS_SET, *to_write.keys())
+                    await pipe.execute()
+                except redis.WatchError:
+                    continue
+                else:
+                    return
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:

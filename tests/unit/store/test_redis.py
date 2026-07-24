@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
@@ -201,6 +202,78 @@ def test_set_many_on_conflict_merge(store: BaseRedisStore) -> None:
 def test_set_many_on_conflict_invalid_raises(store: BaseRedisStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
         store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")
+
+
+# --- reserved key ---
+#
+# "__keys__" is the internal Redis set this store uses to track which data
+# keys exist. Writing a user value under that same name would overwrite the
+# set with a string, corrupting keys()/count()/contains()/values() for the
+# whole store, so it must be rejected up front.
+
+
+def test_set_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.set("__keys__", {"x": 1})
+
+
+def test_set_many_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.set_many({"1": {"x": 1}, "__keys__": {"x": 2}})
+
+
+def test_set_reserved_key_does_not_corrupt_store(store: BaseRedisStore) -> None:
+    store.set("a", {"x": 1})
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.set("__keys__", {"x": 2})
+    # The internal tracking set must be untouched: keys()/count() still work.
+    assert store.count() == 1
+    assert list(store.keys()) == ["a"]
+
+
+async def test_aset_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        await store.aset("__keys__", {"x": 1})
+
+
+async def test_aset_many_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        await store.aset_many({"1": {"x": 1}, "__keys__": {"x": 2}})
+
+
+# --- concurrency ---
+
+
+def test_concurrent_set_on_conflict_raise_never_corrupts_value(store: BaseRedisStore) -> None:
+    """Many threads race to create the same key with
+    on_conflict="raise".
+
+    set_many resolves conflicts under a WATCH/MULTI transaction retried
+    on WatchError, so exactly one write must win; the stored value must
+    be a single writer's value, not lost or interleaved.
+    """
+    n_threads = 8
+    barrier = threading.Barrier(n_threads)
+    successes: list[int] = []
+    lock = threading.Lock()
+
+    def create_one(i: int) -> None:
+        barrier.wait()
+        try:
+            store.set("k", {"writer": i}, on_conflict="raise")
+        except KeyError:
+            return
+        with lock:
+            successes.append(i)
+
+    threads = [threading.Thread(target=create_one, args=(i,)) for i in range(n_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(successes) == 1
+    assert store.get("k") == {"writer": successes[0]}
 
 
 # --- set_batches ---

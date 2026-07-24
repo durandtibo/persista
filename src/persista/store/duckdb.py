@@ -12,7 +12,6 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 
 from coola.display import MultilineDisplayMixin
-from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
 from persista.store.threaded import ThreadedAsyncStoreMixin
@@ -73,7 +72,10 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         # DuckDB connections aren't safe for concurrent use from multiple
         # threads; ThreadedAsyncStoreMixin runs each async call in a worker
         # thread, so every access to self._conn must be serialized.
-        self._lock = threading.Lock()
+        # Reentrant so set_many can hold it across the whole check-then-act
+        # sequence for on_conflict != "overwrite" (which calls self.get/
+        # self.contains_many, themselves taking the lock).
+        self._lock = threading.RLock()
 
     def _ensure_schema(self) -> None:
         """Recreate the store's table schema on a fresh connection.
@@ -151,8 +153,9 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             self._set_many(items)
             return
 
-        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
-        self._set_many(to_write)
+        with self._lock:
+            to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
+            self._set_many(to_write)
 
     def delete(self, key: str) -> None:
         with self._lock:
@@ -210,10 +213,17 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
-        with self._lock:
-            rows = self._conn.execute(self._select_sql()).fetchall()
-        for batch in batchify(rows, size=batch_size):
-            yield dict(self._row_to_kv(row) for row in batch)
+        sql = f"{self._select_sql()} ORDER BY {self._key_column} LIMIT ? OFFSET ?"
+        offset = 0
+        while True:
+            with self._lock:
+                rows = self._conn.execute(sql, [batch_size, offset]).fetchall()
+            if not rows:
+                return
+            yield dict(self._row_to_kv(row) for row in rows)
+            if len(rows) < batch_size:
+                return
+            offset += batch_size
 
     def count(self) -> int:
         with self._lock:
