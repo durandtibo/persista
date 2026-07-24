@@ -1234,6 +1234,12 @@ async def test_sqlite_store_aset_on_conflict_skip(store: BaseSQLiteStore) -> Non
     assert await store.aget("2") == {"text": "new"}
 
 
+async def test_sqlite_store_aset_on_conflict_overwrite(store: BaseSQLiteStore) -> None:
+    await store.aset("1", {"text": "original"})
+    await store.aset("1", {"text": "updated"}, on_conflict="overwrite")
+    assert await store.aget("1") == {"text": "updated"}
+
+
 async def test_sqlite_store_aset_on_conflict_merge(store: BaseSQLiteStore) -> None:
     await store.aset("1", {"text": "original", "author": "Alice"})
     await store.aset("1", {"text": "updated"}, on_conflict="merge")
@@ -1380,3 +1386,99 @@ async def test_typed_sqlite_store_avalues_with_typed_schema(
     await typed_store.aset_many(items)
     values = [v async for v in typed_store.avalues(batch_size=2)]
     assert sorted(v["title"] for v in values) == sorted(item["title"] for item in items.values())
+
+
+async def test_typed_sqlite_store_aset_on_conflict_raise_with_typed_schema(
+    typed_store: TypedSQLiteStore,
+) -> None:
+    await typed_store.aset("1", {"author": "Alice"})
+    with pytest.raises(KeyError, match=r"1"):
+        await typed_store.aset("1", {"author": "Bob"}, on_conflict="raise")
+    assert await typed_store.aget("1") == {"author": "Alice"}
+
+
+async def test_typed_sqlite_store_aset_on_conflict_skip_with_typed_schema(
+    typed_store: TypedSQLiteStore,
+) -> None:
+    await typed_store.aset("1", {"author": "Alice"})
+    await typed_store.aset("1", {"author": "Bob"}, on_conflict="skip")
+    assert await typed_store.aget("1") == {"author": "Alice"}
+
+
+async def test_typed_sqlite_store_aset_on_conflict_overwrite_with_typed_schema(
+    typed_store: TypedSQLiteStore,
+) -> None:
+    await typed_store.aset("1", {"author": "Alice"})
+    await typed_store.aset("1", {"author": "Bob"}, on_conflict="overwrite")
+    assert await typed_store.aget("1") == {"author": "Bob"}
+
+
+async def test_typed_sqlite_store_afilter_multiple_typed_fields(
+    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    result = await typed_store.afilter(author="Alice", category="Programming")
+    assert sorted(r["title"] for r in result) == ["Advanced Python", "Intro to Python"]
+
+
+async def test_typed_sqlite_store_afilter_extra_field(typed_store: TypedSQLiteStore) -> None:
+    await typed_store.aset_many(
+        {
+            "1": {"author": "Alice", "publisher": "O'Reilly"},
+            "2": {"author": "Bob", "publisher": "Packt"},
+        }
+    )
+    result = await typed_store.afilter(publisher="O'Reilly")
+    assert result == [{"author": "Alice", "publisher": "O'Reilly"}]
+
+
+async def test_typed_sqlite_store_afilter_mixed_schema_and_extra_fields(
+    typed_store: TypedSQLiteStore,
+) -> None:
+    await typed_store.aset_many(
+        {
+            "1": {"author": "Alice", "publisher": "O'Reilly"},
+            "2": {"author": "Alice", "publisher": "Packt"},
+        }
+    )
+    result = await typed_store.afilter(author="Alice", publisher="O'Reilly")
+    assert result == [{"author": "Alice", "publisher": "O'Reilly"}]
+
+
+async def test_typed_sqlite_store_afilter_integer_typed_column_no_match(
+    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    assert await typed_store.afilter(year=9999) == []
+
+
+async def test_typed_sqlite_store_aget_columns_info_has_schema_columns(
+    typed_store: TypedSQLiteStore,
+) -> None:
+    columns = typed_store.get_columns_info()
+    assert "author" in columns
+    assert "year" in columns
+
+
+async def test_typed_sqlite_store_to_uri_from_uri_async_round_trip(
+    store_path: Path, items: dict[str, dict[str, Any]]
+) -> None:
+    path = store_path / "to_uri_async_typed.sqlite"
+    with TypedSQLiteStore.from_path(path) as store:
+        store.set_many(items)
+        uri = store.to_uri()
+    async with TypedSQLiteStore.from_uri(uri) as reloaded:
+        assert await reloaded.acount() == len(items)
+
+
+async def test_typed_sqlite_store_afrom_uri_read_only_rejects_writes(
+    store_path: Path, items: dict[str, dict[str, Any]]
+) -> None:
+    path = store_path / "to_uri_ro_async_typed.sqlite"
+    with TypedSQLiteStore.from_path(path) as store:
+        store.set_many(items)
+        uri = store.to_uri()
+    async with TypedSQLiteStore.from_uri(uri, read_only=True) as reloaded:
+        assert await reloaded.acount() == len(items)
+        with pytest.raises(sqlite3.OperationalError):
+            await reloaded.aset("new", {"author": "x"})

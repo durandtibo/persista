@@ -925,3 +925,143 @@ async def test_postgres_store_async_context_manager(
         assert await astore.acount() == 1
     with pytest.raises(psycopg.OperationalError, match=r"closed"):
         astore._conn.execute("SELECT 1")
+
+
+async def test_postgres_store_aset_on_conflict_skip(store: BasePostgresStore) -> None:
+    await store.aset("1", {"text": "original"})
+    await store.aset("1", {"text": "updated"}, on_conflict="skip")
+    assert await store.aget("1") == {"text": "original"}
+
+
+async def test_postgres_store_aset_on_conflict_overwrite(store: BasePostgresStore) -> None:
+    await store.aset("1", {"text": "original"})
+    await store.aset("1", {"text": "updated"}, on_conflict="overwrite")
+    assert await store.aget("1") == {"text": "updated"}
+
+
+async def test_postgres_store_aset_on_conflict_invalid_raises(store: BasePostgresStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        await store.aset("1", {"text": "hello"}, on_conflict="bogus")
+
+
+# --- aiter_batches edge cases ---
+
+
+async def test_postgres_store_aiter_batches_zero_batch_size_raises(
+    store: BasePostgresStore,
+) -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        async for _ in store.aiter_batches(batch_size=0):
+            pass
+
+
+async def test_postgres_store_aiter_batches_negative_batch_size_raises(
+    store: BasePostgresStore,
+) -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        async for _ in store.aiter_batches(batch_size=-1):
+            pass
+
+
+async def test_postgres_store_aiter_batches_exact_multiple(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert sorted(len(b) for b in batches) == [2, 2]
+
+
+# --- afilter edge cases ---
+
+
+async def test_postgres_store_afilter_no_args_returns_all(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    assert len(await store.afilter()) == len(items)
+
+
+async def test_postgres_store_afilter_rejects_malicious_field_name(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    with pytest.raises(ValueError, match=r"Invalid filter field name"):
+        await store.afilter(**{"bad; DROP TABLE store;--": "x"})
+
+
+# ---------------------------------------------------------------------------
+# Async methods + typed schema
+# ---------------------------------------------------------------------------
+
+
+async def test_typed_postgres_store_aget_round_trips_typed_schema_fields(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    assert await typed_store.aget("1") == items["1"]
+
+
+async def test_typed_postgres_store_aset_on_conflict_merge_with_typed_schema(
+    typed_store: TypedPostgresStore,
+) -> None:
+    await typed_store.aset("1", {"author": "Alice", "year": 2022})
+    await typed_store.aset("1", {"category": "Programming"}, on_conflict="merge")
+    assert await typed_store.aget("1") == {
+        "author": "Alice",
+        "year": 2022,
+        "category": "Programming",
+    }
+
+
+async def test_typed_postgres_store_afilter_single_typed_field(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    result = await typed_store.afilter(author="Alice")
+    assert {item["title"] for item in result} == {"Intro to Python", "Advanced Python"}
+
+
+async def test_typed_postgres_store_afilter_multiple_typed_fields(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    result = await typed_store.afilter(author="Alice", category="Programming")
+    assert len(result) == 2
+
+
+async def test_typed_postgres_store_afilter_extra_field(
+    typed_store: TypedPostgresStore,
+) -> None:
+    await typed_store.aset_many(
+        {
+            "1": {"author": "Alice", "publisher": "O'Reilly"},
+            "2": {"author": "Bob", "publisher": "Packt"},
+        }
+    )
+    result = await typed_store.afilter(publisher="O'Reilly")
+    assert result == [{"author": "Alice", "publisher": "O'Reilly"}]
+
+
+async def test_typed_postgres_store_afilter_integer_typed_column(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    result = await typed_store.afilter(year=2022)
+    assert {item["title"] for item in result} == {"Intro to Python"}
+
+
+async def test_typed_postgres_store_afilter_integer_typed_column_no_match(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    assert await typed_store.afilter(year=9999) == []
+
+
+async def test_typed_postgres_store_aiter_batches_with_typed_schema(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    result: dict[str, dict[str, Any]] = {}
+    async for batch in typed_store.aiter_batches(batch_size=2):
+        result.update(batch)
+    assert result == items

@@ -302,3 +302,19 @@ async def test_null_store_async_context_manager() -> None:
     async with NullStore() as store:
         assert not store.closed
     assert store.closed
+
+
+async def test_null_store_aset_on_conflict_bogus_does_not_raise() -> None:
+    store = NullStore()
+    await store.aset("1", {"text": "hello"}, on_conflict="bogus")
+
+
+async def test_null_store_aclose_returns_none() -> None:
+    store = NullStore()
+    assert await store.aclose() is None
+
+
+async def test_null_store_closed_true_after_aclose() -> None:
+    store = NullStore()
+    await store.aclose()
+    assert store.closed

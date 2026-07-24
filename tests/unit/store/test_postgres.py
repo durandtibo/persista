@@ -1648,3 +1648,67 @@ async def test_typed_postgres_store_avalues_with_typed_schema(
     await typed_store.aset_many(items)
     values = [v async for v in typed_store.avalues(batch_size=2)]
     assert sorted(v["title"] for v in values) == sorted(item["title"] for item in items.values())
+
+
+async def test_typed_postgres_store_aset_on_conflict_raise_with_typed_schema(
+    typed_store: TypedPostgresStore,
+) -> None:
+    await typed_store.aset("1", {"author": "Alice"})
+    with pytest.raises(KeyError, match=r"1"):
+        await typed_store.aset("1", {"author": "Bob"}, on_conflict="raise")
+    assert await typed_store.aget("1") == {"author": "Alice"}
+
+
+async def test_typed_postgres_store_aset_on_conflict_skip_with_typed_schema(
+    typed_store: TypedPostgresStore,
+) -> None:
+    await typed_store.aset("1", {"author": "Alice"})
+    await typed_store.aset("1", {"author": "Bob"}, on_conflict="skip")
+    assert await typed_store.aget("1") == {"author": "Alice"}
+
+
+async def test_typed_postgres_store_aset_on_conflict_overwrite_with_typed_schema(
+    typed_store: TypedPostgresStore,
+) -> None:
+    await typed_store.aset("1", {"author": "Alice"})
+    await typed_store.aset("1", {"author": "Bob"}, on_conflict="overwrite")
+    assert await typed_store.aget("1") == {"author": "Bob"}
+
+
+async def test_typed_postgres_store_afilter_multiple_typed_fields(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    result = await typed_store.afilter(author="Alice", category="Programming")
+    assert {item["title"] for item in result} == {"Intro to Python", "Advanced Python"}
+
+
+async def test_typed_postgres_store_afilter_extra_field(typed_store: TypedPostgresStore) -> None:
+    await typed_store.aset_many(
+        {
+            "1": {"author": "Alice", "publisher": "O'Reilly"},
+            "2": {"author": "Bob", "publisher": "Packt"},
+        }
+    )
+    result = await typed_store.afilter(publisher="O'Reilly")
+    assert result == [{"author": "Alice", "publisher": "O'Reilly"}]
+
+
+async def test_typed_postgres_store_afilter_mixed_schema_and_extra_fields(
+    typed_store: TypedPostgresStore,
+) -> None:
+    await typed_store.aset_many(
+        {
+            "1": {"author": "Alice", "publisher": "O'Reilly"},
+            "2": {"author": "Alice", "publisher": "Packt"},
+        }
+    )
+    result = await typed_store.afilter(author="Alice", publisher="O'Reilly")
+    assert result == [{"author": "Alice", "publisher": "O'Reilly"}]
+
+
+async def test_typed_postgres_store_afilter_integer_typed_column_no_match(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await typed_store.aset_many(items)
+    assert await typed_store.afilter(year=9999) == []

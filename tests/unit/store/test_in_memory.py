@@ -839,3 +839,31 @@ async def test_in_memory_store_aiter_batches_yields_correct_batch_sizes() -> Non
     await store.aset_many({str(i): {"a": i} for i in range(5)})
     batches = [batch async for batch in store.aiter_batches(batch_size=2)]
     assert [len(batch) for batch in batches] == [2, 2, 1]
+
+
+async def test_in_memory_store_aset_does_not_alias_input() -> None:
+    store = InMemoryStore()
+    value = {"text": "hello"}
+    await store.aset("1", value)
+    value["text"] = "mutated"
+    assert await store.aget("1") == {"text": "hello"}
+
+
+async def test_in_memory_store_aget_returns_a_copy() -> None:
+    store = InMemoryStore()
+    await store.aset("1", {"tags": ["a"]})
+    value = await store.aget("1")
+    value["tags"].append("b")
+    assert await store.aget("1") == {"tags": ["a"]}
+
+
+async def test_in_memory_store_aiter_batches_zero_batch_size_raises() -> None:
+    store = InMemoryStore()
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        _ = [batch async for batch in store.aiter_batches(batch_size=0)]
+
+
+async def test_in_memory_store_aiter_batches_negative_batch_size_raises() -> None:
+    store = InMemoryStore()
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        _ = [batch async for batch in store.aiter_batches(batch_size=-1)]

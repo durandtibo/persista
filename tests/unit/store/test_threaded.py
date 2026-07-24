@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import copy
+import threading
+import time
 from typing import TYPE_CHECKING, Any
+
+import pytest
 
 from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
@@ -162,3 +168,86 @@ async def test_threaded_mixin_afilter_matches_field() -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     result = await store.afilter(a=2)
     assert result == [{"a": 2}]
+
+
+class _SlowStore(_ThreadedTestStore):
+    r"""Store whose ``get`` sleeps and records which thread ran it."""
+
+    def __init__(self, delay: float = 0.05) -> None:
+        super().__init__()
+        self._delay = delay
+        self.get_thread: threading.Thread | None = None
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        self.get_thread = threading.current_thread()
+        time.sleep(self._delay)
+        return super().get(key)
+
+
+class _BoomError(RuntimeError):
+    pass
+
+
+class _RaisingStore(_ThreadedTestStore):
+    r"""Store whose ``get`` always raises, to test exception
+    propagation."""
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        msg = f"boom for {key}"
+        raise _BoomError(msg)
+
+
+async def test_threaded_mixin_aget_runs_on_worker_thread() -> None:
+    store = _SlowStore()
+    await store.aset("1", {"a": 1})
+    await store.aget("1")
+    assert store.get_thread is not None
+    assert store.get_thread is not threading.current_thread()
+
+
+async def test_threaded_mixin_aget_does_not_block_event_loop() -> None:
+    store = _SlowStore(delay=0.2)
+    await store.aset("1", {"a": 1})
+
+    ticks = 0
+
+    async def tick_counter() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    ticker = asyncio.create_task(tick_counter())
+    await store.aget("1")
+    ticker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await ticker
+
+    assert ticks > 3
+
+
+async def test_threaded_mixin_aget_cancellation_propagates_and_store_stays_usable() -> None:
+    store = _SlowStore(delay=0.2)
+    await store.aset("1", {"a": 1})
+
+    task = asyncio.create_task(store.aget("1"))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert await store.aget("1") == {"a": 1}
+
+
+async def test_threaded_mixin_exception_propagates_from_worker_thread() -> None:
+    store = _RaisingStore()
+    with pytest.raises(_BoomError, match="boom for 1"):
+        await store.aget("1")
+
+
+async def test_threaded_mixin_concurrent_aset_calls_all_persist() -> None:
+    store = _ThreadedTestStore()
+    await asyncio.gather(*(store.aset(str(i), {"a": i}) for i in range(50)))
+    assert await store.acount() == 50
+    for i in range(50):
+        assert await store.aget(str(i)) == {"a": i}

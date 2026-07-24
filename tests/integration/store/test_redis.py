@@ -643,3 +643,51 @@ async def test_redis_store_to_uri_from_uri_async_round_trip(
         async with store_cls.from_uri(uri) as reloaded:
             assert await reloaded.acount() == len(items)
         await async_store.adelete_many([key async for key in async_store.akeys()])
+
+
+@redis_available
+@redis_server_available
+async def test_async_context_manager_multiple_open_close(
+    store_cls: type[BaseRedisStore],
+) -> None:
+    """Reopening an async store after close reconnects to the same Redis
+    server, so previously written data is still there."""
+    redis_store = store_cls(REDIS_URL)
+    try:
+        async with redis_store as store:
+            await store.adelete_many([key async for key in store.akeys()])
+        for i in range(3):
+            async with redis_store as store:
+                await store.aset(str(i), {"text": "hello"})
+                assert await store.aget(str(i)) == {"text": "hello"}
+    finally:
+        async with redis_store as store:
+            await store.adelete_many([key async for key in store.akeys()])
+
+
+##########################################################
+#     PickleRedisStore-specific serialization behavior    #
+##########################################################
+
+
+@redis_available
+@redis_server_available
+async def test_pickle_store_round_trips_tuples_and_sets_async() -> None:
+    async with PickleRedisStore(REDIS_URL) as store:
+        await store.adelete_many([key async for key in store.akeys()])
+        await store.aset("1", {"coordinates": (1, 2, 3), "tags": {"python", "redis"}})
+        assert await store.aget("1") == {"coordinates": (1, 2, 3), "tags": {"python", "redis"}}
+        await store.adelete_many([key async for key in store.akeys()])
+
+
+@redis_available
+@redis_server_available
+async def test_json_store_normalizes_tuples_and_sets_are_unsupported_async() -> None:
+    async with RedisStore(REDIS_URL) as store:
+        await store.adelete_many([key async for key in store.akeys()])
+        await store.aset("1", {"coordinates": (1, 2, 3)})
+        # JSON has no tuple type, so it comes back as a list.
+        assert await store.aget("1") == {"coordinates": [1, 2, 3]}
+        with pytest.raises(TypeError, match="not JSON serializable"):
+            await store.aset("2", {"tags": {"python", "redis"}})
+        await store.adelete_many([key async for key in store.akeys()])

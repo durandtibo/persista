@@ -772,6 +772,21 @@ def test_context_manager_multiple_open_close_server_reset(
             assert store.count() == 1
 
 
+async def test_async_context_manager_multiple_open_close_server_reset(
+    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
+) -> None:
+    """Reopening after close connects to a server that lost its state
+    (e.g. restarted), so previously written data is gone."""
+    _use_fake_redis(monkeypatch)
+    _use_fake_async_redis(monkeypatch)
+    redis_store = store_cls()
+    for _ in range(3):
+        async with redis_store as store:
+            assert await store.acount() == 0
+            await store.aset("1", {"text": "hello"})
+            assert await store.acount() == 1
+
+
 ###########################################
 #     Async (`a`-prefixed) method tests    #
 ###########################################
@@ -1144,3 +1159,26 @@ def test_json_store_normalizes_tuples_and_sets_are_unsupported(
         assert store.get("1") == {"coordinates": [1, 2, 3]}
         with pytest.raises(TypeError, match="not JSON serializable"):
             store.set("2", {"tags": {"python", "redis"}})
+
+
+async def test_pickle_store_round_trips_tuples_and_sets_async(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_fake_redis(monkeypatch)
+    _use_fake_async_redis(monkeypatch)
+    async with PickleRedisStore() as store:
+        await store.aset("1", {"coordinates": (1, 2, 3), "tags": {"python", "redis"}})
+        assert await store.aget("1") == {"coordinates": (1, 2, 3), "tags": {"python", "redis"}}
+
+
+async def test_json_store_normalizes_tuples_and_sets_are_unsupported_async(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_fake_redis(monkeypatch)
+    _use_fake_async_redis(monkeypatch)
+    async with RedisStore() as store:
+        await store.aset("1", {"coordinates": (1, 2, 3)})
+        # JSON has no tuple type, so it comes back as a list.
+        assert await store.aget("1") == {"coordinates": [1, 2, 3]}
+        with pytest.raises(TypeError, match="not JSON serializable"):
+            await store.aset("2", {"tags": {"python", "redis"}})
