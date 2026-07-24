@@ -109,7 +109,7 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
             logger.debug("Added/replaced %d key-value pair(s)", len(items))
             return
 
-        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
+        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self._data.get)
         for key, value in to_write.items():
             self._data[key] = copy.deepcopy(value)
 

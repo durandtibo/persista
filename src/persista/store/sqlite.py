@@ -244,24 +244,31 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         path = decode_path_uri(uri, expected_scheme=cls._scheme)
         return cls.from_path(path, read_only=read_only)
 
+    def _close_aconn_sync(self) -> None:
+        """Close ``self._aconn`` from a synchronous context.
+
+        Must only be called when no event loop is currently running.
+        """
+        try:
+            asyncio.run(self._aconn.close())
+        except RuntimeError:
+            # The event loop that owned the async connection (e.g. a
+            # per-test loop managed by pytest-asyncio) is already
+            # closed, so the underlying connection is already gone;
+            # there is nothing more to clean up.
+            logger.debug(
+                "Async SQLite connection for %s could not be closed "
+                "cleanly because its event loop is already closed",
+                self._database,
+            )
+        self._aconn = None
+
     def close(self) -> None:
         if self._aconn is not None:
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                try:
-                    asyncio.run(self._aconn.close())
-                except RuntimeError:
-                    # The event loop that owned the async connection (e.g. a
-                    # per-test loop managed by pytest-asyncio) is already
-                    # closed, so the underlying connection is already gone;
-                    # there is nothing more to clean up.
-                    logger.debug(
-                        "Async SQLite connection for %s could not be closed "
-                        "cleanly because its event loop is already closed",
-                        self._database,
-                    )
-                self._aconn = None
+                self._close_aconn_sync()
             else:
                 msg = (
                     "An async SQLite connection is open and close() was called from "
