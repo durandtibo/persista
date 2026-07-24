@@ -566,7 +566,7 @@ class Cache:
         result = fn(*args, **kwargs)
         value = await result if inspect.isawaitable(result) else result
         await self.aset(key, value, ttl=ttl)
-        return value  # pyright: ignore[reportReturnType]
+        return value
 
     def memoize(
         self,
@@ -644,7 +644,7 @@ class Cache:
                         key=key, fn=func, args=args, kwargs=kwargs, ttl=ttl
                     )
 
-                return async_wrapper  # pyright: ignore[reportReturnType]
+                return async_wrapper
 
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> T:
