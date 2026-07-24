@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
+from persista.store.threaded import ThreadedAsyncStoreMixin
 from persista.store.validation import normalize_on_conflict, validate_batch_size
 
 if TYPE_CHECKING:

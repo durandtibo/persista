@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Any
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
-from persista.store._threaded import ThreadedAsyncStoreMixin
 from persista.store.base import BaseStore
+from persista.store.threaded import ThreadedAsyncStoreMixin
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
     normalize_on_conflict,
