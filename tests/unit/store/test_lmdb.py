@@ -779,7 +779,10 @@ async def test_lmdb_store_aiter_batches(store: BaseLmdbStore) -> None:
 
 
 def test_set_raises_when_map_size_exhausted(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> None:
-    with store_cls(tmp_path / "db", map_size=64 * 1024) as store, pytest.raises(lmdb.MapFullError):
+    with (  # noqa: PT012
+        store_cls(tmp_path / "db", map_size=64 * 1024) as store,
+        pytest.raises(lmdb.MapFullError),
+    ):
         for i in range(100_000):
             store.set(str(i), {"text": "x" * 1000})
 
