@@ -247,6 +247,16 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    async def __aenter__(self) -> Self:
+        if self._closed:
+            Path(self._path).mkdir(parents=True, exist_ok=True)
+            self._env = lmdb.open(self._path, map_size=self._map_size, **self._kwargs)
+            self._closed = False
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
 
 class LmdbStore(BaseLmdbStore):
     """An LMDB-backed key-value store.

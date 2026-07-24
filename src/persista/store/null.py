@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from coola.display import InlineDisplayMixin
 
 from persista.store.base import BaseStore
+from persista.store.validation import validate_batch_size
 from persista.utils.asyncio import EmptyAsyncIterator
 
 if TYPE_CHECKING:
@@ -157,14 +158,16 @@ class NullStore(BaseStore, InlineDisplayMixin):
 
     def iter_batches(
         self,
-        batch_size: int = 32,  # noqa: ARG002
+        batch_size: int = 32,
     ) -> Iterator[dict[str, dict[str, Any]]]:
+        validate_batch_size(batch_size)
         yield from ()
 
     def aiter_batches(
         self,
-        batch_size: int = 32,  # noqa: ARG002
+        batch_size: int = 32,
     ) -> AsyncIterator[dict[str, dict[str, Any]]]:
+        validate_batch_size(batch_size)
         return EmptyAsyncIterator()
 
     def count(self) -> int:
