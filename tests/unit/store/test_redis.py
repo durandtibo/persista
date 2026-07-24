@@ -1025,6 +1025,10 @@ async def test_akeys_returns_all_keys(
     assert sorted(result) == sorted(items.keys())
 
 
+async def test_avalues_returns_async_iterator(astore: BaseRedisStore) -> None:
+    assert isinstance(astore.avalues(), AsyncIterator)
+
+
 async def test_avalues_returns_all_values(
     astore: BaseRedisStore, items: dict[str, dict[str, Any]]
 ) -> None:

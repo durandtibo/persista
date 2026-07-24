@@ -200,6 +200,44 @@ async def test_base_store_async_context_manager_calls_aclose() -> None:
     assert store.closed
 
 
+def test_base_store_clear_removes_all_values() -> None:
+    store = InMemoryTestStore()
+    store.set_many({"1": {"a": 1}, "2": {"a": 2}})
+    store.clear()
+    assert store.count() == 0
+    assert list(store.keys()) == []
+
+
+def test_base_store_clear_empty_store_is_no_op() -> None:
+    store = InMemoryTestStore()
+    store.clear()
+    assert store.count() == 0
+
+
+def test_base_store_clear_returns_none() -> None:
+    store = InMemoryTestStore()
+    assert store.clear() is None
+
+
+async def test_base_store_aclear_removes_all_values() -> None:
+    store = InMemoryTestStore()
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    await store.aclear()
+    assert await store.acount() == 0
+    assert [key async for key in store.akeys()] == []
+
+
+async def test_base_store_aclear_empty_store_is_no_op() -> None:
+    store = InMemoryTestStore()
+    await store.aclear()
+    assert await store.acount() == 0
+
+
+async def test_base_store_aclear_returns_none() -> None:
+    store = InMemoryTestStore()
+    assert await store.aclear() is None
+
+
 def test_base_store_is_abstract() -> None:
     with pytest.raises(TypeError, match="abstract"):
         BaseStore()  # type: ignore[abstract]

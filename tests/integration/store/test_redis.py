@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Iterator
+from collections.abc import AsyncIterator, Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -569,6 +569,12 @@ async def test_redis_store_avalues(store: BaseRedisStore, items: dict[str, dict[
     await store.aset_many(items)
     values = [v async for v in store.avalues(batch_size=2)]
     assert sorted(v["title"] for v in values) == sorted(item["title"] for item in items.values())
+
+
+@redis_available
+@redis_server_available
+async def test_redis_store_aiter_batches_returns_async_iterator(store: BaseRedisStore) -> None:
+    assert isinstance(store.aiter_batches(), AsyncIterator)
 
 
 @redis_available
