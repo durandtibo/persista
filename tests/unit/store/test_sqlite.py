@@ -1077,6 +1077,13 @@ async def test_sqlite_store_aget_aset_round_trip(store: BaseSQLiteStore) -> None
     assert await store.aget("missing") is None
 
 
+async def test_sqlite_store_aset_default_overwrites_existing(store: BaseSQLiteStore) -> None:
+    await store.aset("1", {"text": "original"})
+    await store.aset("1", {"text": "updated"})
+    assert await store.acount() == 1
+    assert await store.aget("1") == {"text": "updated"}
+
+
 # --- aset_many / afilter ---
 
 
@@ -1122,6 +1129,10 @@ async def test_sqlite_store_acontains(store: BaseSQLiteStore) -> None:
     assert await store.acontains("9") is False
 
 
+async def test_sqlite_store_acontains_false_when_store_empty(store: BaseSQLiteStore) -> None:
+    assert await store.acontains("1") is False
+
+
 # --- acontains_many ---
 
 
@@ -1141,6 +1152,34 @@ async def test_sqlite_store_adelete_acount(store: BaseSQLiteStore) -> None:
     assert await store.acount() == 1
 
 
+async def test_sqlite_store_adelete_nonexistent_is_silent(store: BaseSQLiteStore) -> None:
+    await store.adelete("nonexistent")
+
+
+async def test_sqlite_store_adelete_many_preserves_other_values(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    await store.adelete_many(["1", "3"])
+    assert await store.aget("2") is not None
+    assert await store.aget("4") is not None
+
+
+async def test_sqlite_store_adelete_many_nonexistent_keys_are_silent(
+    store: BaseSQLiteStore,
+) -> None:
+    await store.adelete_many(["99", "100"])
+
+
+async def test_sqlite_store_adelete_many_single_key(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    await store.adelete_many(["2"])
+    assert await store.acount() == len(items) - 1
+    assert await store.aget("2") is None
+
+
 # --- akeys / aiter_batches ---
 
 
@@ -1149,6 +1188,101 @@ async def test_sqlite_store_akeys_and_aiter_batches(store: BaseSQLiteStore) -> N
     assert sorted([key async for key in store.akeys()]) == ["1", "2", "3"]
     batches = [batch async for batch in store.aiter_batches(batch_size=2)]
     assert sum(len(b) for b in batches) == 3
+
+
+async def test_sqlite_store_akeys_empty_store_yields_nothing(store: BaseSQLiteStore) -> None:
+    assert [key async for key in store.akeys()] == []
+
+
+async def test_sqlite_store_aiter_batches_empty_store_yields_nothing(
+    store: BaseSQLiteStore,
+) -> None:
+    assert [batch async for batch in store.aiter_batches()] == []
+
+
+async def test_sqlite_store_aiter_batches_default_batch_size(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    batches = [batch async for batch in store.aiter_batches()]
+    assert len(batches) == 1
+    assert len(batches[0]) == len(items)
+
+
+async def test_sqlite_store_aiter_batches_yields_correct_batch_sizes(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert [len(b) for b in batches] == [2, 2]
+
+
+async def test_sqlite_store_aiter_batches_last_batch_may_be_smaller(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    batches = [batch async for batch in store.aiter_batches(batch_size=3)]
+    assert [len(b) for b in batches] == [3, 1]
+
+
+async def test_sqlite_store_aiter_batches_batch_size_larger_than_store(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    batches = [batch async for batch in store.aiter_batches(batch_size=100)]
+    assert len(batches) == 1
+    assert len(batches[0]) == len(items)
+
+
+async def test_sqlite_store_aiter_batches_batch_size_one(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    batches = [batch async for batch in store.aiter_batches(batch_size=1)]
+    assert [len(b) for b in batches] == [1, 1, 1, 1]
+
+
+async def test_sqlite_store_aiter_batches_returns_all_key_value_pairs(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result: dict[str, dict[str, Any]] = {}
+    async for batch in store.aiter_batches(batch_size=2):
+        result.update(batch)
+    assert result == items
+
+
+async def test_sqlite_store_aiter_batches_batches_are_dicts(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert all(isinstance(batch, dict) for batch in batches)
+
+
+async def test_sqlite_store_aiter_batches_zero_batch_size_raises(
+    store: BaseSQLiteStore,
+) -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        async for _ in store.aiter_batches(batch_size=0):
+            pass
+
+
+async def test_sqlite_store_aiter_batches_negative_batch_size_raises(
+    store: BaseSQLiteStore,
+) -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        async for _ in store.aiter_batches(batch_size=-1):
+            pass
+
+
+async def test_sqlite_store_aiter_batches_does_not_mutate_store(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    async for _ in store.aiter_batches(batch_size=2):
+        pass
+    assert await store.acount() == len(items)
 
 
 # --- close ---
@@ -1337,6 +1471,42 @@ async def test_sqlite_store_afilter_rejects_malicious_field_name(
         await store.afilter(**{"x') OR 1=1 OR ('": "nonmatching"})
 
 
+async def test_sqlite_store_afilter_no_match_returns_empty(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    assert await store.afilter(author="Charlie") == []
+
+
+async def test_sqlite_store_afilter_empty_store_returns_empty(store: BaseSQLiteStore) -> None:
+    assert await store.afilter(author="Alice") == []
+
+
+async def test_sqlite_store_afilter_single_field(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result = await store.afilter(author="Alice")
+    assert all(r["author"] == "Alice" for r in result)
+    assert len(result) == 2
+
+
+async def test_sqlite_store_afilter_integer_field_value(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result = await store.afilter(year=2022)
+    assert len(result) == 1
+    assert result[0]["title"] == "Intro to Python"
+
+
+async def test_sqlite_store_afilter_integer_value_no_match_returns_empty(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    assert await store.afilter(year=9999) == []
+
+
 # --- adelete_many ---
 
 
@@ -1358,6 +1528,23 @@ async def test_sqlite_store_aclear(store: BaseSQLiteStore) -> None:
     await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
     await store.aclear()
     assert await store.acount() == 0
+
+
+async def test_sqlite_store_aclear_empty_store_is_no_op(store: BaseSQLiteStore) -> None:
+    await store.aclear()
+    assert await store.acount() == 0
+
+
+async def test_sqlite_store_aclear_returns_none(store: BaseSQLiteStore) -> None:
+    assert await store.aclear() is None
+
+
+async def test_sqlite_store_aclear_then_aset_works(store: BaseSQLiteStore) -> None:
+    await store.aset("1", {"text": "hello"})
+    await store.aclear()
+    await store.aset("2", {"text": "world"})
+    assert await store.acount() == 1
+    assert await store.aget("2") == {"text": "world"}
 
 
 # --- acontains_many ---
@@ -1388,12 +1575,39 @@ async def test_sqlite_store_avalues(store: BaseSQLiteStore) -> None:
     assert sorted(v["a"] for v in values) == [1, 2, 3]
 
 
+async def test_sqlite_store_avalues_empty_store_yields_nothing(store: BaseSQLiteStore) -> None:
+    assert [v async for v in store.avalues()] == []
+
+
 # --- aset_batches ---
 
 
 async def test_sqlite_store_aset_batches(store: BaseSQLiteStore) -> None:
     await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})], batch_size=1)
     assert await store.acount() == 2
+
+
+async def test_sqlite_store_aset_batches_empty_is_no_op(store: BaseSQLiteStore) -> None:
+    await store.aset_batches([])
+    assert await store.acount() == 0
+
+
+async def test_sqlite_store_aset_batches_consumes_a_generator(store: BaseSQLiteStore) -> None:
+    def gen() -> Iterator[tuple[str, dict[str, int]]]:
+        for i in range(5):
+            yield str(i), {"v": i}
+
+    await store.aset_batches(gen(), batch_size=2)
+    assert await store.acount() == 5
+
+
+async def test_sqlite_store_aset_batches_on_conflict_skip(store: BaseSQLiteStore) -> None:
+    await store.aset("1", {"text": "original"})
+    await store.aset_batches(
+        [("1", {"text": "updated"}), ("2", {"text": "new"})], on_conflict="skip"
+    )
+    assert await store.aget("1") == {"text": "original"}
+    assert await store.aget("2") == {"text": "new"}
 
 
 # ---------------------------------------------------------------------------

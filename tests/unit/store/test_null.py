@@ -234,6 +234,45 @@ async def test_null_store_aget_always_none() -> None:
     assert await store.aget("1") is None
 
 
+async def test_null_store_aset_does_not_increase_count() -> None:
+    store = NullStore()
+    await store.aset("1", {"text": "hello"})
+    assert await store.acount() == 0
+
+
+async def test_null_store_aget_missing_key_returns_none() -> None:
+    store = NullStore()
+    assert await store.aget("nonexistent") is None
+
+
+async def test_null_store_aset_many_does_not_increase_count() -> None:
+    store = NullStore()
+    await store.aset_many({"1": {"text": "hello"}, "2": {"text": "world"}})
+    assert await store.acount() == 0
+
+
+async def test_null_store_aget_many_preserves_length() -> None:
+    store = NullStore()
+    assert await store.aget_many(["1", "2", "3"]) == [None, None, None]
+
+
+async def test_null_store_aget_many_empty_list_returns_empty_list() -> None:
+    store = NullStore()
+    assert await store.aget_many([]) == []
+
+
+async def test_null_store_aset_batches_does_not_increase_count() -> None:
+    store = NullStore()
+    await store.aset_batches([("1", {"v": 1}), ("2", {"v": 2})])
+    assert await store.acount() == 0
+
+
+async def test_null_store_afilter_no_args_returns_empty() -> None:
+    store = NullStore()
+    await store.aset("1", {"text": "hello"})
+    assert await store.afilter() == []
+
+
 async def test_null_store_acontains_always_false() -> None:
     store = NullStore()
     await store.aset("1", {"a": 1})
@@ -246,14 +285,42 @@ async def test_null_store_acount_always_zero() -> None:
     assert await store.acount() == 0
 
 
+async def test_null_store_acontains_many_empty_input_returns_empty_lists() -> None:
+    store = NullStore()
+    found, missing = await store.acontains_many([])
+    assert found == []
+    assert missing == []
+
+
 async def test_null_store_akeys_empty() -> None:
     store = NullStore()
     keys = [key async for key in store.akeys()]
     assert keys == []
 
 
+async def test_null_store_akeys_yields_nothing_after_aset() -> None:
+    store = NullStore()
+    await store.aset("1", {"text": "hello"})
+    keys = [key async for key in store.akeys()]
+    assert keys == []
+
+
+async def test_null_store_avalues_yields_nothing() -> None:
+    store = NullStore()
+    await store.aset("1", {"text": "hello"})
+    values = [value async for value in store.avalues()]
+    assert values == []
+
+
 async def test_null_store_aiter_batches_empty() -> None:
     store = NullStore()
+    batches = [batch async for batch in store.aiter_batches()]
+    assert batches == []
+
+
+async def test_null_store_aiter_batches_yields_nothing_after_aset() -> None:
+    store = NullStore()
+    await store.aset("1", {"text": "hello"})
     batches = [batch async for batch in store.aiter_batches()]
     assert batches == []
 
@@ -314,7 +381,28 @@ async def test_null_store_aclose_returns_none() -> None:
     assert await store.aclose() is None
 
 
+async def test_null_store_aclose_is_idempotent() -> None:
+    store = NullStore()
+    await store.aclose()
+    await store.aclose()
+
+
+async def test_null_store_closed_false_before_aclose() -> None:
+    store = NullStore()
+    assert not store.closed
+
+
 async def test_null_store_closed_true_after_aclose() -> None:
     store = NullStore()
     await store.aclose()
+    assert store.closed
+
+
+async def test_null_store_async_context_manager_closes_on_exception() -> None:
+    msg = "boom"
+    store = NullStore()
+    with pytest.raises(ValueError, match="boom"):
+        async with store:
+            raise ValueError(msg)
+
     assert store.closed
