@@ -1076,6 +1076,26 @@ def test_from_uri_read_only_rejects_writes(
             reloaded.set("new", {"a": 1})
 
 
+def test_from_path_read_only_to_uri_matches_writable_to_uri(
+    store_path: Path, store_cls: type[BaseSQLiteStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test: to_uri() must return the same absolute path
+    regardless of read_only, not a relative path that only round-trips
+    correctly from the current working directory."""
+    path = store_path / f"ro_uri_{store_cls.__name__}.sqlite"
+    with store_cls.from_path(path):
+        pass
+
+    monkeypatch.chdir(store_path)
+    relative = path.name
+    with store_cls.from_path(relative) as writable:
+        writable_uri = writable.to_uri()
+    with store_cls.from_path(relative, read_only=True) as read_only:
+        read_only_uri = read_only.to_uri()
+
+    assert read_only_uri == writable_uri
+
+
 # ---------------------------------------------------------------------------
 # Async methods
 # ---------------------------------------------------------------------------

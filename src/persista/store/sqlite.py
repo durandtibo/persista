@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
+from coola.utils.path import sanitize_path
 
 from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
@@ -228,6 +229,11 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         if str(path) == ":memory:":
             uri = "file::memory:?cache=shared"
         elif read_only:
+            # Sanitize (but don't create parent directories for) the path so
+            # to_uri() returns the same absolute form regardless of read_only,
+            # rather than an unresolved path that only round-trips correctly
+            # from the same working directory.
+            path = sanitize_path(path)
             uri = f"file:{path}?mode=ro"
         else:
             path = prepare_store_path(path)
