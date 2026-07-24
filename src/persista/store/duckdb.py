@@ -517,7 +517,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
     def _row_to_value(self, row: tuple) -> dict[str, Any]:
         """Convert a raw database row back to a value dict."""
         # row layout: key, [schema cols...], extra
-        schema_vals = dict(zip(self._schema.keys(), row[1 : 1 + len(self._schema)]))
+        schema_vals = dict(zip(self._schema.keys(), row[1 : 1 + len(self._schema)], strict=True))
         extra_json = row[1 + len(self._schema)]
         value = {k: v for k, v in schema_vals.items() if v is not None}
         if extra_json:

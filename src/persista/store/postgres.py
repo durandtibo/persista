@@ -22,6 +22,7 @@ from persista.store.validation import (
     validate_batch_size,
     validate_field_name,
     validate_table_name,
+    validate_value_schema,
 )
 from persista.utils.imports import check_psycopg, is_psycopg_available
 
@@ -141,7 +142,18 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                asyncio.run(self._aconn.close())
+                try:
+                    asyncio.run(self._aconn.close())
+                except RuntimeError:
+                    # The event loop that owned the async connection (e.g. a
+                    # per-test loop managed by pytest-asyncio) is already
+                    # closed, so the underlying transport is already gone;
+                    # there is nothing more to clean up.
+                    logger.debug(
+                        "Async Postgres connection for table %s could not be closed "
+                        "cleanly because its event loop is already closed",
+                        self._table,
+                    )
                 self._aconn = None
             else:
                 msg = (
@@ -619,6 +631,7 @@ class TypedPostgresStore(BasePostgresStore):
         if _KEY_COLUMN in value_schema:
             msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
             raise ValueError(msg)
+        validate_value_schema(value_schema)
         self._schema: dict[str, str] = value_schema
         super().__init__(conninfo, table=table, **kwargs)
 
