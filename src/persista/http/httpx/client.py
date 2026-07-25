@@ -117,6 +117,7 @@ class HttpClient:
     def __init__(
         self,
         client: httpx.Client,
+        *,
         timeout: int = 30,
         max_retries: int = 3,
         retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -135,6 +136,7 @@ class HttpClient:
         self,
         method: str,
         url: str,
+        *,
         timeout: int | None = None,
         max_retries: int | None = None,
         retry_status_codes: set[int] | frozenset[int] | None = None,
@@ -262,6 +264,7 @@ class AsyncHttpClient:
     def __init__(
         self,
         client: httpx.AsyncClient,
+        *,
         timeout: int = 30,
         max_retries: int = 3,
         retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -280,6 +283,7 @@ class AsyncHttpClient:
         self,
         method: str,
         url: str,
+        *,
         timeout: int | None = None,
         max_retries: int | None = None,
         retry_status_codes: set[int] | frozenset[int] | None = None,

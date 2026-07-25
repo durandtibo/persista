@@ -36,6 +36,7 @@ DEFAULT_RETRY_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 def get_response(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -95,6 +96,7 @@ def get_response(
 
 def post_response(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -156,6 +158,7 @@ def post_response(
 
 def put_response(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -217,6 +220,7 @@ def put_response(
 
 def patch_response(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -278,6 +282,7 @@ def patch_response(
 
 def delete_response(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -338,6 +343,7 @@ def delete_response(
 def send_request(
     method: str,
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -450,6 +456,7 @@ def send_request(
 
 async def get_response_async(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -513,6 +520,7 @@ async def get_response_async(
 
 async def post_response_async(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -579,6 +587,7 @@ async def post_response_async(
 
 async def put_response_async(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -645,6 +654,7 @@ async def put_response_async(
 
 async def patch_response_async(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -712,6 +722,7 @@ async def patch_response_async(
 
 async def delete_response_async(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
@@ -778,6 +789,7 @@ async def delete_response_async(
 async def send_request_async(
     method: str,
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
