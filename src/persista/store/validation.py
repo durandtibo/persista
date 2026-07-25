@@ -1,5 +1,5 @@
 r"""Provide validation helpers for the ``on_conflict`` parameter used by
-:class:`~persista.store.base.BaseStore` write methods."""
+:class:`~persista.store.BaseStore` write methods."""
 
 from __future__ import annotations
 
@@ -148,7 +148,7 @@ def resolve_conflicts(
     """Resolve ``items`` against existing keys for a non-``"overwrite"``
     ``on_conflict`` strategy.
 
-    Shared by every :class:`~persista.store.base.BaseStore` backend's
+    Shared by every :class:`~persista.store.BaseStore` backend's
     ``set_many``: callers handle the ``"overwrite"`` case themselves
     (writing ``items`` as-is, without needing to check for conflicts)
     and use this helper for ``"raise"``/``"skip"``/``"merge"``.
