@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Generator, Iterator
 from typing import Any
 
@@ -16,26 +17,6 @@ from persista.store import InMemoryStore
 def store() -> Generator[InMemoryStore, None, None]:
     with InMemoryStore() as store:
         yield store
-
-
-@pytest.fixture
-def items() -> dict[str, dict[str, Any]]:
-    return {
-        "1": {
-            "title": "Intro to Python",
-            "author": "Alice",
-            "year": 2022,
-            "category": "Programming",
-        },
-        "2": {
-            "title": "Advanced Python",
-            "author": "Alice",
-            "year": 2023,
-            "category": "Programming",
-        },
-        "3": {"title": "History of Rome", "author": "Bob", "year": 2021, "category": "History"},
-        "4": {"title": "History of Greece", "author": "Bob", "year": 2020, "category": "History"},
-    }
 
 
 ###################################
@@ -412,55 +393,41 @@ def test_contains_false_when_store_empty(store: InMemoryStore) -> None:
 
 def test_contains_many_all_found(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "2", "3", "4"])
-    assert found == ["1", "2", "3", "4"]
-    assert missing == []
+    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
 
 
 def test_contains_many_all_missing(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["99", "100"])
-    assert found == []
-    assert missing == ["99", "100"]
+    assert store.contains_many(["99", "100"]) == [False, False]
 
 
 def test_contains_many_mixed(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "99", "3", "42"])
-    assert found == ["1", "3"]
-    assert missing == ["99", "42"]
+    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
 
 
 def test_contains_many_preserves_order(
     store: InMemoryStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["3", "99", "1", "42", "2"])
-    assert found == ["3", "1", "2"]
-    assert missing == ["99", "42"]
+    assert store.contains_many(["3", "99", "1", "42", "2"]) == [True, False, True, False, True]
 
 
 def test_contains_many_empty_input_returns_empty_lists(store: InMemoryStore) -> None:
-    found, missing = store.contains_many([])
-    assert found == []
-    assert missing == []
+    assert store.contains_many([]) == []
 
 
 def test_contains_many_empty_store_returns_all_missing(store: InMemoryStore) -> None:
-    found, missing = store.contains_many(["1", "2"])
-    assert found == []
-    assert missing == ["1", "2"]
+    assert store.contains_many(["1", "2"]) == [False, False]
 
 
-def test_contains_many_returns_tuple_of_two_lists(
+def test_contains_many_returns_list_of_bools(
     store: InMemoryStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
     result = store.contains_many(["1", "99"])
-    assert isinstance(result, tuple)
-    assert len(result) == 2
-    assert isinstance(result[0], list)
-    assert isinstance(result[1], list)
+    assert isinstance(result, list)
+    assert all(isinstance(flag, bool) for flag in result)
 
 
 # --- keys ---
@@ -604,6 +571,21 @@ def test_iter_batches_does_not_mutate_store(
     assert store.count() == len(items)
 
 
+def test_iter_batches_survives_concurrent_mutation(store: InMemoryStore) -> None:
+    """iter_batches snapshots the store up front, so a set() call
+    interleaved between batches must not raise "dictionary changed size
+    during iteration"."""
+    for i in range(5):
+        store.set(str(i), {"a": i})
+    gen = store.iter_batches(batch_size=2)
+    first = next(gen)
+    store.set("new", {"a": 99})
+    remaining = list(gen)
+    assert len(first) == 2
+    assert sum(len(batch) for batch in remaining) == 3
+    assert store.count() == 6
+
+
 # --- count ---
 
 
@@ -632,6 +614,19 @@ def test_close_is_idempotent(store: InMemoryStore) -> None:
 
 def test_close_returns_none(store: InMemoryStore) -> None:
     assert store.close() is None
+
+
+def test_get_after_close_returns_none(store: InMemoryStore) -> None:
+    store.set("1", {"text": "hello"})
+    store.close()
+    assert store.get("1") is None
+
+
+def test_set_after_close_is_usable_again(store: InMemoryStore) -> None:
+    store.close()
+    store.set("1", {"text": "hello"})
+    assert store.get("1") == {"text": "hello"}
+    assert store.count() == 1
 
 
 # --- closed ---
@@ -716,9 +711,22 @@ def test_context_manager_multiple_open_close() -> None:
     in_memory_store = InMemoryStore()
     for i in range(3):
         with in_memory_store as store:
+            assert not store.closed
             assert store.count() == 0
             store.set(str(i), {"text": "hello"})
             assert store.count() == 1
+        assert store.closed
+
+
+def test_context_manager_reopen_resets_closed() -> None:
+    """Regression test: reopening via `with` must reset `closed` to False,
+    matching every other store backend."""
+    store = InMemoryStore()
+    store.close()
+    assert store.closed
+    with store:
+        assert not store.closed
+    assert store.closed
 
 
 # --- to_uri/from_uri ---
@@ -739,3 +747,214 @@ def test_to_uri_from_uri_does_not_carry_data(
     store.set_many(items)
     reloaded = InMemoryStore.from_uri(store.to_uri())
     assert reloaded.count() == 0
+
+
+# --- async (via ThreadedAsyncStoreMixin) ---
+
+
+# --- aget / aset ---
+
+
+async def test_in_memory_store_aget_aset_round_trip(store: InMemoryStore) -> None:
+    await store.aset("1", {"text": "hello"})
+    assert await store.aget("1") == {"text": "hello"}
+
+
+# --- aset_many ---
+
+
+async def test_in_memory_store_aset_many_on_conflict_merge(store: InMemoryStore) -> None:
+    await store.aset("1", {"a": 1})
+    await store.aset_many({"1": {"b": 2}}, on_conflict="merge")
+    assert await store.aget("1") == {"a": 1, "b": 2}
+
+
+# --- afilter ---
+
+
+async def test_in_memory_store_afilter(store: InMemoryStore) -> None:
+    await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
+    assert await store.afilter(author="Alice") == [{"author": "Alice"}]
+
+
+# --- acount / aclear ---
+
+
+async def test_in_memory_store_acount_and_aclear(store: InMemoryStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert await store.acount() == 2
+    await store.aclear()
+    assert await store.acount() == 0
+
+
+# --- akeys ---
+
+
+async def test_in_memory_store_akeys(store: InMemoryStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert sorted([key async for key in store.akeys()]) == ["1", "2"]
+
+
+# --- aclose ---
+
+
+async def test_in_memory_store_aclose_clears_data() -> None:
+    store = InMemoryStore()
+    await store.aset("1", {"a": 1})
+    await store.aclose()
+    assert store.closed
+
+
+# --- avalues ---
+
+
+async def test_in_memory_store_avalues_iterates_all(store: InMemoryStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    values = [v async for v in store.avalues(batch_size=2)]
+    assert sorted(v["a"] for v in values) == [1, 2, 3]
+
+
+# --- aset_batches ---
+
+
+async def test_in_memory_store_aset_batches(store: InMemoryStore) -> None:
+    await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})], batch_size=1)
+    assert await store.acount() == 2
+
+
+# --- adelete_many ---
+
+
+async def test_in_memory_store_adelete_many(store: InMemoryStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    await store.adelete_many(["1", "2"])
+    assert sorted([key async for key in store.akeys()]) == ["3"]
+
+
+# --- acontains_many ---
+
+
+async def test_in_memory_store_acontains_many(store: InMemoryStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert await store.acontains_many(["1", "2", "3"]) == [True, True, False]
+
+
+# --- context manager ---
+
+
+async def test_in_memory_store_async_context_manager_returns_self() -> None:
+    async with InMemoryStore() as store:
+        assert isinstance(store, InMemoryStore)
+
+
+async def test_in_memory_store_async_context_manager_closes_on_normal_exit() -> None:
+    async with InMemoryStore() as store:
+        await store.aset("1", {"text": "hello"})
+        assert await store.acount() == 1
+
+    assert await store.acount() == 0
+
+
+async def test_in_memory_store_async_context_manager_closes_on_exception() -> None:
+    msg = "boom"
+    with pytest.raises(ValueError, match="boom"):
+        async with InMemoryStore() as store:
+            raise ValueError(msg)
+
+    assert await store.acount() == 0
+
+
+# --- aiter_batches ---
+
+
+async def test_in_memory_store_aiter_batches_yields_correct_batch_sizes(
+    store: InMemoryStore,
+) -> None:
+    await store.aset_many({str(i): {"a": i} for i in range(5)})
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert [len(batch) for batch in batches] == [2, 2, 1]
+
+
+# --- aset / aget edge cases ---
+
+
+async def test_in_memory_store_aset_does_not_alias_input(store: InMemoryStore) -> None:
+    value = {"text": "hello"}
+    await store.aset("1", value)
+    value["text"] = "mutated"
+    assert await store.aget("1") == {"text": "hello"}
+
+
+async def test_in_memory_store_aget_returns_a_copy(store: InMemoryStore) -> None:
+    await store.aset("1", {"tags": ["a"]})
+    value = await store.aget("1")
+    value["tags"].append("b")
+    assert await store.aget("1") == {"tags": ["a"]}
+
+
+async def test_in_memory_store_aiter_batches_zero_batch_size_raises(store: InMemoryStore) -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        _ = [batch async for batch in store.aiter_batches(batch_size=0)]
+
+
+async def test_in_memory_store_aiter_batches_negative_batch_size_raises(
+    store: InMemoryStore,
+) -> None:
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        _ = [batch async for batch in store.aiter_batches(batch_size=-1)]
+
+
+# --- concurrency ---
+
+
+def test_concurrent_set_many_merge_does_not_lose_updates(store: InMemoryStore) -> None:
+    """Many threads each merge a distinct field into the same key.
+
+    The store's lock must serialize the check-then-act merge sequence,
+    or concurrent writers reading the same stale base value would
+    clobber each other's fields (a lost update).
+    """
+    store.set("k", {})
+    n_threads = 16
+    barrier = threading.Barrier(n_threads)
+
+    def merge_one(i: int) -> None:
+        barrier.wait()
+        store.set("k", {f"field_{i}": i}, on_conflict="merge")
+
+    threads = [threading.Thread(target=merge_one, args=(i,)) for i in range(n_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    result = store.get("k")
+    assert result == {f"field_{i}": i for i in range(n_threads)}
+
+
+def test_concurrent_set_on_conflict_raise_never_corrupts_value(store: InMemoryStore) -> None:
+    """When many threads race to create the same key with
+    on_conflict="raise", exactly one write must win and the stored value
+    must be a single writer's value, not a mix."""
+    n_threads = 16
+    barrier = threading.Barrier(n_threads)
+    successes: list[int] = []
+    lock = threading.Lock()
+
+    def create_one(i: int) -> None:
+        barrier.wait()
+        try:
+            store.set("k", {"writer": i}, on_conflict="raise")
+        except KeyError:
+            return
+        with lock:
+            successes.append(i)
+
+    threads = [threading.Thread(target=create_one, args=(i,)) for i in range(n_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(successes) == 1
+    assert store.get("k") == {"writer": successes[0]}

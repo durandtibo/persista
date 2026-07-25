@@ -5,24 +5,30 @@ from __future__ import annotations
 
 __all__ = ["BasePostgresStore", "PostgresStore", "TypedPostgresStore"]
 
+import asyncio
 import logging
+import uuid
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
 from persista.store.validation import (
+    aresolve_conflicts,
     normalize_on_conflict,
+    resolve_conflicts,
     validate_batch_size,
     validate_field_name,
     validate_table_name,
+    validate_value_schema,
 )
 from persista.utils.imports import check_psycopg, is_psycopg_available
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator, Mapping
+    from collections.abc import AsyncIterator, Generator, Iterator, Mapping
     from typing import Self
 
     from persista.store.types import OnConflict
@@ -30,6 +36,7 @@ if TYPE_CHECKING:
 if is_psycopg_available():  # pragma: no cover
     import psycopg
     from psycopg import sql
+    from psycopg.conninfo import conninfo_to_dict
     from psycopg.types.json import Jsonb
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -38,21 +45,34 @@ logger: logging.Logger = logging.getLogger(__name__)
 class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     r"""Define a base class for Postgres-backed key-value stores.
 
+    Holds both a ``psycopg.Connection`` (opened eagerly in
+    ``__init__``) and a ``psycopg.AsyncConnection`` (opened lazily,
+    on first async use, guarded by an ``asyncio.Lock``). Unlike
+    :class:`~persista.store.sqlite.BaseSQLiteStore` (where
+    ``aiosqlite`` is a separate optional package layered on stdlib
+    ``sqlite3``), ``psycopg`` bundles both ``psycopg.Connection`` and
+    ``psycopg.AsyncConnection`` in the same package, which is already
+    a hard requirement for the sync side -- so every async method here
+    always uses :class:`psycopg.AsyncConnection` directly, with no
+    ``asyncio.to_thread`` fallback.
+
     A single table (named by the ``table`` argument, ``"store"`` by
     default) backs every value; the primary key column is named by
     :attr:`_key_column`. :meth:`get`, :meth:`get_many`, :meth:`filter`,
-    and :meth:`iter_batches` all query the full row and hand it to
-    :meth:`_row_to_value` to turn it back into a value dict, which is
-    what lets subclasses differ in how a value is laid out across
-    columns (a single JSONB column vs. typed columns plus a JSONB
-    overflow column) without duplicating any of the surrounding query
-    logic. This mirrors :class:`~persista.store.sqlite.BaseSQLiteStore`.
+    and :meth:`iter_batches` (and their async equivalents) all query
+    the full row and hand it to :meth:`_row_to_value` to turn it back
+    into a value dict, which is what lets subclasses differ in how a
+    value is laid out across columns (a single JSONB column vs. typed
+    columns plus a JSONB overflow column) without duplicating any of
+    the surrounding query logic. This mirrors
+    :class:`~persista.store.sqlite.BaseSQLiteStore`.
 
     Subclasses only need to implement :meth:`_create_table_sql`,
-    :meth:`_row_to_value`, :meth:`_build_filter_condition`, and
-    :meth:`_set_many` (see :class:`PostgresStore` for a JSONB-only
-    layout and :class:`~persista.store.postgres.TypedPostgresStore`
-    for an optionally typed one).
+    :meth:`_row_to_value`, :meth:`_build_filter_condition`,
+    :meth:`_set_many`, and :meth:`_aset_many` (see :class:`PostgresStore`
+    for a JSONB-only layout and
+    :class:`~persista.store.postgres.TypedPostgresStore` for an
+    optionally typed one).
 
     Args:
         conninfo: The connection string/DSN passed to
@@ -62,7 +82,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             valid SQL identifier (letters, digits, underscores, not
             starting with a digit).
         **kwargs: Additional keyword arguments to pass to
-            ``psycopg.connect``.
+            ``psycopg.connect``/``psycopg.AsyncConnection.connect``.
     """
 
     #: Name of the table's primary key column.
@@ -77,6 +97,17 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         self._closed = False
         self._conn = psycopg.connect(conninfo, autocommit=True, **kwargs)
         self._conn.execute(self._create_table_sql())
+        self._aconn: psycopg.AsyncConnection | None = None
+        self._aconn_lock = asyncio.Lock()
+
+    async def _ensure_aconn(self) -> psycopg.AsyncConnection:
+        async with self._aconn_lock:
+            if self._aconn is None:
+                self._aconn = await psycopg.AsyncConnection.connect(
+                    self._conninfo, autocommit=True, **self._kwargs
+                )
+                await self._aconn.execute(self._create_table_sql())
+        return self._aconn
 
     @property
     def _table_ident(self) -> sql.Identifier:
@@ -103,19 +134,71 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         """Write ``items`` to the table, replacing any existing row for
         the same key."""
 
+    @abstractmethod
+    async def _aset_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        """Async equivalent of :meth:`_set_many`."""
+
     def close(self) -> None:
+        if self._aconn is not None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                try:
+                    asyncio.run(self._aconn.close())
+                except RuntimeError:
+                    # The event loop that owned the async connection (e.g. a
+                    # per-test loop managed by pytest-asyncio) is already
+                    # closed, so the underlying transport is already gone;
+                    # there is nothing more to clean up.
+                    logger.debug(
+                        "Async Postgres connection for table %s could not be closed "
+                        "cleanly because its event loop is already closed",
+                        self._table,
+                    )
+                self._aconn = None
+            else:
+                msg = (
+                    "An async Postgres connection is open and close() was called from "
+                    "inside a running event loop; use `await store.aclose()` instead."
+                )
+                raise RuntimeError(msg)
         if self._closed:
             return
         logger.info("Closing Postgres connection for table %s", self._table)
         self._conn.close()
         self._closed = True
 
+    async def aclose(self) -> None:
+        if self._aconn is not None:
+            await self._aconn.close()
+            self._aconn = None
+        if not self._closed:
+            logger.info("Closing Postgres connection for table %s", self._table)
+            self._conn.close()
+            self._closed = True
+
     @property
     def closed(self) -> bool:
         return self._closed
 
     def to_uri(self) -> str:
-        return self._conninfo
+        if urlsplit(self._conninfo).scheme in {"postgres", "postgresql"}:
+            return self._conninfo
+        # `self._conninfo` is a keyword/value DSN (e.g. "dbname=foo host=bar"),
+        # which registry.store_from_uri can't dispatch on (no URI scheme to
+        # read); convert it to an equivalent postgresql:// URI so to_uri()
+        # always returns something from_uri()/the registry can consume.
+        params = {k: str(v) for k, v in conninfo_to_dict(self._conninfo).items()}
+        user = params.pop("user", None)
+        password = params.pop("password", None)
+        host = params.pop("host", "")
+        port = params.pop("port", None)
+        dbname = params.pop("dbname", "")
+        netloc = f"{host}:{port}" if port else host
+        if user:
+            auth = f"{user}:{password}" if password else user
+            netloc = f"{auth}@{netloc}"
+        return urlunsplit(("postgresql", netloc, f"/{dbname}", urlencode(params), ""))
 
     @classmethod
     def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
@@ -130,6 +213,16 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             row = cur.fetchone()
         return self._row_to_value(row) if row else None
 
+    async def aget(self, key: str) -> dict[str, Any] | None:
+        conn = await self._ensure_aconn()
+        query = sql.SQL("SELECT * FROM {table} WHERE {key_col} = %s").format(
+            table=self._table_ident, key_col=sql.Identifier(self._key_column)
+        )
+        async with conn.cursor() as cur:
+            await cur.execute(query, (key,))
+            row = await cur.fetchone()
+        return self._row_to_value(row) if row else None
+
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
         if not keys:
             return []
@@ -142,8 +235,26 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         by_key = {row[0]: self._row_to_value(row) for row in rows}
         return [by_key.get(key) for key in keys]
 
+    async def aget_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        if not keys:
+            return []
+        conn = await self._ensure_aconn()
+        query = sql.SQL("SELECT * FROM {table} WHERE {key_col} = ANY(%s)").format(
+            table=self._table_ident, key_col=sql.Identifier(self._key_column)
+        )
+        async with conn.cursor() as cur:
+            await cur.execute(query, (keys,))
+            rows = await cur.fetchall()
+        by_key = {row[0]: self._row_to_value(row) for row in rows}
+        return [by_key.get(key) for key in keys]
+
     def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
+
+    async def aset(
+        self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+    ) -> None:
+        await self.aset_many({key: value}, on_conflict=on_conflict)
 
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
@@ -155,21 +266,46 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        conflicts = set(self.contains_many(list(items))[0])
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
-            raise KeyError(msg)
+        # Check-then-act (resolve_conflicts followed by the write) isn't
+        # atomic on its own: a concurrent writer could touch one of these
+        # keys in between. Take a Postgres advisory lock per key for the
+        # duration of the transaction so a concurrent set/set_many on any
+        # of the same keys blocks until this one commits, making
+        # "raise"/"skip"/"merge" behave correctly under concurrency.
+        with self._conn.transaction():
+            self._lock_keys(self._conn, items)
+            to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
+            self._set_many(to_write)
 
-        to_write: dict[str, dict[str, Any]] = {}
-        for key, value in items.items():
-            if key in conflicts:
-                if on_conflict == "skip":
-                    continue
-                to_write[key] = {**(self.get(key) or {}), **value}
-                continue
-            to_write[key] = value
+    async def aset_many(
+        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+    ) -> None:
+        if not items:
+            return
+        on_conflict = normalize_on_conflict(on_conflict)
+        if on_conflict == "overwrite":
+            await self._aset_many(items)
+            return
 
-        self._set_many(to_write)
+        conn = await self._ensure_aconn()
+        async with conn.transaction():
+            await self._alock_keys(conn, items)
+            to_write = await aresolve_conflicts(items, on_conflict, self.acontains_many, self.aget)
+            await self._aset_many(to_write)
+
+    @staticmethod
+    def _lock_keys(conn: psycopg.Connection, items: Mapping[str, dict[str, Any]]) -> None:
+        with conn.cursor() as cur:
+            for key in items:
+                cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
+
+    @staticmethod
+    async def _alock_keys(
+        conn: psycopg.AsyncConnection, items: Mapping[str, dict[str, Any]]
+    ) -> None:
+        async with conn.cursor() as cur:
+            for key in items:
+                await cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         if not field_filters:
@@ -189,11 +325,37 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             rows = cur.fetchall()
         return [self._row_to_value(row) for row in rows]
 
+    async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        conn = await self._ensure_aconn()
+        if not field_filters:
+            query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
+            async with conn.cursor() as cur:
+                await cur.execute(query)
+                rows = await cur.fetchall()
+            return [self._row_to_value(row) for row in rows]
+
+        conditions = [self._build_filter_condition(key) for key in field_filters]
+        where = sql.SQL(" AND ").join(conditions)
+        query = sql.SQL("SELECT * FROM {table} WHERE {where}").format(
+            table=self._table_ident, where=where
+        )
+        async with conn.cursor() as cur:
+            await cur.execute(query, list(field_filters.values()))
+            rows = await cur.fetchall()
+        return [self._row_to_value(row) for row in rows]
+
     def delete(self, key: str) -> None:
         query = sql.SQL("DELETE FROM {table} WHERE {key_col} = %s").format(
             table=self._table_ident, key_col=sql.Identifier(self._key_column)
         )
         self._conn.execute(query, (key,))
+
+    async def adelete(self, key: str) -> None:
+        conn = await self._ensure_aconn()
+        query = sql.SQL("DELETE FROM {table} WHERE {key_col} = %s").format(
+            table=self._table_ident, key_col=sql.Identifier(self._key_column)
+        )
+        await conn.execute(query, (key,))
 
     def delete_many(self, keys: list[str]) -> None:
         if not keys:
@@ -203,9 +365,23 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         )
         self._conn.execute(query, (keys,))
 
+    async def adelete_many(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        conn = await self._ensure_aconn()
+        query = sql.SQL("DELETE FROM {table} WHERE {key_col} = ANY(%s)").format(
+            table=self._table_ident, key_col=sql.Identifier(self._key_column)
+        )
+        await conn.execute(query, (keys,))
+
     def clear(self) -> None:
         query = sql.SQL("DELETE FROM {table}").format(table=self._table_ident)
         self._conn.execute(query)
+
+    async def aclear(self) -> None:
+        conn = await self._ensure_aconn()
+        query = sql.SQL("DELETE FROM {table}").format(table=self._table_ident)
+        await conn.execute(query)
 
     def contains(self, key: str) -> bool:
         query = sql.SQL("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1").format(
@@ -215,18 +391,37 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             cur.execute(query, (key,))
             return cur.fetchone() is not None
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    async def acontains(self, key: str) -> bool:
+        conn = await self._ensure_aconn()
+        query = sql.SQL("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1").format(
+            table=self._table_ident, key_col=sql.Identifier(self._key_column)
+        )
+        async with conn.cursor() as cur:
+            await cur.execute(query, (key,))
+            return await cur.fetchone() is not None
+
+    def contains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
-            return [], []
+            return []
         query = sql.SQL("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)").format(
             table=self._table_ident, key_col=sql.Identifier(self._key_column)
         )
         with self._conn.cursor() as cur:
             cur.execute(query, (keys,))
             existing = {row[0] for row in cur.fetchall()}
-        found = [key for key in keys if key in existing]
-        missing = [key for key in keys if key not in existing]
-        return found, missing
+        return [key in existing for key in keys]
+
+    async def acontains_many(self, keys: list[str]) -> list[bool]:
+        if not keys:
+            return []
+        conn = await self._ensure_aconn()
+        query = sql.SQL("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)").format(
+            table=self._table_ident, key_col=sql.Identifier(self._key_column)
+        )
+        async with conn.cursor() as cur:
+            await cur.execute(query, (keys,))
+            existing = {row[0] for row in await cur.fetchall()}
+        return [key in existing for key in keys]
 
     def keys(self) -> Iterator[str]:
         query = sql.SQL("SELECT {key_col} FROM {table}").format(
@@ -237,27 +432,66 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             for (key,) in cur.fetchall():
                 yield key
 
+    async def akeys(self) -> AsyncIterator[str]:
+        conn = await self._ensure_aconn()
+        query = sql.SQL("SELECT {key_col} FROM {table}").format(
+            table=self._table_ident, key_col=sql.Identifier(self._key_column)
+        )
+        async with conn.cursor() as cur:
+            await cur.execute(query)
+            async for (key,) in cur:
+                yield key
+
     def iter_batches(
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
         query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
         # A named (server-side) cursor requires an explicit transaction
-        # block even on an autocommit connection.
+        # block even on an autocommit connection. The name includes a
+        # uuid4 so concurrent calls don't collide on the same server-side
+        # cursor name.
         with (
             self._conn.transaction(),
-            self._conn.cursor(name=f"iter_batches_{id(self)}") as cur,
+            self._conn.cursor(name=f"iter_batches_{uuid.uuid4().hex}") as cur,
         ):
             cur.itersize = batch_size
             cur.execute(query)
             for batch in batchify(cur, size=batch_size):
                 yield {row[0]: self._row_to_value(row) for row in batch}
 
+    async def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
+        validate_batch_size(batch_size)
+        conn = await self._ensure_aconn()
+        query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
+        async with (
+            conn.transaction(),
+            conn.cursor(name=f"aiter_batches_{uuid.uuid4().hex}") as cur,
+        ):
+            cur.itersize = batch_size
+            await cur.execute(query)
+            batch: dict[str, dict[str, Any]] = {}
+            async for row in cur:
+                batch[row[0]] = self._row_to_value(row)
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = {}
+            if batch:
+                yield batch
+
     def count(self) -> int:
         query = sql.SQL("SELECT COUNT(*) FROM {table}").format(table=self._table_ident)
         with self._conn.cursor() as cur:
             cur.execute(query)
             row = cur.fetchone()
+            return row[0] if row else 0
+
+    async def acount(self) -> int:
+        conn = await self._ensure_aconn()
+        query = sql.SQL("SELECT COUNT(*) FROM {table}").format(table=self._table_ident)
+        async with conn.cursor() as cur:
+            await cur.execute(query)
+            row = await cur.fetchone()
             return row[0] if row else 0
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
@@ -267,7 +501,21 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         return kwargs | self._kwargs
 
     def __enter__(self) -> Self:
+        if self._closed:
+            self._conn = psycopg.connect(self._conninfo, autocommit=True, **self._kwargs)
+            self._conn.execute(self._create_table_sql())
+            self._closed = False
         return self
+
+    async def __aenter__(self) -> Self:
+        if self._closed:
+            self._conn = psycopg.connect(self._conninfo, autocommit=True, **self._kwargs)
+            self._conn.execute(self._create_table_sql())
+            self._closed = False
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
 
 
 class PostgresStore(BasePostgresStore):
@@ -327,6 +575,17 @@ class PostgresStore(BasePostgresStore):
             with self._conn.cursor() as cur:
                 cur.executemany(query, [(key, Jsonb(value)) for key, value in items.items()])
 
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
+    async def _aset_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        if items:
+            conn = await self._ensure_aconn()
+            query = sql.SQL(
+                "INSERT INTO {table} ({key_col}, value) VALUES (%s, %s) "
+                "ON CONFLICT ({key_col}) DO UPDATE SET value = EXCLUDED.value"
+            ).format(table=self._table_ident, key_col=sql.Identifier(self._key_column))
+            async with conn.cursor() as cur:
+                await cur.executemany(query, [(key, Jsonb(value)) for key, value in items.items()])
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
 
@@ -400,6 +659,7 @@ class TypedPostgresStore(BasePostgresStore):
         if _KEY_COLUMN in value_schema:
             msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
             raise ValueError(msg)
+        validate_value_schema(value_schema)
         self._schema: dict[str, str] = value_schema
         super().__init__(conninfo, table=table, **kwargs)
 
@@ -407,7 +667,7 @@ class TypedPostgresStore(BasePostgresStore):
         typed_cols = sql.SQL("").join(
             sql.SQL(", {col} {dtype}").format(
                 col=sql.Identifier(name),
-                dtype=sql.SQL(dtype),  # pyright: ignore[reportArgumentType]
+                dtype=sql.SQL(dtype),
             )
             for name, dtype in self._schema.items()
         )
@@ -442,6 +702,16 @@ class TypedPostgresStore(BasePostgresStore):
                     query, [self._value_to_row(key, value) for key, value in items.items()]
                 )
 
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
+    async def _aset_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        if items:
+            conn = await self._ensure_aconn()
+            query = self._build_insert()
+            async with conn.cursor() as cur:
+                await cur.executemany(
+                    query, [self._value_to_row(key, value) for key, value in items.items()]
+                )
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
     def _build_insert(self) -> sql.Composed:

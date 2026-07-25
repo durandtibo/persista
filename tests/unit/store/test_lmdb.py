@@ -31,26 +31,6 @@ def store(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> Generator[BaseLmdbS
         yield store
 
 
-@pytest.fixture(scope="module")
-def items() -> dict[str, dict[str, Any]]:
-    return {
-        "1": {
-            "title": "Intro to Python",
-            "author": "Alice",
-            "year": 2022,
-            "category": "Programming",
-        },
-        "2": {
-            "title": "Advanced Python",
-            "author": "Alice",
-            "year": 2023,
-            "category": "Programming",
-        },
-        "3": {"title": "History of Rome", "author": "Bob", "year": 2021, "category": "History"},
-        "4": {"title": "History of Greece", "author": "Bob", "year": 2020, "category": "History"},
-    }
-
-
 ###############################
 #     Tests for LmdbStore     #
 ###############################
@@ -159,6 +139,14 @@ def test_set_many_empty_is_no_op(store: BaseLmdbStore) -> None:
     assert store.count() == 0
 
 
+def test_private_set_many_empty_is_no_op(store: BaseLmdbStore) -> None:
+    """``_set_many`` is normally only reached with non-empty ``items``
+    (``set_many`` returns early otherwise), so call it directly to cover
+    its own empty-input guard."""
+    store._set_many({})
+    assert store.count() == 0
+
+
 def test_set_many_default_overwrites_existing(store: BaseLmdbStore) -> None:
     store.set_many({"1": {"text": "original"}})
     store.set_many({"1": {"text": "updated"}})
@@ -251,6 +239,16 @@ def test_get_existing_value(store: BaseLmdbStore, items: dict[str, dict[str, Any
 
 def test_get_missing_key_returns_none(store: BaseLmdbStore) -> None:
     assert store.get("nonexistent") is None
+
+
+def test_set_get_unicode_key(store: BaseLmdbStore) -> None:
+    store.set("héllo-中文-🎉", {"text": "hello"})
+    assert store.get("héllo-中文-🎉") == {"text": "hello"}
+
+
+def test_set_empty_string_key_raises(store: BaseLmdbStore) -> None:
+    with pytest.raises(lmdb.BadValsizeError):
+        store.set("", {"text": "hello"})
 
 
 # --- get_many ---
@@ -442,46 +440,34 @@ def test_contains_false_when_store_empty(store: BaseLmdbStore) -> None:
 
 def test_contains_many_all_found(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "2", "3", "4"])
-    assert sorted(found) == ["1", "2", "3", "4"]
-    assert missing == []
+    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
 
 
 def test_contains_many_all_missing(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["99", "100"])
-    assert found == []
-    assert sorted(missing) == ["100", "99"]
+    assert store.contains_many(["99", "100"]) == [False, False]
 
 
 def test_contains_many_mixed(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "99", "3", "42"])
-    assert sorted(found) == ["1", "3"]
-    assert sorted(missing) == ["42", "99"]
+    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
 
 
 def test_contains_many_empty_input_returns_empty_lists(store: BaseLmdbStore) -> None:
-    found, missing = store.contains_many([])
-    assert found == []
-    assert missing == []
+    assert store.contains_many([]) == []
 
 
 def test_contains_many_empty_store_returns_all_missing(store: BaseLmdbStore) -> None:
-    found, missing = store.contains_many(["1", "2"])
-    assert found == []
-    assert sorted(missing) == ["1", "2"]
+    assert store.contains_many(["1", "2"]) == [False, False]
 
 
-def test_contains_many_returns_tuple_of_two_lists(
+def test_contains_many_returns_list_of_bools(
     store: BaseLmdbStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
     result = store.contains_many(["1", "99"])
-    assert isinstance(result, tuple)
-    assert len(result) == 2
-    assert isinstance(result[0], list)
-    assert isinstance(result[1], list)
+    assert isinstance(result, list)
+    assert all(isinstance(flag, bool) for flag in result)
 
 
 # --- keys ---
@@ -668,6 +654,37 @@ def test_context_manager_multiple_open_close_same_path(
             assert store.count() == i + 1
 
 
+# --- async context manager ---
+
+
+async def test_async_context_manager_returns_self(
+    store: BaseLmdbStore, store_cls: type[BaseLmdbStore]
+) -> None:
+    async with store as opened:
+        assert isinstance(opened, store_cls)
+
+
+async def test_async_context_manager_closes_on_normal_exit(
+    tmp_path: Path, store_cls: type[BaseLmdbStore]
+) -> None:
+    async with store_cls(tmp_path / "db") as store:
+        store.set("1", {"text": "hello"})
+        assert store.count() == 1
+    assert store._closed
+
+
+async def test_async_context_manager_multiple_open_close_same_path(
+    tmp_path: Path, store_cls: type[BaseLmdbStore]
+) -> None:
+    """Reopening after close via ``async with`` reconnects to the same
+    environment on disk, so previously written data is still there."""
+    lmdb_store = store_cls(tmp_path / "db")
+    for i in range(3):
+        async with lmdb_store as store:
+            store.set(str(i), {"text": "hello"})
+            assert store.count() == i + 1
+
+
 ###############################
 #     Tests for to_uri/from_uri     #
 ###############################
@@ -721,3 +738,63 @@ def test_json_store_normalizes_tuples_and_sets_are_unsupported(tmp_path: Path) -
         assert store.get("1") == {"coordinates": [1, 2, 3]}
         with pytest.raises(TypeError, match="not JSON serializable"):
             store.set("2", {"tags": {"python", "lmdb"}})
+
+
+###############################
+#     Tests for async APIs    #
+###############################
+
+
+# --- aget / aset ---
+
+
+async def test_lmdb_store_aget_aset_round_trip(store: BaseLmdbStore) -> None:
+    await store.aset("1", {"a": 1})
+    assert await store.aget("1") == {"a": 1}
+
+
+# --- acontains_many ---
+
+
+async def test_lmdb_store_acontains_many(store: BaseLmdbStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert await store.acontains_many(["1", "3"]) == [True, False]
+
+
+# --- akeys ---
+
+
+async def test_lmdb_store_akeys(store: BaseLmdbStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert sorted([key async for key in store.akeys()]) == ["1", "2"]
+
+
+# --- aiter_batches ---
+
+
+async def test_lmdb_store_aiter_batches(store: BaseLmdbStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
+    assert sum(len(b) for b in batches) == 3
+
+
+###############################
+#     Error paths             #
+###############################
+
+
+def test_set_raises_when_map_size_exhausted(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> None:
+    with (  # noqa: PT012
+        store_cls(tmp_path / "db", map_size=64 * 1024) as store,
+        pytest.raises(lmdb.MapFullError),
+    ):
+        for i in range(100_000):
+            store.set(str(i), {"text": "x" * 1000})
+
+
+def test_pickle_store_decode_raises_on_corrupted_bytes(tmp_path: Path) -> None:
+    with PickleLmdbStore(tmp_path / "db") as store:
+        with store._env.begin(write=True) as txn:
+            txn.put(b"1", b"not-a-valid-pickle-blob")
+        with pytest.raises(Exception):  # noqa: B017, PT011
+            store.get("1")

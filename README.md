@@ -122,28 +122,33 @@ See the [documentation](https://durandtibo.github.io/persista/) for detailed exa
 
 ### 🗄️ **Key-Value Stores**
 
-A consistent `BaseStore` / `AsyncBaseStore` interface for storing dict values under string keys:
+A consistent `BaseStore` interface for storing dict values under string keys, with both
+synchronous and `a`-prefixed asynchronous methods on every store:
 
-- Uniform API across backends: `get`, `get_many`, `set`, `set_many`, `delete`, `filter`, iteration
-- Sync backends: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`
-- Async backends: `AsyncInMemoryStore`, `AsyncSQLiteStore`, `AsyncRedisStore`, `AsyncPostgresStore`
+- Uniform API across backends: `get`/`aget`, `get_many`/`aget_many`, `set`/`aset`,
+  `set_many`/`aset_many`, `delete`/`adelete`, `filter`/`afilter`, iteration
+- Backends: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`
 - Typed variants (`TypedSQLiteStore`, `TypedPostgresStore`, ...) and pickle-backed variants
-  (`PickleLmdbStore`, `PickleRedisStore`, `AsyncPickleRedisStore`) for non-dict values
-- Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`)
+  (`PickleLmdbStore`, `PickleRedisStore`) for non-dict values
+- Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`, `"merge"`)
 
 ### ⏱️ **TTL Caching**
 
 Time-to-live caching for functions and values, with sync and async variants:
 
-- `Cache` and `AsyncCache` for explicit cache instances
+- `Cache`, with sync and async (`a`-prefixed) methods, for explicit cache instances
 - `cached` / `async_cached` decorators for caching function calls
-- Shared default caches via `get_cache` / `get_async_cache`
+- A shared default cache via `get_cache`
 
 ### 🌐 **HTTP Utilities**
 
 Helpers to fetch HTTP responses with automatic retries, built on top of `requests` or `httpx`:
 
-- `fetch_response` (sync, `requests`) and `fetch_response_async` (async, `httpx`)
+- `fetch_response` (sync, `requests`); `get_response`/`post_response`/`put_response`/
+  `patch_response`/`delete_response`/`send_request` (sync, `httpx`) and their `_async`
+  counterparts (async, `httpx`)
+- `HttpClient`/`AsyncHttpClient`: class-based wrappers around `httpx.Client`/`httpx.AsyncClient`
+  with the same retries, plus optional response caching via a `Cache`
 
 ## Installation
 
@@ -191,7 +196,7 @@ pip install persista[redis,httpx]  # with Redis and httpx support
 | `aiosqlite` | Async SQLite store                    |
 | `duckdb`    | DuckDB store                          |
 | `faker`     | Test data generation helpers          |
-| `httpx`     | Async HTTP fetch utilities            |
+| `httpx`     | Sync/async HTTP fetch utilities       |
 | `lmdb`      | LMDB store                            |
 | `psycopg`   | PostgreSQL store                      |
 | `redis`     | Redis store                           |

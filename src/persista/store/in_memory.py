@@ -6,16 +6,22 @@ __all__ = ["InMemoryStore"]
 
 import copy
 import logging
+import threading
 from typing import TYPE_CHECKING, Any
 
 from coola.display import InlineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
-from persista.store.validation import normalize_on_conflict, validate_batch_size
+from persista.store.threaded import ThreadedAsyncStoreMixin
+from persista.store.validation import (
+    normalize_on_conflict,
+    resolve_conflicts,
+    validate_batch_size,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator, Mapping
+    from collections.abc import Iterator, Mapping
 
     from typing_extensions import Self
 
@@ -25,13 +31,16 @@ if TYPE_CHECKING:
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class InMemoryStore(BaseStore, InlineDisplayMixin):
+class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
     """A :class:`~persista.store.BaseStore` implementation backed
     by a plain ``dict``.
 
     Values are held entirely in process memory -- nothing is
     persisted to disk. This is primarily useful for testing,
     small-scale exploration, or pipelines that don't need durability.
+    Async methods (``aget``, ``aset``, ...) are provided by
+    :class:`~persista.store._threaded.ThreadedAsyncStoreMixin`, which
+    runs each sync call in a worker thread.
 
     Values are deep-copied on both write and read so that mutating a
     value returned by this store (or a value passed into :meth:`set`
@@ -55,6 +64,7 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
     def __init__(self) -> None:
         self._data: dict[str, dict[str, Any]] = {}
         self._closed = False
+        self._lock = threading.RLock()
 
     @property
     def data(self) -> dict[str, dict[str, Any]]:
@@ -65,19 +75,30 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
         # persist, so closing (and later reopening via the context
         # manager) it is equivalent to starting over with a fresh,
         # empty store.
-        self._data.clear()
-        self._closed = True
+        with self._lock:
+            self._data.clear()
+            self._closed = True
 
     @property
     def closed(self) -> bool:
         return self._closed
 
+    def __enter__(self) -> Self:
+        self._closed = False
+        return self
+
+    async def __aenter__(self) -> Self:
+        self._closed = False
+        return self
+
     def get(self, key: str) -> dict[str, Any] | None:
-        value = self._data.get(key)
-        return copy.deepcopy(value) if value is not None else None
+        with self._lock:
+            value = self._data.get(key)
+            return copy.deepcopy(value) if value is not None else None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
-        return [self.get(key) for key in keys]
+        with self._lock:
+            return [self.get(key) for key in keys]
 
     def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
@@ -87,68 +108,67 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
     ) -> None:
         on_conflict = normalize_on_conflict(on_conflict)
 
-        if on_conflict == "overwrite":
-            for key, value in items.items():
+        with self._lock:
+            if on_conflict == "overwrite":
+                for key, value in items.items():
+                    self._data[key] = copy.deepcopy(value)
+                logger.debug("Added/replaced %d key-value pair(s)", len(items))
+                return
+
+            to_write = resolve_conflicts(items, on_conflict, self.contains_many, self._data.get)
+            for key, value in to_write.items():
                 self._data[key] = copy.deepcopy(value)
-            logger.debug("Added/replaced %d key-value pair(s)", len(items))
-            return
 
-        conflicts = [key for key in items if key in self._data]
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {conflicts}"
-            raise KeyError(msg)
-
-        for key, value in items.items():
-            if key in self._data:
-                if on_conflict == "skip":
-                    continue
-                self._data[key] = {**self._data[key], **copy.deepcopy(value)}
-                continue
-            self._data[key] = copy.deepcopy(value)
-
-        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+            logger.debug("Added/replaced %d key-value pair(s)", len(to_write))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
-        if not field_filters:
-            return [copy.deepcopy(value) for value in self._data.values()]
+        with self._lock:
+            if not field_filters:
+                return [copy.deepcopy(value) for value in self._data.values()]
 
-        matches = [
-            value
-            for value in self._data.values()
-            if all(value.get(key) == val for key, val in field_filters.items())
-        ]
-        return [copy.deepcopy(value) for value in matches]
+            matches = [
+                value
+                for value in self._data.values()
+                if all(value.get(key) == val for key, val in field_filters.items())
+            ]
+            return [copy.deepcopy(value) for value in matches]
 
     def delete(self, key: str) -> None:
-        self._data.pop(key, None)
+        with self._lock:
+            self._data.pop(key, None)
 
     def delete_many(self, keys: list[str]) -> None:
-        for key in keys:
-            self.delete(key)
+        with self._lock:
+            for key in keys:
+                self.delete(key)
 
     def clear(self) -> None:
-        self._data.clear()
+        with self._lock:
+            self._data.clear()
 
     def contains(self, key: str) -> bool:
-        return key in self._data
+        with self._lock:
+            return key in self._data
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
-        found = [key for key in keys if key in self._data]
-        missing = [key for key in keys if key not in self._data]
-        return found, missing
+    def contains_many(self, keys: list[str]) -> list[bool]:
+        with self._lock:
+            return [key in self._data for key in keys]
 
     def keys(self) -> Iterator[str]:
-        yield from list(self._data.keys())
+        with self._lock:
+            snapshot = list(self._data.keys())
+        yield from snapshot
 
-    def iter_batches(
-        self, batch_size: int = 32
-    ) -> Generator[dict[str, dict[str, Any]], None, None]:
+    def iter_batches(self, batch_size: int = 32) -> Iterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
-        for batch in batchify(self._data.items(), size=batch_size):
+        with self._lock:
+            snapshot = list(self._data.items())
+        for batch in batchify(snapshot, size=batch_size):
             yield dict(batch)
 
     def count(self) -> int:
-        return len(self._data)
+        with self._lock:
+            return len(self._data)
 
     def to_uri(self) -> str:
         return "memory://"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = ["BaseRedisStore", "PickleRedisStore", "RedisStore"]
 
+import asyncio
 import json
 import logging
 import pickle
@@ -14,17 +15,23 @@ from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
-from persista.store.validation import normalize_on_conflict, validate_batch_size
+from persista.store.validation import (
+    aresolve_conflicts,
+    normalize_on_conflict,
+    resolve_conflicts,
+    validate_batch_size,
+)
 from persista.utils.imports import check_redis, is_redis_available
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator, Mapping
+    from collections.abc import AsyncIterator, Generator, Iterator, Mapping
     from typing import Self
 
     from persista.store.types import OnConflict
 
 if is_redis_available():  # pragma: no cover
     import redis
+    import redis.asyncio as aredis
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -47,6 +54,13 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
     encoding and :class:`~persista.store.redis_pickle.PickleRedisStore`
     for a pickle encoding).
 
+    Every sync method runs through the eagerly-created ``redis.Redis``
+    client; every async (``a``-prefixed) method runs through a
+    ``redis.asyncio.Redis`` client, created lazily on first use, since
+    ``redis-py`` bundles both under one package (unlike
+    SQLite/aiosqlite, no ``asyncio.to_thread`` fallback is needed
+    here).
+
     Args:
         url: The Redis connection URL passed to
             ``redis.Redis.from_url`` (e.g.
@@ -66,6 +80,16 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         self._kwargs = kwargs
         self._closed = False
         self._client = redis.Redis.from_url(url, decode_responses=self._decode_responses, **kwargs)
+        self._aclient: aredis.Redis | None = None
+        self._aclient_lock = asyncio.Lock()
+
+    async def _ensure_aclient(self) -> aredis.Redis:
+        async with self._aclient_lock:
+            if self._aclient is None:
+                self._aclient = aredis.Redis.from_url(
+                    self._url, decode_responses=self._decode_responses, **self._kwargs
+                )
+        return self._aclient
 
     @abstractmethod
     def _encode(self, value: dict[str, Any]) -> Any:
@@ -82,11 +106,43 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         return key.decode() if isinstance(key, bytes) else key
 
     def close(self) -> None:
+        if self._aclient is not None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                try:
+                    asyncio.run(self._aclient.aclose())
+                except RuntimeError:
+                    # The event loop that owned the async connection (e.g. a
+                    # per-test loop managed by pytest-asyncio) is already
+                    # closed, so the underlying transport is already gone;
+                    # there is nothing more to clean up.
+                    logger.debug(
+                        "Async Redis connection at %s could not be closed cleanly "
+                        "because its event loop is already closed",
+                        self._url,
+                    )
+                self._aclient = None
+            else:
+                msg = (
+                    "An async Redis connection is open and close() was called from "
+                    "inside a running event loop; use `await store.aclose()` instead."
+                )
+                raise RuntimeError(msg)
         if self._closed:
             return
         logger.info("Closing Redis connection at %s", self._url)
         self._client.close()
         self._closed = True
+
+    async def aclose(self) -> None:
+        if self._aclient is not None:
+            await self._aclient.aclose()
+            self._aclient = None
+        if not self._closed:
+            logger.info("Closing Redis connection at %s", self._url)
+            self._client.close()
+            self._closed = True
 
     @property
     def closed(self) -> bool:
@@ -103,40 +159,105 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         value = self._client.get(key)
         return self._decode(value) if value is not None else None
 
+    async def aget(self, key: str) -> dict[str, Any] | None:
+        client = await self._ensure_aclient()
+        value = await client.get(key)
+        return self._decode(value) if value is not None else None
+
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
         if not keys:
             return []
         values = self._client.mget(keys)
         return [self._decode(value) if value is not None else None for value in values]
 
+    async def aget_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        if not keys:
+            return []
+        client = await self._ensure_aclient()
+        values = await client.mget(keys)
+        return [self._decode(value) if value is not None else None for value in values]
+
     def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
+
+    async def aset(
+        self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+    ) -> None:
+        await self.aset_many({key: value}, on_conflict=on_conflict)
+
+    @staticmethod
+    def _check_no_reserved_keys(items: Mapping[str, dict[str, Any]]) -> None:
+        if _KEYS_SET in items:
+            msg = (
+                f"key {_KEYS_SET!r} is reserved for this store's internal keys-tracking "
+                f"set and cannot be used as a data key"
+            )
+            raise ValueError(msg)
 
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
         if not items:
             return
+        self._check_no_reserved_keys(items)
         on_conflict = normalize_on_conflict(on_conflict)
         if on_conflict == "overwrite":
             self._set_many(items)
             return
 
-        conflicts = set(self.contains_many(list(items))[0])
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
-            raise KeyError(msg)
-
-        to_write: dict[str, dict[str, Any]] = {}
-        for key, value in items.items():
-            if key in conflicts:
-                if on_conflict == "skip":
+        # Check-then-act (resolve_conflicts followed by the write) isn't
+        # atomic on its own: a concurrent writer could touch one of these
+        # keys in between. WATCH the target keys and retry the whole
+        # resolve+write cycle if any of them changed before we could
+        # commit, so "raise"/"skip"/"merge" behave correctly even under
+        # concurrent access from other clients/processes.
+        keys = list(items.keys())
+        with self._client.pipeline() as pipe:
+            while True:
+                pipe.watch(*keys)
+                try:
+                    to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
+                    pipe.multi()
+                    for key, value in to_write.items():
+                        pipe.set(key, self._encode(value))
+                    if to_write:
+                        pipe.sadd(_KEYS_SET, *to_write.keys())
+                    pipe.execute()
+                except redis.WatchError:
                     continue
-                to_write[key] = {**(self.get(key) or {}), **value}
-                continue
-            to_write[key] = value
+                else:
+                    return
 
-        self._set_many(to_write)
+    async def aset_many(
+        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+    ) -> None:
+        if not items:
+            return
+        self._check_no_reserved_keys(items)
+        on_conflict = normalize_on_conflict(on_conflict)
+        if on_conflict == "overwrite":
+            await self._aset_many(items)
+            return
+
+        keys = list(items.keys())
+        client = await self._ensure_aclient()
+        async with client.pipeline() as pipe:
+            while True:
+                await pipe.watch(*keys)
+                try:
+                    to_write = await aresolve_conflicts(
+                        items, on_conflict, self.acontains_many, self.aget
+                    )
+                    pipe.multi()
+                    for key, value in to_write.items():
+                        pipe.set(key, self._encode(value))
+                    if to_write:
+                        pipe.sadd(_KEYS_SET, *to_write.keys())
+                    await pipe.execute()
+                except redis.WatchError:
+                    continue
+                else:
+                    return
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
@@ -148,10 +269,27 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
+    async def _aset_many(self, items: Mapping[str, dict[str, Any]]) -> None:
+        if items:
+            client = await self._ensure_aclient()
+            pipe = client.pipeline()
+            for key, value in items.items():
+                pipe.set(key, self._encode(value))
+            pipe.sadd(_KEYS_SET, *items.keys())
+            await pipe.execute()
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         return [
             value
             for value in self.values()
+            if all(value.get(name) == expected for name, expected in field_filters.items())
+        ]
+
+    async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        return [
+            value
+            async for value in self.avalues()
             if all(value.get(name) == expected for name, expected in field_filters.items())
         ]
 
@@ -161,6 +299,13 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         pipe.srem(_KEYS_SET, key)
         pipe.execute()
 
+    async def adelete(self, key: str) -> None:
+        client = await self._ensure_aclient()
+        pipe = client.pipeline()
+        pipe.delete(key)
+        pipe.srem(_KEYS_SET, key)
+        await pipe.execute()
+
     def delete_many(self, keys: list[str]) -> None:
         if not keys:
             return
@@ -169,22 +314,48 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         pipe.srem(_KEYS_SET, *keys)
         pipe.execute()
 
+    async def adelete_many(self, keys: list[str]) -> None:
+        if not keys:
+            return
+        client = await self._ensure_aclient()
+        pipe = client.pipeline()
+        pipe.delete(*keys)
+        pipe.srem(_KEYS_SET, *keys)
+        await pipe.execute()
+
     def clear(self) -> None:
         self.delete_many(list(self.keys()))
+
+    async def aclear(self) -> None:
+        await self.adelete_many([key async for key in self.akeys()])
 
     def contains(self, key: str) -> bool:
         return bool(self._client.sismember(_KEYS_SET, key))
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
+    async def acontains(self, key: str) -> bool:
+        client = await self._ensure_aclient()
+        return bool(await client.sismember(_KEYS_SET, key))
+
+    def contains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
-            return [], []
+            return []
         flags = self._client.smismember(_KEYS_SET, keys)
-        found = [key for key, flag in zip(keys, flags, strict=True) if flag]
-        missing = [key for key, flag in zip(keys, flags, strict=True) if not flag]
-        return found, missing
+        return [bool(flag) for flag in flags]
+
+    async def acontains_many(self, keys: list[str]) -> list[bool]:
+        if not keys:
+            return []
+        client = await self._ensure_aclient()
+        flags = await client.smismember(_KEYS_SET, keys)
+        return [bool(flag) for flag in flags]
 
     def keys(self) -> Iterator[str]:
         for key in self._client.smembers(_KEYS_SET):
+            yield self._key_str(key)
+
+    async def akeys(self) -> AsyncIterator[str]:
+        client = await self._ensure_aclient()
+        for key in await client.smembers(_KEYS_SET):
             yield self._key_str(key)
 
     def iter_batches(
@@ -200,8 +371,24 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
                 if value is not None
             }
 
+    async def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
+        validate_batch_size(batch_size)
+        client = await self._ensure_aclient()
+        all_keys = [self._key_str(key) for key in await client.smembers(_KEYS_SET)]
+        for batch in batchify(all_keys, size=batch_size):
+            values = await client.mget(batch)
+            yield {
+                key: self._decode(value)
+                for key, value in zip(batch, values, strict=True)
+                if value is not None
+            }
+
     def count(self) -> int:
         return self._client.scard(_KEYS_SET)
+
+    async def acount(self) -> int:
+        client = await self._ensure_aclient()
+        return await client.scard(_KEYS_SET)
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"url": self._url, "closed": self._closed}
@@ -219,6 +406,17 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+    async def __aenter__(self) -> Self:
+        if self._closed:
+            self._client = redis.Redis.from_url(
+                self._url, decode_responses=self._decode_responses, **self._kwargs
+            )
+            self._closed = False
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
 
 
 class RedisStore(BaseRedisStore):

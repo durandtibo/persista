@@ -21,7 +21,6 @@ if is_httpx_available():  # pragma: no cover
     import httpx
 
 if TYPE_CHECKING:
-    from persista.cache.async_cache import AsyncCache
     from persista.cache.cache import Cache
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -226,8 +225,9 @@ class AsyncHttpClient:
 
     This is the async counterpart of :class:`HttpClient`. See its
     docstring for the retry and caching behavior; the only difference
-    is that ``cache`` is an :class:`~persista.cache.async_cache.AsyncCache`
-    and the wrapped client is an :class:`httpx.AsyncClient`.
+    is that the wrapped client is an :class:`httpx.AsyncClient` and
+    caching is done through :class:`~persista.cache.cache.Cache`'s
+    async methods (``aget``/``aset``).
 
     Args:
         timeout: Default request timeout in seconds per attempt.
@@ -235,7 +235,7 @@ class AsyncHttpClient:
             transient failures.
         retry_status_codes: The HTTP status codes that trigger a
             retry by default.
-        cache: An optional :class:`~persista.cache.async_cache.AsyncCache`
+        cache: An optional :class:`~persista.cache.cache.Cache`
             used to cache responses. ``None`` (the default) disables
             caching entirely.
         cacheable_methods: The HTTP methods (case-insensitive) whose
@@ -265,7 +265,7 @@ class AsyncHttpClient:
         timeout: int = 30,
         max_retries: int = 3,
         retry_status_codes: set[int] | frozenset[int] = DEFAULT_RETRY_STATUS_CODES,
-        cache: AsyncCache | None = None,
+        cache: Cache | None = None,
         cacheable_methods: set[str] | frozenset[str] = frozenset({"GET"}),
     ) -> None:
         check_httpx()
@@ -294,7 +294,7 @@ class AsyncHttpClient:
         cache = self._cache
         cacheable = cache is not None and method in self._cacheable_methods
         key = _cache_key(method, url, kwargs) if cacheable else None
-        if cache is not None and key is not None and (entry := await cache.get(key)) is not None:
+        if cache is not None and key is not None and (entry := await cache.aget(key)) is not None:
             logger.debug("Serving %s %s from cache", method, url)
             return _entry_to_response(entry)
 
@@ -310,7 +310,7 @@ class AsyncHttpClient:
             **kwargs,
         )
         if cache is not None and key is not None and response.is_success:
-            await cache.set(key, _response_to_entry(response))
+            await cache.aset(key, _response_to_entry(response))
         return response
 
     async def get(self, url: str, **kwargs: Any) -> httpx.Response:

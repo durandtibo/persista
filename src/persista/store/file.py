@@ -16,8 +16,13 @@ from coola.utils.path import sanitize_path
 from iden.io import load_json, load_pickle, save_json, save_pickle
 
 from persista.store.base import BaseStore
+from persista.store.threaded import ThreadedAsyncStoreMixin
 from persista.store.uri import decode_path_uri, encode_path_uri
-from persista.store.validation import normalize_on_conflict, validate_batch_size
+from persista.store.validation import (
+    normalize_on_conflict,
+    resolve_conflicts,
+    validate_batch_size,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator, Mapping
@@ -30,7 +35,7 @@ if TYPE_CHECKING:
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class BaseFileStore(BaseStore, MultilineDisplayMixin):
+class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     r"""Define a base class for file-based key-value stores.
 
     Each value is persisted as its own file in a directory, using
@@ -55,6 +60,12 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
     """
 
     def __init__(self, path: str | PathLike[str], **kwargs: Any) -> None:
+        if not self.extension:
+            msg = (
+                "extension must be a non-empty string: an empty extension would let a "
+                "key like '..' escape the store's directory."
+            )
+            raise ValueError(msg)
         self._path = sanitize_path(path)
         if self._path.exists() and not self._path.is_dir():
             msg = f"path must be a directory: {self._path}"
@@ -98,7 +109,13 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
     def closed(self) -> bool:
         return self._closed
 
+    def _check_open(self) -> None:
+        if self._closed:
+            msg = "Cannot operate on a closed store."
+            raise ValueError(msg)
+
     def get(self, key: str) -> dict[str, Any] | None:
+        self._check_open()
         file_path = self._key_to_path(key)
         return self._load(file_path) if file_path.is_file() else None
 
@@ -111,6 +128,7 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
+        self._check_open()
         if not items:
             return
         on_conflict = normalize_on_conflict(on_conflict)
@@ -118,20 +136,7 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        conflicts = set(self.contains_many(list(items))[0])
-        if conflicts and on_conflict == "raise":
-            msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
-            raise KeyError(msg)
-
-        to_write: dict[str, dict[str, Any]] = {}
-        for key, value in items.items():
-            if key in conflicts:
-                if on_conflict == "skip":
-                    continue
-                to_write[key] = {**(self.get(key) or {}), **value}
-                continue
-            to_write[key] = value
-
+        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
         self._set_many(to_write)
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
@@ -147,6 +152,7 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
         ]
 
     def delete(self, key: str) -> None:
+        self._check_open()
         self._key_to_path(key).unlink(missing_ok=True)
 
     def delete_many(self, keys: list[str]) -> None:
@@ -154,40 +160,42 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
             self.delete(key)
 
     def clear(self) -> None:
+        self._check_open()
         for file_path in self._iter_files():
             file_path.unlink(missing_ok=True)
 
     def contains(self, key: str) -> bool:
+        self._check_open()
         return self._key_to_path(key).is_file()
 
-    def contains_many(self, keys: list[str]) -> tuple[list[str], list[str]]:
-        flags = [self._key_to_path(key).is_file() for key in keys]
-        found = [key for key, flag in zip(keys, flags, strict=True) if flag]
-        missing = [key for key, flag in zip(keys, flags, strict=True) if not flag]
-        return found, missing
+    def contains_many(self, keys: list[str]) -> list[bool]:
+        return [self.contains(key) for key in keys]
 
     def _iter_files(self) -> Iterator[Path]:
         return (
             file_path
             for file_path in self._path.iterdir()
-            if file_path.is_file() and file_path.suffix == self.extension
+            if file_path.is_file() and file_path.name.endswith(self.extension)
         )
 
     def keys(self) -> Iterator[str]:
+        self._check_open()
         yield from (self._path_to_key(file_path) for file_path in self._iter_files())
 
     def iter_batches(
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
-        all_items = [
+        self._check_open()
+        items = (
             (self._path_to_key(file_path), self._load(file_path))
             for file_path in self._iter_files()
-        ]
-        for batch in batchify(all_items, size=batch_size):
+        )
+        for batch in batchify(items, size=batch_size):
             yield dict(batch)
 
     def count(self) -> int:
+        self._check_open()
         return sum(1 for _ in self._iter_files())
 
     def to_uri(self) -> str:
@@ -209,6 +217,13 @@ class BaseFileStore(BaseStore, MultilineDisplayMixin):
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+    async def __aenter__(self) -> Self:
+        self._closed = False
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
 
 
 class JsonFileStore(BaseFileStore):

@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from persista.cache import AsyncCache, Cache
+from persista.cache import Cache
 from persista.http.httpx.client import AsyncHttpClient, HttpClient
 
 if TYPE_CHECKING:
@@ -154,7 +154,7 @@ def test_http_client_does_not_cache_error_response() -> None:
 
 async def test_async_http_client_caches_get_on_hit() -> None:
     handler, calls = _counting_handler(lambda n: {"n": n})
-    client = AsyncHttpClient(cache=AsyncCache(), client=_async_client(handler))
+    client = AsyncHttpClient(cache=Cache(), client=_async_client(handler))
 
     r1 = await client.get("https://example.com/foo")
     r2 = await client.get("https://example.com/foo")

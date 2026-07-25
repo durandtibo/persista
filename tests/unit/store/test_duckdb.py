@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -54,26 +55,6 @@ def store_read_only(
         store.set_many(items)
     with store_cls(path, read_only=True) as store:
         yield store
-
-
-@pytest.fixture(scope="module")
-def items() -> dict[str, dict[str, Any]]:
-    return {
-        "1": {
-            "title": "Intro to Python",
-            "author": "Alice",
-            "year": 2022,
-            "category": "Programming",
-        },
-        "2": {
-            "title": "Advanced Python",
-            "author": "Alice",
-            "year": 2023,
-            "category": "Programming",
-        },
-        "3": {"title": "History of Rome", "author": "Bob", "year": 2021, "category": "History"},
-        "4": {"title": "History of Greece", "author": "Bob", "year": 2020, "category": "History"},
-    }
 
 
 #####################################################
@@ -388,6 +369,15 @@ def test_filter_integer_value_no_match_returns_empty(
     assert store.filter(year=9999) == []
 
 
+def test_filter_matches_explicit_json_null(store: BaseDuckDBStore) -> None:
+    """``NULL = ?`` never matches even when the bound parameter is
+    ``NULL``, so filtering on an explicit ``None`` value must use ``IS
+    NULL`` instead."""
+    store.set("1", {"author": None, "title": "Untitled"})
+    store.set("2", {"author": "Alice", "title": "Titled"})
+    assert store.filter(author=None) == [{"author": None, "title": "Untitled"}]
+
+
 # --- delete ---
 
 
@@ -496,48 +486,36 @@ def test_contains_false_when_store_empty(store: BaseDuckDBStore) -> None:
 
 def test_contains_many_all_found(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "2", "3", "4"])
-    assert found == ["1", "2", "3", "4"]
-    assert missing == []
+    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
 
 
 def test_contains_many_all_missing(
     store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["99", "100"])
-    assert found == []
-    assert missing == ["99", "100"]
+    assert store.contains_many(["99", "100"]) == [False, False]
 
 
 def test_contains_many_mixed(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "99", "3", "42"])
-    assert found == ["1", "3"]
-    assert missing == ["99", "42"]
+    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
 
 
 def test_contains_many_empty_input_returns_empty_lists(store: BaseDuckDBStore) -> None:
-    found, missing = store.contains_many([])
-    assert found == []
-    assert missing == []
+    assert store.contains_many([]) == []
 
 
 def test_contains_many_empty_store_returns_all_missing(store: BaseDuckDBStore) -> None:
-    found, missing = store.contains_many(["1", "2"])
-    assert found == []
-    assert missing == ["1", "2"]
+    assert store.contains_many(["1", "2"]) == [False, False]
 
 
-def test_contains_many_returns_tuple_of_two_lists(
+def test_contains_many_returns_list_of_bools(
     store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
     result = store.contains_many(["1", "99"])
-    assert isinstance(result, tuple)
-    assert len(result) == 2
-    assert isinstance(result[0], list)
-    assert isinstance(result[1], list)
+    assert isinstance(result, list)
+    assert all(isinstance(flag, bool) for flag in result)
 
 
 # --- columns_info ---
@@ -694,6 +672,30 @@ def test_iter_batches_does_not_mutate_store(
     assert store.count() == len(items)
 
 
+def test_iter_batches_paginates_instead_of_loading_everything(store: BaseDuckDBStore) -> None:
+    """iter_batches must page through the table with LIMIT/OFFSET rather
+    than fetchall()-ing the whole table up front, so it stays bounded in
+    memory regardless of table size."""
+    n = 25
+    store.set_many({str(i): {"a": i} for i in range(n)})
+    batches = list(store.iter_batches(batch_size=10))
+    assert [len(batch) for batch in batches] == [10, 10, 5]
+    all_pairs = {key: value for batch in batches for key, value in batch.items()}
+    assert all_pairs == {str(i): {"a": i} for i in range(n)}
+
+
+def test_iter_batches_no_duplicate_or_skipped_rows_across_many_batches(
+    store: BaseDuckDBStore,
+) -> None:
+    n = 103
+    store.set_many({str(i): {"a": i} for i in range(n)})
+    seen: list[str] = []
+    for batch in store.iter_batches(batch_size=7):
+        seen.extend(batch.keys())
+    assert sorted(seen, key=int) == [str(i) for i in range(n)]
+    assert len(seen) == len(set(seen))
+
+
 # --- close ---
 
 
@@ -784,6 +786,35 @@ def test_context_manager_multiple_open_close_persistent(
             assert store.count() == i + 1
 
 
+async def test_async_context_manager_reopens_after_close(
+    store_cls: type[BaseDuckDBStore],
+) -> None:
+    """``async with`` on a closed store must reopen the connection the
+    same way the sync ``with`` does, rather than operating on a stale,
+    closed connection."""
+    duckdb_store = store_cls(":memory:")
+    duckdb_store.close()
+    assert duckdb_store.closed
+    async with duckdb_store as store:
+        assert not store.closed
+        await store.aset("1", {"text": "hello"})
+        assert await store.acount() == 1
+    assert duckdb_store.closed
+
+
+async def test_async_context_manager_reentry_on_open_store_does_not_reset(
+    store_cls: type[BaseDuckDBStore],
+) -> None:
+    """``__aenter__`` on a store that isn't closed must be a no-op --
+    it should not reopen the connection or reset its contents."""
+    async with store_cls(":memory:") as store:
+        await store.aset("1", {"text": "hello"})
+        async with store as reentered:
+            assert reentered is store
+            assert not store.closed
+            assert await store.acount() == 1
+
+
 ##########################################################
 #     TypedDuckDBStore-specific schema behavior          #
 ##########################################################
@@ -809,6 +840,19 @@ def test_init_with_schema_creates_typed_columns(typed_store: TypedDuckDBStore) -
 def test_init_schema_with_reserved_key_column_raises() -> None:
     with pytest.raises(ValueError, match="reserved key column name"):
         TypedDuckDBStore(":memory:", value_schema={"_KEY_": "VARCHAR"})
+
+
+def test_init_schema_rejects_malicious_field_name() -> None:
+    """A schema field name is interpolated directly into CREATE TABLE
+    and filter SQL, so it must be validated up front to prevent SQL
+    injection through a caller-supplied ``value_schema``."""
+    with pytest.raises(ValueError, match="Invalid filter field name"):
+        TypedDuckDBStore(":memory:", value_schema={"x); DROP TABLE store;--": "VARCHAR"})
+
+
+def test_init_schema_rejects_malicious_column_type() -> None:
+    with pytest.raises(ValueError, match="Invalid column type"):
+        TypedDuckDBStore(":memory:", value_schema={"author": "VARCHAR); DROP TABLE store;--"})
 
 
 def test_value_field_named_key_does_not_collide_with_primary_key() -> None:
@@ -971,3 +1015,46 @@ def test_from_uri_read_only(
         assert reloaded.count() == len(items)
         with pytest.raises(duckdb.InvalidInputException):
             reloaded.set("new", {"a": 1})
+
+
+# --- async methods ---
+
+# --- aget / aset ---
+
+
+async def test_duckdb_store_aget_aset_round_trip(store: BaseDuckDBStore) -> None:
+    await store.aset("1", {"a": 1})
+    assert await store.aget("1") == {"a": 1}
+
+
+# --- afilter ---
+
+
+async def test_duckdb_store_afilter(store: BaseDuckDBStore) -> None:
+    await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
+    assert await store.afilter(author="Alice") == [{"author": "Alice"}]
+
+
+# --- acount ---
+
+
+async def test_duckdb_store_acount(store: BaseDuckDBStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert await store.acount() == 2
+
+
+async def test_duckdb_store_concurrent_async_access_does_not_corrupt(
+    store: BaseDuckDBStore,
+) -> None:
+    """Regression test: async calls run via ThreadedAsyncStoreMixin on
+    worker threads, but DuckDB connections aren't safe for concurrent use
+    from multiple threads; concurrent async calls must not corrupt the
+    store's query state or crash the underlying driver."""
+
+    async def _writer(i: int) -> None:
+        await store.aset(str(i), {"a": i})
+
+    await asyncio.gather(*(_writer(i) for i in range(50)))
+    assert await store.acount() == 50
+    for i in range(50):
+        assert await store.aget(str(i)) == {"a": i}

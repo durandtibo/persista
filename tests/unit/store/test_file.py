@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -27,26 +27,6 @@ def store_cls(request: pytest.FixtureRequest) -> type[BaseFileStore]:
 def store(tmp_path: Path, store_cls: type[BaseFileStore]) -> Generator[BaseFileStore, None, None]:
     with store_cls(tmp_path / "db") as store:
         yield store
-
-
-@pytest.fixture(scope="module")
-def items() -> dict[str, dict[str, Any]]:
-    return {
-        "1": {
-            "title": "Intro to Python",
-            "author": "Alice",
-            "year": 2022,
-            "category": "Programming",
-        },
-        "2": {
-            "title": "Advanced Python",
-            "author": "Alice",
-            "year": 2023,
-            "category": "Programming",
-        },
-        "3": {"title": "History of Rome", "author": "Bob", "year": 2021, "category": "History"},
-        "4": {"title": "History of Greece", "author": "Bob", "year": 2020, "category": "History"},
-    }
 
 
 ###################################
@@ -80,6 +60,26 @@ def test_init_path_that_is_a_file_raises(tmp_path: Path, store_cls: type[BaseFil
     path.write_text("not a directory")
     with pytest.raises(NotADirectoryError, match="path must be a directory"):
         store_cls(path)
+
+
+def test_init_rejects_empty_extension(tmp_path: Path) -> None:
+    """An empty extension would let a key like ``".."`` map to a
+    filename that escapes the store's directory."""
+    from persista.store.file import BaseFileStore as _BaseFileStore
+
+    class _NoExtensionStore(_BaseFileStore):
+        @property
+        def extension(self) -> str:
+            return ""
+
+        def _save(self, path: Path, value: dict[str, Any]) -> None:
+            raise NotImplementedError
+
+        def _load(self, path: Path) -> dict[str, Any]:
+            raise NotImplementedError
+
+    with pytest.raises(ValueError, match="extension must be a non-empty string"):
+        _NoExtensionStore(tmp_path / "db")
 
 
 # --- path ---
@@ -439,6 +439,56 @@ def test_clear_then_set_works(store: BaseFileStore) -> None:
     assert store.get("2") == {"text": "world"}
 
 
+# --- empty-string key ---
+#
+# An empty key maps to a value file named e.g. ".json" -- a dotfile with no
+# visible stem. `_iter_files()` must still recognize it (via a suffix
+# match), otherwise it becomes invisible to every method built on top of it
+# even though `get`/`contains`/`delete` (which go straight to the computed
+# path) see it fine.
+
+
+def test_empty_key_get_and_contains(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    assert store.get("") == {"x": 1}
+    assert store.contains("")
+
+
+def test_empty_key_counted(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    assert store.count() == 1
+
+
+def test_empty_key_included_in_keys(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    assert list(store.keys()) == [""]
+
+
+def test_empty_key_included_in_filter(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    assert store.filter() == [{"x": 1}]
+    assert store.filter(x=1) == [{"x": 1}]
+
+
+def test_empty_key_included_in_values(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    assert list(store.values()) == [{"x": 1}]
+
+
+def test_empty_key_removed_by_clear(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    store.clear()
+    assert store.count() == 0
+    assert not store.contains("")
+
+
+def test_empty_key_alongside_other_keys(store: BaseFileStore) -> None:
+    store.set("", {"x": 1})
+    store.set("a", {"x": 2})
+    assert store.count() == 2
+    assert set(store.keys()) == {"", "a"}
+
+
 # --- contains ---
 
 
@@ -465,46 +515,34 @@ def test_contains_false_when_store_empty(store: BaseFileStore) -> None:
 
 def test_contains_many_all_found(store: BaseFileStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "2", "3", "4"])
-    assert sorted(found) == ["1", "2", "3", "4"]
-    assert missing == []
+    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
 
 
 def test_contains_many_all_missing(store: BaseFileStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["99", "100"])
-    assert found == []
-    assert sorted(missing) == ["100", "99"]
+    assert store.contains_many(["99", "100"]) == [False, False]
 
 
 def test_contains_many_mixed(store: BaseFileStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    found, missing = store.contains_many(["1", "99", "3", "42"])
-    assert sorted(found) == ["1", "3"]
-    assert sorted(missing) == ["42", "99"]
+    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
 
 
 def test_contains_many_empty_input_returns_empty_lists(store: BaseFileStore) -> None:
-    found, missing = store.contains_many([])
-    assert found == []
-    assert missing == []
+    assert store.contains_many([]) == []
 
 
 def test_contains_many_empty_store_returns_all_missing(store: BaseFileStore) -> None:
-    found, missing = store.contains_many(["1", "2"])
-    assert found == []
-    assert sorted(missing) == ["1", "2"]
+    assert store.contains_many(["1", "2"]) == [False, False]
 
 
-def test_contains_many_returns_tuple_of_two_lists(
+def test_contains_many_returns_list_of_bools(
     store: BaseFileStore, items: dict[str, dict[str, Any]]
 ) -> None:
     store.set_many(items)
     result = store.contains_many(["1", "99"])
-    assert isinstance(result, tuple)
-    assert len(result) == 2
-    assert isinstance(result[0], list)
-    assert isinstance(result[1], list)
+    assert isinstance(result, list)
+    assert all(isinstance(flag, bool) for flag in result)
 
 
 # --- keys ---
@@ -632,7 +670,29 @@ def test_close_returns_none(store: BaseFileStore) -> None:
 def test_close_does_not_delete_files(store: BaseFileStore) -> None:
     store.set("1", {"text": "hello"})
     store.close()
-    assert store.count() == 1
+    assert list(store.path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda store: store.get("1"),
+        lambda store: store.set("1", {"text": "hello"}),
+        lambda store: store.delete("1"),
+        lambda store: store.clear(),
+        lambda store: store.contains("1"),
+        lambda store: list(store.keys()),
+        lambda store: list(store.iter_batches()),
+        lambda store: store.count(),
+    ],
+    ids=["get", "set", "delete", "clear", "contains", "keys", "iter_batches", "count"],
+)
+def test_operations_raise_on_closed_store(
+    store: BaseFileStore, op: Callable[[BaseFileStore], Any]
+) -> None:
+    store.close()
+    with pytest.raises(ValueError, match="closed"):
+        op(store)
 
 
 # --- closed ---
@@ -697,6 +757,37 @@ def test_context_manager_multiple_open_close_same_path(
             assert store.count() == i + 1
 
 
+# --- async context manager ---
+
+
+async def test_async_context_manager_returns_self(
+    store: BaseFileStore, store_cls: type[BaseFileStore]
+) -> None:
+    async with store as opened:
+        assert isinstance(opened, store_cls)
+
+
+async def test_async_context_manager_closes_on_normal_exit(
+    tmp_path: Path, store_cls: type[BaseFileStore]
+) -> None:
+    async with store_cls(tmp_path / "db") as store:
+        store.set("1", {"text": "hello"})
+        assert store.count() == 1
+    assert store.closed
+
+
+async def test_async_context_manager_multiple_open_close_same_path(
+    tmp_path: Path, store_cls: type[BaseFileStore]
+) -> None:
+    """Reopening after close via ``async with`` reuses the same
+    directory on disk, so previously written data is still there."""
+    file_store = store_cls(tmp_path / "db")
+    for i in range(3):
+        async with file_store as store:
+            store.set(str(i), {"text": "hello"})
+            assert store.count() == i + 1
+
+
 #########################################################
 #     PickleFileStore-specific serialization behavior     #
 #########################################################
@@ -756,3 +847,39 @@ def test_json_file_store_scheme(tmp_path: Path) -> None:
 
 def test_pickle_file_store_scheme(tmp_path: Path) -> None:
     assert PickleFileStore(tmp_path / "x").scheme == "file+pickle"
+
+
+# --- async methods ---
+
+# --- aget / aset ---
+
+
+async def test_file_store_aget_aset_round_trip(store: BaseFileStore) -> None:
+    await store.aset("1", {"a": 1})
+    assert await store.aget("1") == {"a": 1}
+
+
+# --- afilter ---
+
+
+async def test_file_store_afilter(store: BaseFileStore) -> None:
+    await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
+    assert await store.afilter(author="Alice") == [{"author": "Alice"}]
+
+
+# --- acount / adelete ---
+
+
+async def test_file_store_acount_adelete(store: BaseFileStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert await store.acount() == 2
+    await store.adelete("1")
+    assert await store.acount() == 1
+
+
+# --- akeys ---
+
+
+async def test_file_store_akeys(store: BaseFileStore) -> None:
+    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert sorted([key async for key in store.akeys()]) == ["1", "2"]

@@ -10,8 +10,8 @@ of `persista` itself.
 ## Overview
 
 Several `persista` stores and utilities depend on optional packages (`aiosqlite`, `duckdb`,
-`faker`, `lmdb`, `psycopg`, `redis`, `requests`, `urllib3`). `persista.testing.fixtures` exposes,
-for each of these, a pair of `pytest` markers:
+`faker`, `httpx`, `lmdb`, `psycopg`, `redis`, `requests`, `urllib3`). `persista.testing.fixtures`
+exposes, for each of these, a pair of `pytest` markers:
 
 - `<dep>_available`: skip the test unless `<dep>` is installed
 - `<dep>_not_available`: skip the test if `<dep>` is installed
@@ -55,8 +55,8 @@ def test_lmdb_store_requires_lmdb():
 
 ## Available Markers
 
-Markers are provided for: `aiosqlite`, `duckdb`, `faker`, `lmdb`, `psycopg`, `redis`, `requests`,
-and `urllib3`. Import them directly from `persista.testing.fixtures`, for example:
+Markers are provided for: `aiosqlite`, `duckdb`, `faker`, `httpx`, `lmdb`, `psycopg`, `redis`,
+`requests`, and `urllib3`. Import them directly from `persista.testing.fixtures`, for example:
 
 ```python
 from persista.testing.fixtures import (
