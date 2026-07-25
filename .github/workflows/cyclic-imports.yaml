@@ -24,6 +24,7 @@ jobs:
       - name: check persista.cache
         run: |
           python -c "from persista import cache"
+          python -c "from persista.cache import factory"
 
       - name: check persista.http
         run: |
