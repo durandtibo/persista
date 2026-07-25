@@ -237,11 +237,11 @@ wheels = [
 
 [[package]]
 name = "coola"
-version = "1.1.9"
+version = "1.1.10a0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a0/bd/638fab1471f9e35e29fbc9ade2a3a66b98c2c436ad8c276d11e4a7ecddf1/coola-1.1.9.tar.gz", hash = "sha256:54f74c8dda426c9076b0492618f4b97b737f98b93ce5cb1c96727ae899c8a96e", size = 109775, upload-time = "2026-07-16T05:11:26.437Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/f5/44ddf8b48ca240189d969d3345936b7cd45c1d6b83b376f782be4f857727/coola-1.1.10a0.tar.gz", hash = "sha256:728461d739777730d1de8c7a8062f62f8cc5f97610099492b0eb5582e19261dc", size = 115345, upload-time = "2026-07-25T22:01:19.634Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0e/ed/9c1bb3f2fbd1b965787699ec9793b2c4ab754cff34fc4c793ea294469a5c/coola-1.1.9-py3-none-any.whl", hash = "sha256:cdc5392e08c1fe732abedb02874b6a46176d7a53325b321516c48d380eb5b32d", size = 196582, upload-time = "2026-07-16T05:11:25.236Z" },
+    { url = "https://files.pythonhosted.org/packages/61/8b/1faff58dc16d06b7bd9dfac4b0ecfcf66485c86e9f68a164219e8cb79227/coola-1.1.10a0-py3-none-any.whl", hash = "sha256:af0198e6d203453a28fae13a5fcae9f3488fda61cca1a9ef2dababc3bb7ea34b", size = 203880, upload-time = "2026-07-25T22:01:18.425Z" },
 ]
 
 [[package]]
@@ -1170,7 +1170,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", marker = "extra == 'aiosqlite'", specifier = ">=0.20,<1.0" },
-    { name = "coola", specifier = ">=1.1.9,<2.0" },
+    { name = "coola", specifier = ">=1.1.10a0,<2.0" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.3,<2.0" },
     { name = "faker", marker = "extra == 'faker'", specifier = ">=40.0,<41.0" },
     { name = "httpx", marker = "extra == 'httpx'", specifier = ">=0.28,<1.0" },
