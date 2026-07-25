@@ -25,7 +25,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class NullStore(BaseStore, InlineDisplayMixin):
-    """A :class:`~persista.store.base.BaseStore` implementation that
+    """A :class:`~persista.store.BaseStore` implementation that
     forgets everything written to it.
 
     Every :meth:`set`/:meth:`aset`/:meth:`set_many`/:meth:`aset_many`
@@ -33,7 +33,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
     report a miss and the store always reports as empty. Because
     nothing is ever stored, ``on_conflict="raise"`` can never
     actually raise ``KeyError`` here, unlike other
-    :class:`~persista.store.base.BaseStore` implementations. This is
+    :class:`~persista.store.BaseStore` implementations. This is
     primarily useful for plugging into
     :class:`~persista.cache.cache.Cache` to disable caching without
     changing any calling code: every lookup misses, so

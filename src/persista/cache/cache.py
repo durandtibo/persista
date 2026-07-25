@@ -27,7 +27,7 @@ _UNSET: Any = object()
 
 class Cache:
     """Cache with per-entry expiry, backed by any
-    :class:`~persista.store.base.BaseStore`.
+    :class:`~persista.store.BaseStore`.
 
     Most methods have both a sync form (``get``, ``set``, ``contains``,
     ``get_many``, ``set_many``, ``contains_many``, ``delete``,
@@ -41,7 +41,7 @@ class Cache:
 
     Each entry is wrapped as ``{"value": value, "expires_at":
     expires_at}`` before being written to the store, since
-    :class:`~persista.store.base.BaseStore` only accepts ``dict``
+    :class:`~persista.store.BaseStore` only accepts ``dict``
     values. If the backing store is one that serializes values (e.g.
     a SQLite- or Redis-backed store), cached values must be
     JSON-serializable.

@@ -54,7 +54,7 @@ def register_scheme(scheme: str, store_cls: type[BaseStore]) -> None:
 
 
 def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
-    """Reconstruct a :class:`~persista.store.base.BaseStore` from a URI.
+    """Reconstruct a :class:`~persista.store.BaseStore` from a URI.
 
     Dispatches on ``uri``'s scheme to the matching store class's
     :meth:`~persista.store.base.BaseStore.from_uri`. The returned
