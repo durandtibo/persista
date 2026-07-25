@@ -28,6 +28,7 @@ __all__ = [
     "TypedSQLiteStore",
     "normalize_on_conflict",
     "register_scheme",
+    "resolve_store",
     "split_present_missing",
     "store_from_uri",
     "validate_batch_size",
@@ -45,6 +46,7 @@ from persista.store.null import NullStore
 from persista.store.postgres import BasePostgresStore, PostgresStore, TypedPostgresStore
 from persista.store.redis import BaseRedisStore, PickleRedisStore, RedisStore
 from persista.store.registry import register_scheme, store_from_uri
+from persista.store.resolve import resolve_store
 from persista.store.sqlite import (
     BaseSQLiteStore,
     PickleSQLiteStore,
