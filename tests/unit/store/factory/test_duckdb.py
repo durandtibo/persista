@@ -47,7 +47,9 @@ def test_duckdb_store_factory_make_store_returns_new_instance_each_call() -> Non
 
 def test_duckdb_store_factory_get_repr_kwargs() -> None:
     factory = DuckDBStoreFactory(":memory:", read_only=False)
-    assert objects_are_equal(factory._get_repr_kwargs(), {"path": ":memory:", "read_only": False})
+    assert objects_are_equal(
+        factory._get_repr_kwargs(), {"database": ":memory:", "read_only": False}
+    )
 
 
 # --- __repr__ and __str__ ---
@@ -63,14 +65,14 @@ def test_duckdb_store_factory_str_starts_with_class_name() -> None:
     assert str(factory).startswith("DuckDBStoreFactory(")
 
 
-def test_duckdb_store_factory_repr_contains_path() -> None:
+def test_duckdb_store_factory_repr_contains_database() -> None:
     factory = DuckDBStoreFactory(":memory:")
-    assert "path" in repr(factory)
+    assert "database" in repr(factory)
 
 
-def test_duckdb_store_factory_str_contains_path() -> None:
+def test_duckdb_store_factory_str_contains_database() -> None:
     factory = DuckDBStoreFactory(":memory:")
-    assert "path" in str(factory)
+    assert "database" in str(factory)
 
 
 #############################################
@@ -110,7 +112,7 @@ def test_typed_duckdb_store_factory_get_repr_kwargs() -> None:
     factory = TypedDuckDBStoreFactory(":memory:", value_schema={"author": "TEXT"})
     assert objects_are_equal(
         factory._get_repr_kwargs(),
-        {"path": ":memory:", "value_schema": {"author": "TEXT"}},
+        {"database": ":memory:", "value_schema": {"author": "TEXT"}},
     )
 
 

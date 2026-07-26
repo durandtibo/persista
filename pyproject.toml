@@ -12,15 +12,16 @@ only-include = ["src"]
 
 [project]
 name = "persista"
-version = "0.0.3a4"
+version = "0.0.3a5"
 description = "library for persisting and caching data"
 readme = "README.md"
 authors = [
     { name = "Thibaut Durand", email = "durand.tibo+gh@gmail.com" },
 ]
 keywords = [
-    "persist",
     "data",
+    "persist",
+    "store",
 ]
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]

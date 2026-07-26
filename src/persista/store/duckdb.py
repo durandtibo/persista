@@ -50,8 +50,9 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
     column layout with a JSON overflow column).
 
     Args:
-        path: Path to the DuckDB file, or ``":memory:"`` for an
-            in-memory database (useful for testing).
+        database: Path to the DuckDB file, or ``":memory:"`` for an
+            in-memory database (useful for testing). Matches the
+            ``database`` argument name used by ``duckdb.connect``.
         **kwargs: Additional keyword arguments to pass to
             ``duckdb.connect``.
     """
@@ -63,9 +64,9 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
     #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
     _scheme: str = "duckdb"
 
-    def __init__(self, path: Path | str, **kwargs: Any) -> None:
+    def __init__(self, database: Path | str, **kwargs: Any) -> None:
         check_duckdb()
-        self._path = prepare_store_path(path)
+        self._database = prepare_store_path(database)
         self._kwargs = kwargs
         self._closed = True
         self._conn: duckdb.DuckDBPyConnection | None = None
@@ -124,14 +125,14 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         if not self._closed:
             return
         with self._lock:
-            self._conn = duckdb.connect(str(self._path), **self._kwargs)
+            self._conn = duckdb.connect(self._database, **self._kwargs)
         self._closed = False
         self._ensure_schema()
 
     def close(self) -> None:
         if self._closed:
             return
-        logger.info("Closing DuckDB at %s", self._path)
+        logger.info("Closing DuckDB at %s", self._database)
         with self._lock:
             self._conn.close()
         self._closed = True
@@ -279,7 +280,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             self._conn.sql("DESCRIBE store").show()
 
     def to_uri(self) -> str:
-        return encode_path_uri(self._scheme, str(self._path))
+        return encode_path_uri(self._scheme, str(self._database))
 
     @classmethod
     def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
@@ -287,7 +288,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         return cls(path, read_only=read_only)
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {"path": self._path, "closed": self._closed}
+        kwargs: dict[str, Any] = {"database": self._database, "closed": self._closed}
         if not self._closed:
             kwargs["count"] = self.count()
         return kwargs | self._kwargs
@@ -310,8 +311,9 @@ class DuckDBStore(BaseDuckDBStore):
     arbitrary value fields without requiring a fixed schema.
 
     Args:
-        path: Path to the DuckDB file, or ``":memory:"`` for an
-            in-memory database (useful for testing).
+        database: Path to the DuckDB file, or ``":memory:"`` for an
+            in-memory database (useful for testing). Matches the
+            ``database`` argument name used by ``duckdb.connect``.
         **kwargs: Additional keyword arguments to pass to
             ``duckdb.connect``.
 
@@ -345,8 +347,8 @@ class DuckDBStore(BaseDuckDBStore):
         ```
     """
 
-    def __init__(self, path: Path | str = ":memory:", **kwargs: Any) -> None:
-        super().__init__(path, **kwargs)
+    def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
+        super().__init__(database, **kwargs)
 
     def _ensure_schema(self) -> None:
         if not self._kwargs.get("read_only", False):
@@ -410,8 +412,9 @@ class TypedDuckDBStore(BaseDuckDBStore):
     ``extra`` JSON overflow column, so nothing is lost.
 
     Args:
-        path: Path to the DuckDB file, or ``":memory:"`` for an
-            in-memory database (useful for testing).
+        database: Path to the DuckDB file, or ``":memory:"`` for an
+            in-memory database (useful for testing). Matches the
+            ``database`` argument name used by ``duckdb.connect``.
         value_schema: Optional mapping of value field names to DuckDB
             type strings (e.g. ``{"author": "VARCHAR", "year":
             "INTEGER"}``).  Fields in the schema get native typed
@@ -465,7 +468,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
 
     def __init__(
         self,
-        path: Path | str = ":memory:",
+        database: Path | str = ":memory:",
         value_schema: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -474,7 +477,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
             msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
             raise ValueError(msg)
         validate_value_schema(value_schema)
-        super().__init__(path, **kwargs)
+        super().__init__(database, **kwargs)
         self._schema: dict[str, str] = value_schema
 
     def _ensure_schema(self) -> None:
