@@ -51,11 +51,12 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
     Example:
         ```pycon
         >>> from persista.store import InMemoryStore
-        >>> store = InMemoryStore()
-        >>> store.set("1", {"text": "hello"})
-        >>> store.count()
+        >>> with InMemoryStore() as store:
+        ...     store.set("1", {"text": "hello"})
+        ...     store.count()
+        ...     store.get("1")
+        ...
         1
-        >>> store.get("1")
         {'text': 'hello'}
 
         ```

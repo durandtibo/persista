@@ -552,14 +552,17 @@ class PostgresStore(BasePostgresStore):
     Example:
         ```pycon
         >>> from persista.store import PostgresStore
-        >>> store = PostgresStore("postgresql://user:pass@localhost/dbname")  # doctest: +SKIP
-        >>> store.set_many(  # doctest: +SKIP
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice"},
-        ...         "2": {"title": "Advanced Python", "author": "Alice"},
-        ...     }
-        ... )
-        >>> len(store.filter(author="Alice"))  # doctest: +SKIP
+        >>> with PostgresStore(  # doctest: +SKIP
+        ...     "postgresql://user:pass@localhost/dbname"
+        ... ) as store:
+        ...     store.set_many(
+        ...         {
+        ...             "1": {"title": "Intro to Python", "author": "Alice"},
+        ...             "2": {"title": "Advanced Python", "author": "Alice"},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...
         2
 
         ```
@@ -636,16 +639,17 @@ class TypedPostgresStore(BasePostgresStore):
         ```pycon
         >>> from persista.store import TypedPostgresStore
         >>> schema = {"author": "TEXT", "year": "INTEGER"}
-        >>> store = TypedPostgresStore(  # doctest: +SKIP
+        >>> with TypedPostgresStore(  # doctest: +SKIP
         ...     "postgresql://user:pass@localhost/dbname", value_schema=schema
-        ... )
-        >>> store.set_many(  # doctest: +SKIP
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice", "year": 2022},
-        ...         "2": {"title": "History of Rome", "author": "Bob", "year": 2021},
-        ...     }
-        ... )
-        >>> len(store.filter(author="Alice"))  # doctest: +SKIP
+        ... ) as store:
+        ...     store.set_many(
+        ...         {
+        ...             "1": {"title": "Intro to Python", "author": "Alice", "year": 2022},
+        ...             "2": {"title": "History of Rome", "author": "Bob", "year": 2021},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...
         1
 
         ```

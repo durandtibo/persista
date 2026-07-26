@@ -737,19 +737,28 @@ class SQLiteStore(BaseSQLiteStore):
     Example:
         ```pycon
         >>> from persista.store import SQLiteStore
-        >>> store = SQLiteStore(":memory:")
-        >>> store.set_many(
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        ...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-        ...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-        ...     }
-        ... )
-        >>> len(store.filter(author="Alice"))
+        >>> with SQLiteStore(":memory:") as store:
+        ...     store.set_many(
+        ...         {
+        ...             "1": {
+        ...                 "title": "Intro to Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "2": {
+        ...                 "title": "Advanced Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...     len(store.filter(author="Alice", category="Programming"))
+        ...     len(store.filter(category="History"))
+        ...
         2
-        >>> len(store.filter(author="Alice", category="Programming"))
         2
-        >>> len(store.filter(category="History"))
         1
 
         ```
@@ -824,19 +833,28 @@ class TypedSQLiteStore(BaseSQLiteStore):
         ```pycon
         >>> from persista.store import TypedSQLiteStore
         >>> schema = {"author": "TEXT", "year": "INTEGER", "category": "TEXT"}
-        >>> store = TypedSQLiteStore(":memory:", value_schema=schema)
-        >>> store.set_many(
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        ...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-        ...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-        ...     }
-        ... )
-        >>> len(store.filter(author="Alice"))
+        >>> with TypedSQLiteStore(":memory:", value_schema=schema) as store:
+        ...     store.set_many(
+        ...         {
+        ...             "1": {
+        ...                 "title": "Intro to Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "2": {
+        ...                 "title": "Advanced Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...     len(store.filter(author="Alice", category="Programming"))
+        ...     len(store.filter(category="History"))
+        ...
         2
-        >>> len(store.filter(author="Alice", category="Programming"))
         2
-        >>> len(store.filter(category="History"))
         1
 
         ```
@@ -962,9 +980,10 @@ class PickleSQLiteStore(BaseSQLiteStore):
     Example:
         ```pycon
         >>> from persista.store import PickleSQLiteStore
-        >>> store = PickleSQLiteStore(":memory:")
-        >>> store.set("1", {"title": "Intro to Python", "tags": ["python", "intro"]})
-        >>> store.get("1")
+        >>> with PickleSQLiteStore(":memory:") as store:
+        ...     store.set("1", {"title": "Intro to Python", "tags": ["python", "intro"]})
+        ...     store.get("1")
+        ...
         {'title': 'Intro to Python', 'tags': ['python', 'intro']}
 
         ```

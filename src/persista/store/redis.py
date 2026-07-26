@@ -453,15 +453,24 @@ class RedisStore(BaseRedisStore):
     Example:
         ```pycon
         >>> from persista.store import RedisStore
-        >>> store = RedisStore("redis://localhost:6379/0")  # doctest: +SKIP
-        >>> store.set_many(
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        ...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-        ...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-        ...     }
-        ... )  # doctest: +SKIP
-        >>> len(store.filter(author="Alice"))  # doctest: +SKIP
+        >>> with RedisStore("redis://localhost:6379/0") as store:  # doctest: +SKIP
+        ...     store.set_many(
+        ...         {
+        ...             "1": {
+        ...                 "title": "Intro to Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "2": {
+        ...                 "title": "Advanced Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...
         2
 
         ```
@@ -497,11 +506,10 @@ class PickleRedisStore(BaseRedisStore):
     Example:
         ```pycon
         >>> from persista.store import PickleRedisStore
-        >>> store = PickleRedisStore("redis://localhost:6379/0")  # doctest: +SKIP
-        >>> store.set(
-        ...     "1", {"title": "Intro to Python", "tags": {"python", "intro"}}
-        ... )  # doctest: +SKIP
-        >>> store.get("1")  # doctest: +SKIP
+        >>> with PickleRedisStore("redis://localhost:6379/0") as store:  # doctest: +SKIP
+        ...     store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
+        ...     store.get("1")
+        ...
         {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
 
         ```

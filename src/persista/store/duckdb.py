@@ -318,19 +318,28 @@ class DuckDBStore(BaseDuckDBStore):
     Example:
         ```pycon
         >>> from persista.store import DuckDBStore
-        >>> store = DuckDBStore(":memory:")
-        >>> store.set_many(
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        ...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-        ...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-        ...     }
-        ... )
-        >>> len(store.filter(author="Alice"))
+        >>> with DuckDBStore(":memory:") as store:
+        ...     store.set_many(
+        ...         {
+        ...             "1": {
+        ...                 "title": "Intro to Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "2": {
+        ...                 "title": "Advanced Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...     len(store.filter(author="Alice", category="Programming"))
+        ...     len(store.filter(category="History"))
+        ...
         2
-        >>> len(store.filter(author="Alice", category="Programming"))
         2
-        >>> len(store.filter(category="History"))
         1
 
         ```
@@ -416,19 +425,28 @@ class TypedDuckDBStore(BaseDuckDBStore):
         ```pycon
         >>> from persista.store import TypedDuckDBStore
         >>> schema = {"author": "VARCHAR", "year": "INTEGER", "category": "VARCHAR"}
-        >>> store = TypedDuckDBStore(":memory:", value_schema=schema)
-        >>> store.set_many(
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        ...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-        ...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-        ...     }
-        ... )
-        >>> len(store.filter(author="Alice"))
+        >>> with TypedDuckDBStore(":memory:", value_schema=schema) as store:
+        ...     store.set_many(
+        ...         {
+        ...             "1": {
+        ...                 "title": "Intro to Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "2": {
+        ...                 "title": "Advanced Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...     len(store.filter(author="Alice", category="Programming"))
+        ...     len(store.filter(category="History"))
+        ...
         2
-        >>> len(store.filter(author="Alice", category="Programming"))
         2
-        >>> len(store.filter(category="History"))
         1
 
         ```
