@@ -46,30 +46,21 @@ for tests and prototyping:
 
 ```pycon
 >>> from persista.store import InMemoryStore
->>> store = InMemoryStore()
->>> store.open()
->>> store.set("1", {"title": "Intro to Python", "author": "Alice"})
->>> store.count()
+>>> with InMemoryStore() as store:
+...     store.set("1", {"title": "Intro to Python", "author": "Alice"})
+...     print(store.count())
+...     print(store.get("1"))
+...
 1
->>> store.get("1")
 {'title': 'Intro to Python', 'author': 'Alice'}
 
 ```
 
 Constructing a store does not connect to the underlying backend -- every method (other than
 `open`/`aopen`) raises `RuntimeError` until the store has been opened, either by calling
-`open()`/`aopen()` explicitly or by using it as a context manager. `InMemoryStore` also supports
-the context manager protocol, which calls `open()` on entry and `close()` automatically on exit:
-
-```pycon
->>> from persista.store import InMemoryStore
->>> with InMemoryStore() as store:
-...     store.set("1", {"title": "Intro to Python"})
-...     print(store.get("1"))
-...
-{'title': 'Intro to Python'}
-
-```
+`open()`/`aopen()` explicitly or by using it as a context manager, as above. Every store supports
+the context manager protocol, which calls `open()` on entry and `close()` automatically on exit --
+prefer it over calling `open()`/`close()` manually so the underlying resources are always released.
 
 ### Setting Multiple Values
 
@@ -78,20 +69,28 @@ match the given keyword arguments:
 
 ```pycon
 >>> from persista.store import InMemoryStore
->>> store = InMemoryStore()
->>> store.open()
->>> store.set_many(
-...     {
-...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-...     }
-... )
->>> len(store.filter(author="Alice"))
+>>> with InMemoryStore() as store:
+...     store.set_many(
+...         {
+...             "1": {
+...                 "title": "Intro to Python",
+...                 "author": "Alice",
+...                 "category": "Programming",
+...             },
+...             "2": {
+...                 "title": "Advanced Python",
+...                 "author": "Alice",
+...                 "category": "Programming",
+...             },
+...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+...         }
+...     )
+...     print(len(store.filter(author="Alice")))
+...     print(len(store.filter(author="Alice", category="Programming")))
+...     print(len(store.filter(category="History")))
+...
 2
->>> len(store.filter(author="Alice", category="Programming"))
 2
->>> len(store.filter(category="History"))
 1
 
 ```
@@ -108,14 +107,14 @@ exists:
 
 ```pycon
 >>> from persista.store import InMemoryStore
->>> store = InMemoryStore()
->>> store.open()
->>> store.set("1", {"title": "Intro to Python", "views": 10})
->>> store.set("1", {"views": 11}, on_conflict="merge")
->>> store.get("1")
+>>> with InMemoryStore() as store:
+...     store.set("1", {"title": "Intro to Python", "views": 10})
+...     store.set("1", {"views": 11}, on_conflict="merge")
+...     print(store.get("1"))
+...     store.set("1", {"title": "New title"}, on_conflict="skip")
+...     print(store.get("1"))
+...
 {'title': 'Intro to Python', 'views': 11}
->>> store.set("1", {"title": "New title"}, on_conflict="skip")
->>> store.get("1")
 {'title': 'Intro to Python', 'views': 11}
 
 ```
@@ -124,14 +123,14 @@ exists:
 
 ```pycon
 >>> from persista.store import InMemoryStore
->>> store = InMemoryStore()
->>> store.open()
->>> store.set_many({"1": {"a": 1}, "2": {"a": 2}})
->>> store.delete("1")
->>> store.count()
+>>> with InMemoryStore() as store:
+...     store.set_many({"1": {"a": 1}, "2": {"a": 2}})
+...     store.delete("1")
+...     print(store.count())
+...     store.clear()
+...     print(store.count())
+...
 1
->>> store.clear()
->>> store.count()
 0
 
 ```
@@ -145,16 +144,24 @@ It works both with a file path and with `":memory:"`:
 
 ```pycon
 >>> from persista.store import SQLiteStore
->>> store = SQLiteStore(":memory:")
->>> store.open()
->>> store.set_many(
-...     {
-...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-...     }
-... )
->>> len(store.filter(author="Alice"))
+>>> with SQLiteStore(":memory:") as store:
+...     store.set_many(
+...         {
+...             "1": {
+...                 "title": "Intro to Python",
+...                 "author": "Alice",
+...                 "category": "Programming",
+...             },
+...             "2": {
+...                 "title": "Advanced Python",
+...                 "author": "Alice",
+...                 "category": "Programming",
+...             },
+...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+...         }
+...     )
+...     print(len(store.filter(author="Alice")))
+...
 2
 
 ```
@@ -166,7 +173,8 @@ from pathlib import Path
 
 from persista.store import SQLiteStore
 
-store = SQLiteStore(Path("tmp/data.sqlite"))
+with SQLiteStore(Path("tmp/data.sqlite")) as store:
+    ...
 ```
 
 ### DuckDB
@@ -176,16 +184,24 @@ store = SQLiteStore(Path("tmp/data.sqlite"))
 
 ```pycon
 >>> from persista.store import DuckDBStore
->>> store = DuckDBStore(":memory:")
->>> store.open()
->>> store.set_many(
-...     {
-...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-...     }
-... )
->>> len(store.filter(author="Alice"))
+>>> with DuckDBStore(":memory:") as store:
+...     store.set_many(
+...         {
+...             "1": {
+...                 "title": "Intro to Python",
+...                 "author": "Alice",
+...                 "category": "Programming",
+...             },
+...             "2": {
+...                 "title": "Advanced Python",
+...                 "author": "Alice",
+...                 "category": "Programming",
+...             },
+...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+...         }
+...     )
+...     print(len(store.filter(author="Alice")))
+...
 2
 
 ```
@@ -201,16 +217,24 @@ schema can be used efficiently in `filter`/indexes:
 ```pycon
 >>> from persista.store import TypedSQLiteStore
 >>> schema = {"author": "TEXT", "year": "INTEGER", "category": "TEXT"}
->>> store = TypedSQLiteStore(":memory:", value_schema=schema)
->>> store.open()
->>> store.set_many(
-...     {
-...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-...     }
-... )
->>> len(store.filter(author="Alice"))
+>>> with TypedSQLiteStore(":memory:", value_schema=schema) as store:
+...     store.set_many(
+...         {
+...             "1": {
+...                 "title": "Intro to Python",
+...                 "author": "Alice",
+...                 "category": "Programming",
+...             },
+...             "2": {
+...                 "title": "Advanced Python",
+...                 "author": "Alice",
+...                 "category": "Programming",
+...             },
+...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+...         }
+...     )
+...     print(len(store.filter(author="Alice")))
+...
 2
 
 ```
@@ -223,15 +247,14 @@ string, and store values in a configurable `table` (requires the `psycopg` extra
 ```python
 from persista.store import PostgresStore
 
-store = PostgresStore("postgresql://user:pass@localhost/dbname", table="documents")
-store.open()
-store.set_many(
-    {
-        "1": {"title": "Intro to Python", "author": "Alice"},
-        "2": {"title": "Advanced Python", "author": "Alice"},
-    }
-)
-len(store.filter(author="Alice"))  # 2
+with PostgresStore("postgresql://user:pass@localhost/dbname", table="documents") as store:
+    store.set_many(
+        {
+            "1": {"title": "Intro to Python", "author": "Alice"},
+            "2": {"title": "Advanced Python", "author": "Alice"},
+        }
+    )
+    len(store.filter(author="Alice"))  # 2
 ```
 
 !!! warning
@@ -249,16 +272,15 @@ disk, with no separate server process required (requires the `lmdb` extra):
 ```python
 from persista.store import LmdbStore
 
-store = LmdbStore("/tmp/lmdb_store")
-store.open()
-store.set_many(
-    {
-        "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-        "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-    }
-)
-len(store.filter(author="Alice"))  # 2
+with LmdbStore("/tmp/lmdb_store") as store:
+    store.set_many(
+        {
+            "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
+            "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
+            "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        }
+    )
+    len(store.filter(author="Alice"))  # 2
 ```
 
 Use `PickleLmdbStore` to store arbitrary Python objects (not just JSON-serializable `dict`
@@ -267,10 +289,9 @@ values) using `pickle` instead of JSON:
 ```python
 from persista.store import PickleLmdbStore
 
-store = PickleLmdbStore("/tmp/lmdb_store")
-store.open()
-store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
-store.get("1")  # {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
+with PickleLmdbStore("/tmp/lmdb_store") as store:
+    store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
+    store.get("1")  # {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
 ```
 
 !!! warning
@@ -285,16 +306,15 @@ extra):
 ```python
 from persista.store import RedisStore
 
-store = RedisStore("redis://localhost:6379/0")
-store.open()
-store.set_many(
-    {
-        "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-        "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-    }
-)
-len(store.filter(author="Alice"))  # 2
+with RedisStore("redis://localhost:6379/0") as store:
+    store.set_many(
+        {
+            "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
+            "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
+            "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        }
+    )
+    len(store.filter(author="Alice"))  # 2
 ```
 
 Use `PickleRedisStore` to store arbitrary Python objects using `pickle` instead of JSON.
@@ -313,11 +333,10 @@ also expose async methods, backed by a thread pool.
 >>> import asyncio
 >>> from persista.store import InMemoryStore
 >>> async def main():
-...     store = InMemoryStore()
-...     await store.aopen()
-...     await store.aset("1", {"text": "hello"})
-...     print(await store.acount())
-...     print(await store.aget("1"))
+...     async with InMemoryStore() as store:
+...         await store.aset("1", {"text": "hello"})
+...         print(await store.acount())
+...         print(await store.aget("1"))
 ...
 >>> asyncio.run(main())
 1
@@ -331,18 +350,16 @@ also expose async methods, backed by a thread pool.
 >>> import asyncio
 >>> from persista.store import SQLiteStore
 >>> async def main():
-...     store = SQLiteStore(":memory:")
-...     await store.aopen()
-...     await store.aset_many(
-...         {
-...             "1": {"title": "Intro to Python", "author": "Alice"},
-...             "2": {"title": "Advanced Python", "author": "Alice"},
-...             "3": {"title": "History of Rome", "author": "Bob"},
-...         }
-...     )
-...     result = await store.afilter(author="Alice")
-...     print(len(result))
-...     await store.aclose()
+...     async with SQLiteStore(":memory:") as store:
+...         await store.aset_many(
+...             {
+...                 "1": {"title": "Intro to Python", "author": "Alice"},
+...                 "2": {"title": "Advanced Python", "author": "Alice"},
+...                 "3": {"title": "History of Rome", "author": "Bob"},
+...             }
+...         )
+...         result = await store.afilter(author="Alice")
+...         print(len(result))
 ...
 >>> asyncio.run(main())
 2
@@ -359,36 +376,21 @@ from persista.store import PostgresStore
 
 
 async def main():
-    store = PostgresStore("postgresql://user:pass@localhost/dbname")
-    await store.aopen()
-    await store.aset_many(
-        {
-            "1": {"title": "Intro to Python", "author": "Alice"},
-            "2": {"title": "Advanced Python", "author": "Alice"},
-        }
-    )
-    result = await store.afilter(author="Alice")
-    print(len(result))
-    await store.aclose()
+    async with PostgresStore("postgresql://user:pass@localhost/dbname") as store:
+        await store.aset_many(
+            {
+                "1": {"title": "Intro to Python", "author": "Alice"},
+                "2": {"title": "Advanced Python", "author": "Alice"},
+            }
+        )
+        result = await store.afilter(author="Alice")
+        print(len(result))
 
 
 asyncio.run(main())
 ```
 
-Also use `async with` to automatically `aclose()` the store:
-
-```pycon
->>> import asyncio
->>> from persista.store import InMemoryStore
->>> async def main():
-...     async with InMemoryStore() as store:
-...         await store.aset("1", {"text": "hello"})
-...         print(await store.aget("1"))
-...
->>> asyncio.run(main())
-{'text': 'hello'}
-
-```
+Using `async with` (as above) calls `aopen()` on entry and `aclose()` automatically on exit.
 
 ## Checking Which Keys Exist
 
@@ -397,10 +399,10 @@ as the input, without fetching the values themselves:
 
 ```pycon
 >>> from persista.store import InMemoryStore
->>> store = InMemoryStore()
->>> store.open()
->>> store.set_many({"1": {"a": 1}, "2": {"a": 2}})
->>> store.contains_many(["1", "2", "3"])
+>>> with InMemoryStore() as store:
+...     store.set_many({"1": {"a": 1}, "2": {"a": 2}})
+...     print(store.contains_many(["1", "2", "3"]))
+...
 [True, True, False]
 
 ```
@@ -410,14 +412,14 @@ zipping keys and flags yourself:
 
 ```pycon
 >>> from persista.store import InMemoryStore, split_present_missing
->>> store = InMemoryStore()
->>> store.open()
->>> store.set_many({"1": {"a": 1}, "2": {"a": 2}})
->>> keys = ["1", "2", "3"]
->>> present, missing = split_present_missing(keys, store.contains_many(keys))
->>> present
+>>> with InMemoryStore() as store:
+...     store.set_many({"1": {"a": 1}, "2": {"a": 2}})
+...     keys = ["1", "2", "3"]
+...     present, missing = split_present_missing(keys, store.contains_many(keys))
+...     print(present)
+...     print(missing)
+...
 ['1', '2']
->>> missing
 ['3']
 
 ```
@@ -429,12 +431,12 @@ into memory at once:
 
 ```pycon
 >>> from persista.store import InMemoryStore
->>> store = InMemoryStore()
->>> store.open()
->>> store.set_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
->>> sorted(store.keys())
+>>> with InMemoryStore() as store:
+...     store.set_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
+...     print(sorted(store.keys()))
+...     print(sorted(v["a"] for v in store.values()))
+...
 ['1', '2', '3']
->>> sorted(v["a"] for v in store.values())
 [1, 2, 3]
 
 ```
@@ -444,10 +446,10 @@ in mini-batches, which is useful when the source data does not fit comfortably i
 
 ```pycon
 >>> from persista.store import InMemoryStore
->>> store = InMemoryStore()
->>> store.open()
->>> store.set_batches((str(i), {"value": i}) for i in range(5))
->>> store.count()
+>>> with InMemoryStore() as store:
+...     store.set_batches((str(i), {"value": i}) for i in range(5))
+...     print(store.count())
+...
 5
 
 ```
@@ -460,15 +462,14 @@ class from that URI:
 
 ```pycon
 >>> from persista.store import SQLiteStore
->>> store = SQLiteStore("tmp/data.sqlite")
->>> store.open()
->>> uri = store.to_uri()
->>> uri
+>>> with SQLiteStore("tmp/data.sqlite") as store:
+...     uri = store.to_uri()
+...     print(uri)
+...
 'sqlite:tmp/data.sqlite'
->>> reloaded = SQLiteStore.from_uri(uri)
->>> reloaded.open()
->>> store.close()
->>> reloaded.close()
+>>> with SQLiteStore.from_uri(uri) as reloaded:
+...     pass
+...
 
 ```
 
@@ -483,13 +484,14 @@ URI's scheme to the right class automatically:
 
 ```pycon
 >>> from persista.store import JsonFileStore, store_from_uri
->>> store = JsonFileStore("data")
->>> store.open()
->>> store.set("1", {"title": "Intro to Python"})
->>> reloaded = store_from_uri(store.to_uri())
->>> isinstance(reloaded, JsonFileStore)
+>>> with JsonFileStore("data") as store:
+...     store.set("1", {"title": "Intro to Python"})
+...     uri = store.to_uri()
+>>> with store_from_uri(uri) as reloaded:
+...     print(isinstance(reloaded, JsonFileStore))
+...     print(reloaded.get("1"))
+...
 True
->>> reloaded.get("1")
 {'title': 'Intro to Python'}
 
 ```
@@ -506,7 +508,8 @@ from persista.store import register_scheme, store_from_uri
 from my_project.stores import MyCustomStore
 
 register_scheme("mycustom", MyCustomStore)
-store = store_from_uri("mycustom://...")
+with store_from_uri("mycustom://...") as store:
+    ...
 ```
 
 ## Choosing a Store
