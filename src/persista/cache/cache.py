@@ -15,6 +15,7 @@ from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from typing import Self
 
     from persista.store.base import BaseStore
 
@@ -53,6 +54,16 @@ class Cache:
     the next time it is looked up, not proactively at its expiry
     time.
 
+    Like :class:`~persista.store.BaseStore`, constructing a
+    :class:`Cache` does not connect to the underlying backing store:
+    this is deferred to :meth:`open`/:meth:`aopen`, so every other
+    method raises until the cache has been opened, either explicitly
+    or via use as a sync context manager (``with Cache(...) as
+    cache: ...``, calling :meth:`open` on entry and :meth:`close` on
+    exit) or an async context manager (``async with Cache(...) as
+    cache: ...``, calling :meth:`aopen` on entry and :meth:`aclose`
+    on exit).
+
     Args:
         store: The backing store. Defaults to a new
             :class:`~persista.store.in_memory.InMemoryStore`.
@@ -71,9 +82,10 @@ class Cache:
     Example:
         ```pycon
         >>> from persista.cache import Cache
-        >>> cache = Cache(default_ttl=60)
-        >>> cache.set("greeting", "hello")
-        >>> cache.get("greeting")
+        >>> with Cache(default_ttl=60) as cache:
+        ...     cache.set("greeting", "hello")
+        ...     cache.get("greeting")
+        ...
         'hello'
 
         ```
@@ -89,7 +101,6 @@ class Cache:
             msg = f"default_ttl must be non-negative, got {default_ttl}"
             raise ValueError(msg)
         self._store: BaseStore = store if store is not None else InMemoryStore()
-        self._store.open()
         self._default_ttl = default_ttl
         self._ignore_none = ignore_none
 
@@ -99,6 +110,55 @@ class Cache:
         whose ``ttl`` is not explicitly set on :meth:`set` /
         :meth:`get_or_compute` / :meth:`memoize`."""
         return self._default_ttl
+
+    @property
+    def closed(self) -> bool:
+        r"""Indicate whether the cache's backing store is closed.
+
+        Returns:
+            ``True`` if the backing store has been closed (or never
+            opened), ``False`` if it is open and ready to use.
+        """
+        return self._store.closed
+
+    def open(self) -> None:
+        r"""Connect the backing store and prepare the cache for use.
+
+        Repeated calls are safe (idempotent), since the underlying
+        :meth:`BaseStore.open` is idempotent.
+        """
+        self._store.open()
+
+    async def aopen(self) -> None:
+        """Async equivalent of :meth:`open`."""
+        await self._store.aopen()
+
+    def close(self) -> None:
+        r"""Close the cache's backing store and release any underlying
+        resources.
+
+        Repeated calls are safe (idempotent), since the underlying
+        :meth:`BaseStore.close` is idempotent.
+        """
+        self._store.close()
+
+    async def aclose(self) -> None:
+        """Async equivalent of :meth:`close`."""
+        await self._store.aclose()
+
+    def __enter__(self) -> Self:
+        self.open()
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+    async def __aenter__(self) -> Self:
+        await self.aopen()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
 
     def get(self, key: str) -> Any | None:
         """Retrieve a value by its key.
@@ -120,6 +180,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> cache.set("greeting", "hello")
             >>> cache.get("greeting")
             'hello'
@@ -200,6 +261,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> cache.set("greeting", "hello")
             >>> cache.get("greeting")
             'hello'
@@ -236,6 +298,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> async def main():
             ...     await cache.aset("greeting", "hello")
             ...     print(await cache.aget("greeting"))
@@ -301,6 +364,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> async def main():
             ...     await cache.aset("greeting", "hello")
             ...     print(await cache.aget("greeting"))
@@ -333,6 +397,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> cache.set("greeting", "hello")
             >>> cache.contains("greeting")
             True
@@ -364,6 +429,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> async def main():
             ...     await cache.aset("greeting", "hello")
             ...     print(await cache.acontains("greeting"))
@@ -404,6 +470,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> cache.set("a", "hello")
             >>> cache.set("b", "world")
             >>> sorted(cache.get_many(["a", "b", "missing"]).items())
@@ -437,6 +504,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> async def main():
             ...     await cache.aset("a", "hello")
             ...     await cache.aset("b", "world")
@@ -512,6 +580,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> cache.set_many({"a": "hello", "b": "world"})
             >>> sorted(cache.get_many(["a", "b"]).items())
             [('a', 'hello'), ('b', 'world')]
@@ -551,6 +620,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> async def main():
             ...     await cache.aset_many({"a": "hello", "b": "world"})
             ...     print(sorted((await cache.aget_many(["a", "b"])).items()))
@@ -596,6 +666,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> cache.set("a", "hello")
             >>> cache.contains_many(["a", "b"])
             [True, False]
@@ -629,6 +700,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> async def main():
             ...     await cache.aset("a", "hello")
             ...     print(await cache.acontains_many(["a", "b"]))
@@ -654,6 +726,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> cache.set("greeting", "hello")
             >>> cache.delete("greeting")
             >>> cache.get("greeting") is None
@@ -674,6 +747,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> cache.set_many({"a": "hello", "b": "world"})
             >>> cache.delete_many(["a", "b"])
             >>> cache.get_many(["a", "b"])
@@ -698,6 +772,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> async def main():
             ...     await cache.aset_many({"a": "hello", "b": "world"})
             ...     await cache.adelete_many(["a", "b"])
@@ -724,6 +799,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> async def main():
             ...     await cache.aset("greeting", "hello")
             ...     await cache.adelete("greeting")
@@ -765,6 +841,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> calls = []
             >>> def compute(x):
             ...     calls.append(x)
@@ -821,6 +898,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> calls = []
             >>> async def compute(x):
             ...     calls.append(x)
@@ -890,6 +968,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> calls = []
             >>> @cache.memoize()
             ... def square(x):
@@ -989,6 +1068,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> calls = []
             >>> @cache.amemoize()
             ... async def square(x):
@@ -1033,6 +1113,7 @@ class Cache:
             ```pycon
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> cache.set("greeting", "hello")
             >>> cache.clear()
             >>> cache.get("greeting") is None
@@ -1053,6 +1134,7 @@ class Cache:
             >>> import asyncio
             >>> from persista.cache.cache import Cache
             >>> cache = Cache()
+            >>> cache.open()
             >>> async def main():
             ...     await cache.aset("greeting", "hello")
             ...     await cache.aclear()
