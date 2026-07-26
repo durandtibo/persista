@@ -601,6 +601,15 @@ def test_count_after_set_many(store: InMemoryStore, items: dict[str, dict[str, A
 # --- close ---
 
 
+def test_open_while_already_open_is_no_op(
+    store: InMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    store.open()
+    assert not store.closed
+    assert store.count() == len(items)
+
+
 def test_close_discards_values(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     store.close()
