@@ -27,9 +27,10 @@ def test_store_from_uri_null() -> None:
 
 
 def test_store_from_uri_file_json(tmp_path: Path) -> None:
-    original = JsonFileStore(tmp_path / "db")
-    original.set("1", {"a": 1})
-    store = store_from_uri(original.to_uri())
+    with JsonFileStore(tmp_path / "db") as original:
+        original.set("1", {"a": 1})
+        uri = original.to_uri()
+    store = store_from_uri(uri)
     assert isinstance(store, JsonFileStore)
     assert store.get("1") == {"a": 1}
 

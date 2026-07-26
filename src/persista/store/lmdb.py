@@ -75,9 +75,8 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         self._path = str(path)
         self._map_size = map_size
         self._kwargs = kwargs
-        self._closed = False
-        Path(self._path).mkdir(parents=True, exist_ok=True)
-        self._env = lmdb.open(self._path, map_size=map_size, **kwargs)
+        self._closed = True
+        self._env: lmdb.Environment | None = None
 
     @abstractmethod
     def _encode(self, value: dict[str, Any]) -> bytes:
@@ -95,6 +94,21 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def _key_str(key: bytes) -> str:
         return key.decode()
 
+    def _check_open(self) -> None:
+        if self._closed:
+            msg = (
+                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
+                "context manager."
+            )
+            raise RuntimeError(msg)
+
+    def open(self) -> None:
+        if not self._closed:
+            return
+        Path(self._path).mkdir(parents=True, exist_ok=True)
+        self._env = lmdb.open(self._path, map_size=self._map_size, **self._kwargs)
+        self._closed = False
+
     def close(self) -> None:
         if self._closed:
             return
@@ -107,11 +121,13 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         return self._closed
 
     def get(self, key: str) -> dict[str, Any] | None:
+        self._check_open()
         with self._env.begin() as txn:
             raw = txn.get(self._key_bytes(key))
         return self._decode(raw) if raw is not None else None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        self._check_open()
         if not keys:
             return []
         with self._env.begin() as txn:
@@ -124,6 +140,7 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
+        self._check_open()
         if not items:
             return
         on_conflict = normalize_on_conflict(on_conflict)
@@ -159,6 +176,7 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        self._check_open()
         return [
             value
             for value in self.values()
@@ -166,10 +184,12 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         ]
 
     def delete(self, key: str) -> None:
+        self._check_open()
         with self._env.begin(write=True) as txn:
             txn.delete(self._key_bytes(key))
 
     def delete_many(self, keys: list[str]) -> None:
+        self._check_open()
         if not keys:
             return
         with self._env.begin(write=True) as txn:
@@ -177,21 +197,25 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
                 txn.delete(self._key_bytes(key))
 
     def clear(self) -> None:
+        self._check_open()
         with self._env.begin(write=True) as txn:
             db = self._env.open_db()
             txn.drop(db, delete=False)
 
     def contains(self, key: str) -> bool:
+        self._check_open()
         with self._env.begin() as txn:
             return txn.get(self._key_bytes(key)) is not None
 
     def contains_many(self, keys: list[str]) -> list[bool]:
+        self._check_open()
         if not keys:
             return []
         with self._env.begin() as txn:
             return [txn.get(self._key_bytes(key)) is not None for key in keys]
 
     def keys(self) -> Iterator[str]:
+        self._check_open()
         # The full key list is materialized (and the transaction/cursor
         # closed) before anything is yielded, rather than holding a live
         # LMDB transaction open across yields: py-lmdb transactions are
@@ -206,6 +230,7 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
+        self._check_open()
         # Only the (cheap) key list is materialized upfront; each batch's
         # values are decoded from a fresh, short-lived read transaction
         # opened when that batch is pulled, so the whole store's values
@@ -220,6 +245,7 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             yield {key: self._decode(raw) for key, raw in raws if raw is not None}
 
     def count(self) -> int:
+        self._check_open()
         with self._env.begin() as txn:
             return txn.stat()["entries"]
 
@@ -236,26 +262,6 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         if not self._closed:
             kwargs["count"] = self.count()
         return kwargs | self._kwargs
-
-    def __enter__(self) -> Self:
-        if self._closed:
-            Path(self._path).mkdir(parents=True, exist_ok=True)
-            self._env = lmdb.open(self._path, map_size=self._map_size, **self._kwargs)
-            self._closed = False
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.close()
-
-    async def __aenter__(self) -> Self:
-        if self._closed:
-            Path(self._path).mkdir(parents=True, exist_ok=True)
-            self._env = lmdb.open(self._path, map_size=self._map_size, **self._kwargs)
-            self._closed = False
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.aclose()
 
 
 class LmdbStore(BaseLmdbStore):
@@ -282,15 +288,24 @@ class LmdbStore(BaseLmdbStore):
     Example:
         ```pycon
         >>> from persista.store import LmdbStore
-        >>> store = LmdbStore("/tmp/lmdb_store")  # doctest: +SKIP
-        >>> store.set_many(
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        ...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-        ...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-        ...     }
-        ... )  # doctest: +SKIP
-        >>> len(store.filter(author="Alice"))  # doctest: +SKIP
+        >>> with LmdbStore("/tmp/lmdb_store") as store:  # doctest: +SKIP
+        ...     store.set_many(
+        ...         {
+        ...             "1": {
+        ...                 "title": "Intro to Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "2": {
+        ...                 "title": "Advanced Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...
         2
 
         ```
@@ -328,11 +343,10 @@ class PickleLmdbStore(BaseLmdbStore):
     Example:
         ```pycon
         >>> from persista.store import PickleLmdbStore
-        >>> store = PickleLmdbStore("/tmp/lmdb_store")  # doctest: +SKIP
-        >>> store.set(
-        ...     "1", {"title": "Intro to Python", "tags": {"python", "intro"}}
-        ... )  # doctest: +SKIP
-        >>> store.get("1")  # doctest: +SKIP
+        >>> with PickleLmdbStore("/tmp/lmdb_store") as store:  # doctest: +SKIP
+        ...     store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
+        ...     store.get("1")
+        ...
         {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
 
         ```

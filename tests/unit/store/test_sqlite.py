@@ -858,6 +858,18 @@ def test_close_is_idempotent(store: BaseSQLiteStore) -> None:
     store.close()  # should not raise
 
 
+def test_open_is_idempotent(store: BaseSQLiteStore) -> None:
+    store.open()  # already open; should not raise or reconnect
+    store.set("1", {"a": 1})
+    assert store.get("1") == {"a": 1}
+
+
+async def test_aopen_is_idempotent(store: BaseSQLiteStore) -> None:
+    await store.aopen()  # already open; should not raise or reconnect
+    await store.aset("1", {"a": 1})
+    assert await store.aget("1") == {"a": 1}
+
+
 def test_close_returns_none(store: BaseSQLiteStore) -> None:
     assert store.close() is None
 
@@ -1234,6 +1246,7 @@ async def test_sqlite_store_aensure_aconn_read_only_swallows_operational_error(
     raw_conn.close()
 
     store = store_cls.from_path(path, read_only=True)
+    await store.aopen()
     with pytest.raises(sqlite3.OperationalError, match=r"no such table"):
         await store.acount()
     await store.aclose()
@@ -1408,6 +1421,7 @@ async def test_sqlite_store_aiter_batches_does_not_mutate_store(
 
 async def test_sqlite_store_aclose_is_idempotent(store_cls: type[BaseSQLiteStore]) -> None:
     store = store_cls(":memory:")
+    await store.aopen()
     await store.aget("1")  # forces the lazy async connection open
     await store.aclose()
     await store.aclose()
@@ -1420,6 +1434,7 @@ async def test_sqlite_store_aclose_is_idempotent(store_cls: type[BaseSQLiteStore
 @aiosqlite_available
 async def test_init_accepts_aiosqlite_connect_kwargs(store_cls: type[BaseSQLiteStore]) -> None:
     store = store_cls(":memory:", timeout=5.0)
+    await store.aopen()
     assert await store.acount() == 0
     await store.aclose()
 
@@ -1490,6 +1505,7 @@ async def test_sqlite_store_async_op_after_reopen_recreates_schema(
     async schema-ready flag, otherwise the first async op after reopening
     sees a stale flag and skips creating the table on the new connection."""
     store = store_cls(":memory:")
+    await store.aopen()
     await store.aset("1", {"a": 1})
     await store.aclose()
     async with store:
@@ -1502,10 +1518,11 @@ def test_sqlite_store_aget_after_close_raises(store_cls: type[BaseSQLiteStore]) 
     """Regression test: async methods must respect a bare close() the same
     way sync methods do, instead of silently reopening a new connection."""
     store = store_cls(":memory:")
+    store.open()
     store.close()
 
     async def _run() -> None:
-        with pytest.raises(sqlite3.ProgrammingError):
+        with pytest.raises(RuntimeError, match="not open"):
             await store.aget("1")
 
     asyncio.run(_run())

@@ -172,6 +172,22 @@ def test_close_is_idempotent(store: NullStore) -> None:
     store.close()
 
 
+def test_open_is_idempotent(store: NullStore) -> None:
+    store.open()  # already open; should not raise
+    assert not store.closed
+
+
+async def test_aopen_is_idempotent(store: NullStore) -> None:
+    await store.aopen()  # already open; should not raise
+    assert not store.closed
+
+
+def test_get_before_open_raises() -> None:
+    store = NullStore()
+    with pytest.raises(RuntimeError, match="not open"):
+        store.get("1")
+
+
 def test_close_returns_none(store: NullStore) -> None:
     assert store.close() is None
 
@@ -228,6 +244,7 @@ def test_to_uri_returns_null_scheme(store: NullStore) -> None:
 
 def test_from_uri_returns_new_store() -> None:
     store = NullStore.from_uri("null://")
+    store.open()
     assert store.count() == 0
     assert not store.closed
 

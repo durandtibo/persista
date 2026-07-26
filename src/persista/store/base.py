@@ -45,9 +45,15 @@ class BaseStore(ABC):
 
     Implementations are expected to support use as a sync context
     manager (``with SomeStore(...) as store: ...``, calling
-    :meth:`close` on exit) and as an async context manager
-    (``async with SomeStore(...) as store: ...``, calling
-    :meth:`aclose` on exit).
+    :meth:`open` on entry and :meth:`close` on exit) and as an async
+    context manager (``async with SomeStore(...) as store: ...``,
+    calling :meth:`aopen` on entry and :meth:`aclose` on exit).
+
+    Constructing a store does not connect to the underlying backend:
+    implementations must defer that to :meth:`open`/:meth:`aopen`, so
+    every other method (including :meth:`close`) raises until the
+    store has been opened, either explicitly or via the context
+    manager.
     """
 
     @abstractmethod
@@ -349,6 +355,22 @@ class BaseStore(ABC):
         """Async equivalent of :meth:`count`."""
 
     @abstractmethod
+    def open(self) -> None:
+        r"""Connect to the underlying backend and prepare the store for
+        use (e.g. open a database connection, create a directory).
+
+        The constructor must not do this itself: implementations
+        connect lazily, only once ``open()`` (or :meth:`__enter__`) is
+        called. Implementations should make repeated calls to
+        ``open()`` safe (i.e. idempotent), since a store may be
+        reopened after :meth:`close`.
+        """
+
+    @abstractmethod
+    async def aopen(self) -> None:
+        """Async equivalent of :meth:`open`."""
+
+    @abstractmethod
     def close(self) -> None:
         r"""Close the store and release any underlying resources (e.g.
         database connections, file handles).
@@ -402,12 +424,14 @@ class BaseStore(ABC):
         """
 
     def __enter__(self) -> Self:
+        self.open()
         return self
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
     async def __aenter__(self) -> Self:
+        await self.aopen()
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:

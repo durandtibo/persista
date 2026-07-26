@@ -42,6 +42,7 @@ class BaseStoreFactory(ABC):
         """Create and return a configured BaseStore instance.
 
         Returns:
-            A :class:`~persista.store.BaseStore`
-            instance ready for use.
+            A :class:`~persista.store.BaseStore` instance. The store
+            is not opened; call :meth:`~persista.store.BaseStore.open`
+            (or use it as a context manager) before using it.
         """

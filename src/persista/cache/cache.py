@@ -89,6 +89,7 @@ class Cache:
             msg = f"default_ttl must be non-negative, got {default_ttl}"
             raise ValueError(msg)
         self._store: BaseStore = store if store is not None else InMemoryStore()
+        self._store.open()
         self._default_ttl = default_ttl
         self._ignore_none = ignore_none
 

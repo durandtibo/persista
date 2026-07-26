@@ -71,8 +71,7 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             msg = f"path must be a directory: {self._path}"
             raise NotADirectoryError(msg)
         self._kwargs = kwargs
-        self._closed = False
-        self._path.mkdir(parents=True, exist_ok=True)
+        self._closed = True
 
     @property
     def path(self) -> Path:
@@ -102,6 +101,12 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def _path_to_key(self, path: Path) -> str:
         return unquote(path.name[: -len(self.extension)] if self.extension else path.name)
 
+    def open(self) -> None:
+        if not self._closed:
+            return
+        self._path.mkdir(parents=True, exist_ok=True)
+        self._closed = False
+
     def close(self) -> None:
         self._closed = True
 
@@ -111,8 +116,11 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
 
     def _check_open(self) -> None:
         if self._closed:
-            msg = "Cannot operate on a closed store."
-            raise ValueError(msg)
+            msg = (
+                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
+                "context manager."
+            )
+            raise RuntimeError(msg)
 
     def get(self, key: str) -> dict[str, Any] | None:
         self._check_open()
@@ -211,20 +219,6 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             kwargs["count"] = self.count()
         return kwargs | self._kwargs
 
-    def __enter__(self) -> Self:
-        self._closed = False
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.close()
-
-    async def __aenter__(self) -> Self:
-        self._closed = False
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.aclose()
-
 
 class JsonFileStore(BaseFileStore):
     """A file-based key-value store that serializes each value to its
@@ -245,15 +239,24 @@ class JsonFileStore(BaseFileStore):
     Example:
         ```pycon
         >>> from persista.store import JsonFileStore
-        >>> store = JsonFileStore("/tmp/file_store")  # doctest: +SKIP
-        >>> store.set_many(
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        ...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-        ...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-        ...     }
-        ... )  # doctest: +SKIP
-        >>> len(store.filter(author="Alice"))  # doctest: +SKIP
+        >>> with JsonFileStore("/tmp/file_store") as store:  # doctest: +SKIP
+        ...     store.set_many(
+        ...         {
+        ...             "1": {
+        ...                 "title": "Intro to Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "2": {
+        ...                 "title": "Advanced Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...
         2
 
         ```
@@ -293,11 +296,10 @@ class PickleFileStore(BaseFileStore):
     Example:
         ```pycon
         >>> from persista.store import PickleFileStore
-        >>> store = PickleFileStore("/tmp/file_store")  # doctest: +SKIP
-        >>> store.set(
-        ...     "1", {"title": "Intro to Python", "tags": {"python", "intro"}}
-        ... )  # doctest: +SKIP
-        >>> store.get("1")  # doctest: +SKIP
+        >>> with PickleFileStore("/tmp/file_store") as store:  # doctest: +SKIP
+        ...     store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
+        ...     store.get("1")
+        ...
         {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
 
         ```

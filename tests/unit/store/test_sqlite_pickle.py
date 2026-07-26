@@ -343,6 +343,7 @@ def test_reenter_after_close_resets_in_memory_store(store: PickleSQLiteStore) ->
 def test_reenter_after_close_reopens_file_backed_store(tmp_path: Path) -> None:
     path = tmp_path / "reopen.sqlite"
     store = PickleSQLiteStore.from_path(path)
+    store.open()
     store.set("1", {"a": 1})
     store.close()
     with store:
@@ -438,6 +439,7 @@ async def test_async_context_manager_entering_already_open_store_is_a_noop() -> 
 
 async def test_afilter_with_real_aiosqlite(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     assert len(await store.afilter()) == len(items)
     result = await store.afilter(author="Alice")
@@ -450,6 +452,7 @@ async def test_afilter_with_real_aiosqlite(items: dict[str, dict[str, Any]]) -> 
 
 async def test_aset_many_internal_with_empty_items_is_a_noop() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store._aset_many({})
     assert await store.acount() == 0
     await store.aclose()
@@ -462,6 +465,7 @@ async def test_aset_many_internal_with_empty_items_is_a_noop() -> None:
 
 async def test_aset_and_aget() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset("1", {"title": "Intro to Python"})
     assert await store.aget("1") == {"title": "Intro to Python"}
     await store.aclose()
@@ -469,12 +473,14 @@ async def test_aset_and_aget() -> None:
 
 async def test_aget_missing_key() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     assert await store.aget("missing") is None
     await store.aclose()
 
 
 async def test_aset_many_and_aget_many(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     assert await store.aget_many(["1", "3", "missing"]) == [items["1"], items["3"], None]
     await store.aclose()
@@ -482,6 +488,7 @@ async def test_aset_many_and_aget_many(items: dict[str, dict[str, Any]]) -> None
 
 async def test_aset_overwrite() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset("1", {"a": 1})
     await store.aset("1", {"a": 2}, on_conflict="overwrite")
     assert await store.aget("1") == {"a": 2}
@@ -490,6 +497,7 @@ async def test_aset_overwrite() -> None:
 
 async def test_aset_raise_on_conflict() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset("1", {"a": 1})
     with pytest.raises(KeyError, match="already exist"):
         await store.aset("1", {"a": 2}, on_conflict="raise")
@@ -499,6 +507,7 @@ async def test_aset_raise_on_conflict() -> None:
 
 async def test_aset_skip_on_conflict() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset("1", {"a": 1})
     await store.aset("1", {"a": 2}, on_conflict="skip")
     assert await store.aget("1") == {"a": 1}
@@ -507,6 +516,7 @@ async def test_aset_skip_on_conflict() -> None:
 
 async def test_aset_merge_on_conflict() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset("1", {"a": 1, "tags": {"x"}})
     await store.aset("1", {"b": 2}, on_conflict="merge")
     assert await store.aget("1") == {"a": 1, "tags": {"x"}, "b": 2}
@@ -515,6 +525,7 @@ async def test_aset_merge_on_conflict() -> None:
 
 async def test_acount(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     assert await store.acount() == 0
     await store.aset_many(items)
     assert await store.acount() == len(items)
@@ -523,6 +534,7 @@ async def test_acount(items: dict[str, dict[str, Any]]) -> None:
 
 async def test_adelete() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset("1", {"a": 1})
     await store.adelete("1")
     assert await store.aget("1") is None
@@ -531,6 +543,7 @@ async def test_adelete() -> None:
 
 async def test_adelete_many(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     await store.adelete_many(["1", "2"])
     assert sorted([key async for key in store.akeys()]) == ["3"]
@@ -539,6 +552,7 @@ async def test_adelete_many(items: dict[str, dict[str, Any]]) -> None:
 
 async def test_aclear(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     await store.aclear()
     assert await store.acount() == 0
@@ -547,6 +561,7 @@ async def test_aclear(items: dict[str, dict[str, Any]]) -> None:
 
 async def test_acontains(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     assert await store.acontains("1")
     assert not await store.acontains("missing")
@@ -555,6 +570,7 @@ async def test_acontains(items: dict[str, dict[str, Any]]) -> None:
 
 async def test_acontains_many(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     assert await store.acontains_many(["1", "missing"]) == [True, False]
     await store.aclose()
@@ -562,6 +578,7 @@ async def test_acontains_many(items: dict[str, dict[str, Any]]) -> None:
 
 async def test_akeys(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     assert sorted([key async for key in store.akeys()]) == ["1", "2", "3"]
     await store.aclose()
@@ -569,6 +586,7 @@ async def test_akeys(items: dict[str, dict[str, Any]]) -> None:
 
 async def test_aiter_batches(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     merged: dict[str, dict[str, Any]] = {}
     async for batch in store.aiter_batches(batch_size=2):
@@ -584,6 +602,7 @@ async def test_aiter_batches(items: dict[str, dict[str, Any]]) -> None:
 
 async def test_afilter_no_filters(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     assert len(await store.afilter()) == len(items)
     await store.aclose()
@@ -591,6 +610,7 @@ async def test_afilter_no_filters(items: dict[str, dict[str, Any]]) -> None:
 
 async def test_afilter_single_field(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     assert len(await store.afilter(author="Alice")) == 2
     await store.aclose()
@@ -598,6 +618,7 @@ async def test_afilter_single_field(items: dict[str, dict[str, Any]]) -> None:
 
 async def test_afilter_multiple_fields(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     assert len(await store.afilter(author="Alice", category="Programming")) == 2
     assert await store.afilter(author="Bob", category="Programming") == []
@@ -606,6 +627,7 @@ async def test_afilter_multiple_fields(items: dict[str, dict[str, Any]]) -> None
 
 async def test_afilter_matches_non_json_field() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset("1", {"tags": {"python", "sqlite"}})
     await store.aset("2", {"tags": {"other"}})
     assert await store.afilter(tags={"python", "sqlite"}) == [{"tags": {"python", "sqlite"}}]
@@ -619,6 +641,7 @@ async def test_afilter_matches_non_json_field() -> None:
 
 async def test_around_trips_tuples_and_sets() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset("1", {"coordinates": (1, 2, 3), "tags": {"python", "sqlite"}})
     assert await store.aget("1") == {"coordinates": (1, 2, 3), "tags": {"python", "sqlite"}}
     await store.aclose()
@@ -626,6 +649,7 @@ async def test_around_trips_tuples_and_sets() -> None:
 
 async def test_around_trips_custom_objects() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     now = datetime(2024, 1, 1, tzinfo=timezone.utc)
     await store.aset("1", {"created_at": now})
     assert await store.aget("1") == {"created_at": now}
@@ -639,6 +663,7 @@ async def test_around_trips_custom_objects() -> None:
 
 async def test_aset_many_empty_is_no_op() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many({})
     assert await store.acount() == 0
     await store.aclose()
@@ -646,12 +671,14 @@ async def test_aset_many_empty_is_no_op() -> None:
 
 async def test_aget_many_empty_list_returns_empty_list() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     assert await store.aget_many([]) == []
     await store.aclose()
 
 
 async def test_adelete_many_empty_list_is_no_op(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     await store.adelete_many([])
     assert await store.acount() == len(items)
@@ -660,12 +687,14 @@ async def test_adelete_many_empty_list_is_no_op(items: dict[str, dict[str, Any]]
 
 async def test_acontains_many_empty_list_returns_empty_lists() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     assert await store.acontains_many([]) == []
     await store.aclose()
 
 
 async def test_afilter_empty_store_returns_empty() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     assert await store.afilter() == []
     assert await store.afilter(author="Alice") == []
     await store.aclose()
@@ -673,6 +702,7 @@ async def test_afilter_empty_store_returns_empty() -> None:
 
 async def test_aclear_empty_store_is_no_op() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aclear()
     assert await store.acount() == 0
     await store.aclose()
@@ -680,12 +710,14 @@ async def test_aclear_empty_store_is_no_op() -> None:
 
 async def test_akeys_empty_store_yields_nothing() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     assert [key async for key in store.akeys()] == []
     await store.aclose()
 
 
 async def test_aiter_batches_empty_store_yields_nothing() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     assert [batch async for batch in store.aiter_batches()] == []
     await store.aclose()
 
@@ -697,6 +729,7 @@ async def test_aiter_batches_empty_store_yields_nothing() -> None:
 
 async def test_aset_batches_writes_all_pairs(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_batches(list(items.items()), batch_size=2)
     assert await store.acount() == len(items)
     assert await store.aget("2") == items["2"]
@@ -705,6 +738,7 @@ async def test_aset_batches_writes_all_pairs(items: dict[str, dict[str, Any]]) -
 
 async def test_aset_batches_consumes_a_generator() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
 
     def gen() -> Iterator[tuple[str, dict[str, int]]]:
         for i in range(5):
@@ -717,6 +751,7 @@ async def test_aset_batches_consumes_a_generator() -> None:
 
 async def test_avalues(items: dict[str, dict[str, Any]]) -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     await store.aset_many(items)
     values = [v async for v in store.avalues()]
     assert sorted(values, key=lambda v: v["title"]) == sorted(
@@ -727,6 +762,7 @@ async def test_avalues(items: dict[str, dict[str, Any]]) -> None:
 
 async def test_avalues_empty_store_yields_nothing() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     assert [v async for v in store.avalues()] == []
     await store.aclose()
 
@@ -738,6 +774,7 @@ async def test_avalues_empty_store_yields_nothing() -> None:
 
 async def test_aset_on_conflict_invalid_raises() -> None:
     store = PickleSQLiteStore(":memory:")
+    await store.aopen()
     with pytest.raises(ValueError, match="Invalid on_conflict value"):
         await store.aset("1", {"a": 1}, on_conflict="bogus")
     await store.aclose()
@@ -753,10 +790,12 @@ async def test_ato_uri_from_uri_round_trips_file_data(
 ) -> None:
     path = tmp_path / "async_to_uri.sqlite"
     store = PickleSQLiteStore.from_path(path)
+    await store.aopen()
     await store.aset_many(items)
     uri = store.to_uri()
     await store.aclose()
 
     reloaded = PickleSQLiteStore.from_uri(uri)
+    await reloaded.aopen()
     assert await reloaded.acount() == len(items)
     await reloaded.aclose()

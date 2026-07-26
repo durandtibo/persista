@@ -23,6 +23,12 @@ class InMemoryTestStore(BaseStore):
         self._data: dict[str, dict[str, Any]] = {}
         self._closed = False
 
+    def open(self) -> None:
+        self._closed = False
+
+    async def aopen(self) -> None:
+        self._closed = False
+
     def close(self) -> None:
         self._closed = True
 
@@ -150,6 +156,12 @@ class InMemoryTestStore(BaseStore):
 
 
 class IncompleteStore(BaseStore):
+    def open(self) -> None:
+        pass
+
+    async def aopen(self) -> None:
+        pass
+
     def close(self) -> None:
         pass
 

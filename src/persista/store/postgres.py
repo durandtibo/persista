@@ -94,13 +94,33 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         self._conninfo = conninfo
         self._table = table
         self._kwargs = kwargs
-        self._closed = False
-        self._conn = psycopg.connect(conninfo, autocommit=True, **kwargs)
-        self._conn.execute(self._create_table_sql())
+        self._closed = True
+        self._conn: psycopg.Connection | None = None
         self._aconn: psycopg.AsyncConnection | None = None
         self._aconn_lock = asyncio.Lock()
 
+    def _check_open(self) -> None:
+        if self._closed:
+            msg = (
+                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
+                "context manager."
+            )
+            raise RuntimeError(msg)
+
+    def open(self) -> None:
+        if not self._closed:
+            return
+        self._conn = psycopg.connect(self._conninfo, autocommit=True, **self._kwargs)
+        self._conn.execute(self._create_table_sql())
+        self._closed = False
+
+    async def aopen(self) -> None:
+        if not self._closed:
+            return
+        await asyncio.to_thread(self.open)
+
     async def _ensure_aconn(self) -> psycopg.AsyncConnection:
+        self._check_open()
         async with self._aconn_lock:
             if self._aconn is None:
                 self._aconn = await psycopg.AsyncConnection.connect(
@@ -205,6 +225,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         return cls(uri)
 
     def get(self, key: str) -> dict[str, Any] | None:
+        self._check_open()
         query = sql.SQL("SELECT * FROM {table} WHERE {key_col} = %s").format(
             table=self._table_ident, key_col=sql.Identifier(self._key_column)
         )
@@ -224,6 +245,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         return self._row_to_value(row) if row else None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        self._check_open()
         if not keys:
             return []
         query = sql.SQL("SELECT * FROM {table} WHERE {key_col} = ANY(%s)").format(
@@ -259,6 +281,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
+        self._check_open()
         if not items:
             return
         on_conflict = normalize_on_conflict(on_conflict)
@@ -308,6 +331,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
                 await cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        self._check_open()
         if not field_filters:
             query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
             with self._conn.cursor() as cur:
@@ -345,6 +369,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         return [self._row_to_value(row) for row in rows]
 
     def delete(self, key: str) -> None:
+        self._check_open()
         query = sql.SQL("DELETE FROM {table} WHERE {key_col} = %s").format(
             table=self._table_ident, key_col=sql.Identifier(self._key_column)
         )
@@ -358,6 +383,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         await conn.execute(query, (key,))
 
     def delete_many(self, keys: list[str]) -> None:
+        self._check_open()
         if not keys:
             return
         query = sql.SQL("DELETE FROM {table} WHERE {key_col} = ANY(%s)").format(
@@ -375,6 +401,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         await conn.execute(query, (keys,))
 
     def clear(self) -> None:
+        self._check_open()
         query = sql.SQL("DELETE FROM {table}").format(table=self._table_ident)
         self._conn.execute(query)
 
@@ -384,6 +411,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         await conn.execute(query)
 
     def contains(self, key: str) -> bool:
+        self._check_open()
         query = sql.SQL("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1").format(
             table=self._table_ident, key_col=sql.Identifier(self._key_column)
         )
@@ -401,6 +429,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             return await cur.fetchone() is not None
 
     def contains_many(self, keys: list[str]) -> list[bool]:
+        self._check_open()
         if not keys:
             return []
         query = sql.SQL("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)").format(
@@ -424,6 +453,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         return [key in existing for key in keys]
 
     def keys(self) -> Iterator[str]:
+        self._check_open()
         query = sql.SQL("SELECT {key_col} FROM {table}").format(
             table=self._table_ident, key_col=sql.Identifier(self._key_column)
         )
@@ -446,6 +476,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
+        self._check_open()
         query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
         # A named (server-side) cursor requires an explicit transaction
         # block even on an autocommit connection. The name includes a
@@ -480,6 +511,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
                 yield batch
 
     def count(self) -> int:
+        self._check_open()
         query = sql.SQL("SELECT COUNT(*) FROM {table}").format(table=self._table_ident)
         with self._conn.cursor() as cur:
             cur.execute(query)
@@ -499,23 +531,6 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         if not self._closed:
             kwargs["count"] = self.count()
         return kwargs | self._kwargs
-
-    def __enter__(self) -> Self:
-        if self._closed:
-            self._conn = psycopg.connect(self._conninfo, autocommit=True, **self._kwargs)
-            self._conn.execute(self._create_table_sql())
-            self._closed = False
-        return self
-
-    async def __aenter__(self) -> Self:
-        if self._closed:
-            self._conn = psycopg.connect(self._conninfo, autocommit=True, **self._kwargs)
-            self._conn.execute(self._create_table_sql())
-            self._closed = False
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.aclose()
 
 
 class PostgresStore(BasePostgresStore):
@@ -537,14 +552,17 @@ class PostgresStore(BasePostgresStore):
     Example:
         ```pycon
         >>> from persista.store import PostgresStore
-        >>> store = PostgresStore("postgresql://user:pass@localhost/dbname")  # doctest: +SKIP
-        >>> store.set_many(  # doctest: +SKIP
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice"},
-        ...         "2": {"title": "Advanced Python", "author": "Alice"},
-        ...     }
-        ... )
-        >>> len(store.filter(author="Alice"))  # doctest: +SKIP
+        >>> with PostgresStore(  # doctest: +SKIP
+        ...     "postgresql://user:pass@localhost/dbname"
+        ... ) as store:
+        ...     store.set_many(
+        ...         {
+        ...             "1": {"title": "Intro to Python", "author": "Alice"},
+        ...             "2": {"title": "Advanced Python", "author": "Alice"},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...
         2
 
         ```
@@ -621,16 +639,17 @@ class TypedPostgresStore(BasePostgresStore):
         ```pycon
         >>> from persista.store import TypedPostgresStore
         >>> schema = {"author": "TEXT", "year": "INTEGER"}
-        >>> store = TypedPostgresStore(  # doctest: +SKIP
+        >>> with TypedPostgresStore(  # doctest: +SKIP
         ...     "postgresql://user:pass@localhost/dbname", value_schema=schema
-        ... )
-        >>> store.set_many(  # doctest: +SKIP
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice", "year": 2022},
-        ...         "2": {"title": "History of Rome", "author": "Bob", "year": 2021},
-        ...     }
-        ... )
-        >>> len(store.filter(author="Alice"))  # doctest: +SKIP
+        ... ) as store:
+        ...     store.set_many(
+        ...         {
+        ...             "1": {"title": "Intro to Python", "author": "Alice", "year": 2022},
+        ...             "2": {"title": "History of Rome", "author": "Bob", "year": 2021},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...
         1
 
         ```

@@ -112,8 +112,18 @@ def store(request: pytest.FixtureRequest) -> Generator[BaseStore, None, None]:
         if _is_redis_store(store):
             store.delete_many(list(store.keys()))
         yield store
-        if _is_redis_store(store):
+        # Some tests (e.g. close/aclose idempotency) intentionally close the
+        # store themselves, so only clean up if it is still open.
+        if _is_redis_store(store) and not store.closed:
             store.delete_many(list(store.keys()))
+
+
+@pytest.fixture(params=_store_factories())
+def unopened_store(request: pytest.FixtureRequest) -> Generator[BaseStore, None, None]:
+    store = request.param()
+    yield store
+    if not store.closed:
+        store.close()
 
 
 @pytest.fixture(scope="module")
@@ -448,6 +458,23 @@ def test_close_returns_none(store: BaseStore) -> None:
     assert store.close() is None
 
 
+def test_open_is_idempotent(store: BaseStore) -> None:
+    store.open()  # already open via fixture; should not raise or reconnect
+    store.set("1", {"text": "hello"})
+    assert store.get("1") == {"text": "hello"}
+
+
+async def test_aopen_is_idempotent(store: BaseStore) -> None:
+    await store.aopen()  # already open via fixture; should not raise or reconnect
+    await store.aset("1", {"text": "hello"})
+    assert await store.aget("1") == {"text": "hello"}
+
+
+def test_get_before_open_raises(unopened_store: BaseStore) -> None:
+    with pytest.raises(RuntimeError, match="not open"):
+        unopened_store.get("1")
+
+
 def test_context_manager_usable_for_reads_and_writes(store: BaseStore) -> None:
     store.set_many(
         {
@@ -480,6 +507,7 @@ def _all_available_stores() -> Generator[tuple[str, BaseStore], None, None]:
         if any(mark.args[0] for mark in skip_marks):
             continue
         store: BaseStore = factory()
+        store.open()
         if _is_redis_store(store):
             store.delete_many(list(store.keys()))
         yield store_id, store
@@ -887,6 +915,7 @@ async def _all_available_stores_async() -> AsyncIterator[tuple[str, BaseStore]]:
         if any(mark.args[0] for mark in skip_marks):
             continue
         store: BaseStore = factory()
+        await store.aopen()
         if _is_redis_store(store):
             await store.adelete_many([key async for key in store.akeys()])
         yield store_id, store

@@ -9,8 +9,10 @@ IN_MEMORY_STORE_TARGET = "persista.store.InMemoryStore"
 
 
 def _make_store() -> InMemoryStore:
-    """Return an InMemoryStore instance for testing."""
-    return InMemoryStore()
+    """Return an opened InMemoryStore instance for testing."""
+    store = InMemoryStore()
+    store.open()
+    return store
 
 
 ##############################################

@@ -76,20 +76,24 @@ def test_store_cache_factory_get_repr_kwargs() -> None:
 
 
 def test_store_cache_factory_repr_starts_with_class_name() -> None:
-    factory = StoreCacheFactory(StoreFactory(InMemoryStore()))
-    assert repr(factory).startswith("StoreCacheFactory(")
+    with InMemoryStore() as store:
+        factory = StoreCacheFactory(StoreFactory(store))
+        assert repr(factory).startswith("StoreCacheFactory(")
 
 
 def test_store_cache_factory_str_starts_with_class_name() -> None:
-    factory = StoreCacheFactory(StoreFactory(InMemoryStore()))
-    assert str(factory).startswith("StoreCacheFactory(")
+    with InMemoryStore() as store:
+        factory = StoreCacheFactory(StoreFactory(store))
+        assert str(factory).startswith("StoreCacheFactory(")
 
 
 def test_store_cache_factory_repr_contains_store_factory() -> None:
-    factory = StoreCacheFactory(StoreFactory(InMemoryStore()))
-    assert "store_factory" in repr(factory)
+    with InMemoryStore() as store:
+        factory = StoreCacheFactory(StoreFactory(store))
+        assert "store_factory" in repr(factory)
 
 
 def test_store_cache_factory_str_contains_store_factory() -> None:
-    factory = StoreCacheFactory(StoreFactory(InMemoryStore()))
-    assert "store_factory" in str(factory)
+    with InMemoryStore() as store:
+        factory = StoreCacheFactory(StoreFactory(store))
+        assert "store_factory" in str(factory)

@@ -31,9 +31,9 @@ from persista.testing.fixtures import lmdb_available
 
 @lmdb_available
 def test_lmdb_store_set_get(tmp_path):
-    store = LmdbStore(tmp_path / "db")
-    store.set("1", {"value": 42})
-    assert store.get("1") == {"value": 42}
+    with LmdbStore(tmp_path / "db") as store:
+        store.set("1", {"value": 42})
+        assert store.get("1") == {"value": 42}
 ```
 
 Use `<dep>_not_available` for the opposite case, e.g. verifying that a helpful error is raised

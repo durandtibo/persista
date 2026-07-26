@@ -780,6 +780,7 @@ def test_from_uri_constructs_with_same_url(
     url = "redis://localhost:6379/0"
     new_store = store_cls.from_uri(url)
     assert new_store._url == url
+    new_store.open()
     new_store.set("1", {"text": "hello"})
     assert new_store.get("1") == {"text": "hello"}
 
@@ -791,6 +792,7 @@ def test_from_uri_ignores_read_only(
     url = "redis://localhost:6379/0"
     new_store = store_cls.from_uri(url, read_only=True)
     assert new_store._url == url
+    new_store.open()
     new_store.set("1", {"text": "hello"})
     assert new_store.get("1") == {"text": "hello"}
 
@@ -801,6 +803,28 @@ def test_from_uri_ignores_read_only(
 def test_close_is_idempotent(store: BaseRedisStore) -> None:
     store.close()
     store.close()  # should not raise
+
+
+def test_open_is_idempotent(store: BaseRedisStore) -> None:
+    store.open()  # already open; should not raise or reconnect
+    store.set("1", {"text": "hello"})
+    assert store.get("1") == {"text": "hello"}
+
+
+async def test_aopen_is_idempotent(store: BaseRedisStore) -> None:
+    await store.aopen()  # already open; should not raise or reconnect
+    await store.aset("1", {"text": "hello"})
+    assert await store.aget("1") == {"text": "hello"}
+
+
+def test_get_before_open_raises(
+    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
+) -> None:
+    _use_fake_redis(monkeypatch)
+    _use_fake_async_redis(monkeypatch)
+    store = store_cls()
+    with pytest.raises(RuntimeError, match="not open"):
+        store.get("1")
 
 
 def test_close_returns_none(store: BaseRedisStore) -> None:
