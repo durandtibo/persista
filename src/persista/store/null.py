@@ -47,6 +47,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
         >>> from persista.store import NullStore
         >>> from persista.cache import Cache
         >>> cache = Cache(store=NullStore())
+        >>> cache.open()
         >>> cache.set("greeting", "hello")
         >>> cache.get("greeting") is None
         True

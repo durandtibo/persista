@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -16,12 +16,18 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+def _make_cache(**kwargs: Any) -> Cache:
+    cache = Cache(**kwargs)
+    cache.open()
+    return cache
+
+
 @pytest.fixture(autouse=True)
 def _reset_default_cache() -> Iterator[None]:
     # Isolate tests from each other and from any cache installed by
     # a previous test via `set_cache`.
     original = get_cache()
-    set_cache(Cache(default_ttl=300))
+    set_cache(_make_cache(default_ttl=300))
     yield
     set_cache(original)
 
@@ -45,7 +51,7 @@ def test_get_cache_returns_same_instance() -> None:
 
 
 def test_set_cache_replaces_instance() -> None:
-    cache = Cache()
+    cache = _make_cache()
     set_cache(cache)
     assert get_cache() is cache
 
@@ -62,7 +68,7 @@ def test_set_cache_reflected_by_previously_decorated_function() -> None:
     assert calls == [1]
 
     # Swapping the shared cache should make `func` start with a clean slate.
-    set_cache(Cache())
+    set_cache(_make_cache())
     func(1)
     assert calls == [1, 1]
 
@@ -221,7 +227,7 @@ async def test_async_cached_reflected_by_swapping_shared_cache() -> None:
     assert calls == [1]
 
     # Swapping the shared cache should make `func` start with a clean slate.
-    set_cache(Cache(default_ttl=300))
+    set_cache(_make_cache(default_ttl=300))
     await func(1)
     assert calls == [1, 1]
 

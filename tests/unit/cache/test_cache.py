@@ -9,12 +9,13 @@ from persista.cache.cache import Cache
 from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Coroutine
+    from collections.abc import Awaitable, Callable, Coroutine, Generator
 
 
 @pytest.fixture
-def cache() -> Cache:
-    return Cache()
+def cache() -> Generator[Cache]:
+    with Cache() as cache:
+        yield cache
 
 
 @pytest.fixture
@@ -100,6 +101,7 @@ def test_set_ttl_negative_raises(cache: Cache) -> None:
 
 def test_set_uses_default_ttl_when_not_given(fake_time: list[float]) -> None:
     cache = Cache(default_ttl=10)
+    cache.open()
     cache.set("key", "value")
     fake_time[0] += 11
     assert cache.get("key") is None
@@ -118,6 +120,7 @@ def test_get_cached_none_is_hit_by_default(cache: Cache) -> None:
 
 def test_get_cached_none_is_miss_with_ignore_none() -> None:
     cache = Cache(ignore_none=True)
+    cache.open()
     cache.set("key", None, ttl=None)
     hit, value = cache._get("key")
     assert hit is False
@@ -180,6 +183,7 @@ def test_get_many_cached_none_is_hit_by_default(cache: Cache) -> None:
 
 def test_get_many_cached_none_is_omitted_with_ignore_none() -> None:
     cache = Cache(ignore_none=True)
+    cache.open()
     cache.set("a", None, ttl=None)
     cache.set("b", "2")
     assert cache.get_many(["a", "b"]) == {"b": "2"}
@@ -225,6 +229,7 @@ def test_contains_many_cached_none_is_hit_by_default(cache: Cache) -> None:
 
 def test_contains_many_cached_none_is_omitted_with_ignore_none() -> None:
     cache = Cache(ignore_none=True)
+    cache.open()
     cache.set("a", None, ttl=None)
     cache.set("b", "2")
     assert cache.contains_many(["a", "b"]) == [False, True]
@@ -280,6 +285,7 @@ def test_set_many_ttl_negative_raises(cache: Cache) -> None:
 
 def test_set_many_uses_default_ttl() -> None:
     cache = Cache(default_ttl=60)
+    cache.open()
     cache.set_many({"a": "1"})
     assert cache.contains("a") is True
 
@@ -390,6 +396,7 @@ def test_get_or_compute_ttl_zero_recomputes_every_call(cache: Cache) -> None:
 
 def test_get_or_compute_uses_default_ttl_when_not_set(fake_time: list[float]) -> None:
     cache = Cache(default_ttl=10)
+    cache.open()
     calls = []
 
     def fn(x: int) -> int:
@@ -470,6 +477,7 @@ async def test_aget_or_compute_ttl_zero_recomputes_every_call(cache: Cache) -> N
 
 async def test_aget_or_compute_uses_default_ttl_when_not_set(fake_time: list[float]) -> None:
     cache = Cache(default_ttl=10)
+    cache.open()
     calls = []
 
     async def fn(x: int) -> int:
@@ -557,6 +565,7 @@ def test_memoize_respects_ttl(cache: Cache, fake_time: list[float]) -> None:
 
 def test_memoize_uses_default_ttl_when_not_set(fake_time: list[float]) -> None:
     cache = Cache(default_ttl=10)
+    cache.open()
     calls = []
 
     @cache.memoize()
@@ -631,7 +640,9 @@ def test_memoize_two_caches_do_not_share_entries() -> None:
     calls = []
 
     cache1 = Cache()
+    cache1.open()
     cache2 = Cache()
+    cache2.open()
 
     @cache1.memoize()
     def func_a(x: int) -> int:
@@ -723,6 +734,7 @@ async def test_memoize_respects_ttl_async(cache: Cache, fake_time: list[float]) 
 
 async def test_memoize_uses_default_ttl_when_not_set_async(fake_time: list[float]) -> None:
     cache = Cache(default_ttl=10)
+    cache.open()
     calls = []
 
     @cache.memoize()
@@ -797,7 +809,9 @@ async def test_memoize_two_caches_do_not_share_entries_async() -> None:
     calls = []
 
     cache1 = Cache()
+    cache1.open()
     cache2 = Cache()
+    cache2.open()
 
     @cache1.memoize()
     async def func_a(x: int) -> int:
@@ -876,11 +890,11 @@ async def test_aget_expired(cache: Cache, fake_time: list[float]) -> None:
 
 async def test_aget_expired_evicts_entry(fake_time: list[float]) -> None:
     store = InMemoryStore()
-    cache = Cache(store=store)
-    await cache.aset("key", "value", ttl=10)
-    fake_time[0] += 11
-    await cache.aget("key")
-    assert await store.aget("key") is None
+    with Cache(store=store) as cache:
+        await cache.aset("key", "value", ttl=10)
+        fake_time[0] += 11
+        await cache.aget("key")
+        assert await store.aget("key") is None
 
 
 async def test_cache_async_full_round_trip_through_real_store() -> None:
@@ -888,31 +902,31 @@ async def test_cache_async_full_round_trip_through_real_store() -> None:
     which would raise TypeError if any call site used the sync (unprefixed)
     store methods instead of the async (a-prefixed) ones.
     """
-    cache = Cache(store=InMemoryStore())
-    await cache.aset("key", "value")
-    assert await cache.aget("key") == "value"
-    assert await cache.acontains("key") is True
-    await cache.adelete("key")
-    assert await cache.aget("key") is None
-    await cache.aset("key1", "value1")
-    await cache.aset("key2", "value2")
-    await cache.aclear()
-    assert await cache.aget("key1") is None
-    assert await cache.aget("key2") is None
+    with Cache(store=InMemoryStore()) as cache:
+        await cache.aset("key", "value")
+        assert await cache.aget("key") == "value"
+        assert await cache.acontains("key") is True
+        await cache.adelete("key")
+        assert await cache.aget("key") is None
+        await cache.aset("key1", "value1")
+        await cache.aset("key2", "value2")
+        await cache.aclear()
+        assert await cache.aget("key1") is None
+        assert await cache.aget("key2") is None
 
 
 async def test_aset_uses_default_ttl_when_not_given(fake_time: list[float]) -> None:
-    cache = Cache(default_ttl=10)
-    await cache.aset("key", "value")
-    fake_time[0] += 11
-    assert await cache.aget("key") is None
+    with Cache(default_ttl=10) as cache:
+        await cache.aset("key", "value")
+        fake_time[0] += 11
+        assert await cache.aget("key") is None
 
 
 async def test_aset_ttl_overrides_default(fake_time: list[float]) -> None:
-    cache = Cache(default_ttl=10)
-    await cache.aset("key", "value", ttl=100)
-    fake_time[0] += 11
-    assert await cache.aget("key") == "value"
+    with Cache(default_ttl=10) as cache:
+        await cache.aset("key", "value", ttl=100)
+        fake_time[0] += 11
+        assert await cache.aget("key") == "value"
 
 
 async def test_aget_default_ttl_none_means_forever_by_default(
@@ -942,9 +956,9 @@ async def test_aset_ttl_negative(cache: Cache) -> None:
 
 
 async def test_aget_cached_none_is_miss_with_ignore_none() -> None:
-    cache = Cache(ignore_none=True)
-    await cache.aset("key", None)
-    assert await cache.aget("key") is None
+    with Cache(ignore_none=True) as cache:
+        await cache.aset("key", None)
+        assert await cache.aget("key") is None
 
 
 async def test_aget_cached_none_is_hit_without_ignore_none(cache: Cache) -> None:
@@ -1009,10 +1023,10 @@ async def test_aget_many_cached_none_is_hit_by_default(cache: Cache) -> None:
 
 
 async def test_aget_many_cached_none_is_omitted_with_ignore_none() -> None:
-    cache = Cache(ignore_none=True)
-    await cache.aset("a", None, ttl=None)
-    await cache.aset("b", "2")
-    assert await cache.aget_many(["a", "b"]) == {"b": "2"}
+    with Cache(ignore_none=True) as cache:
+        await cache.aset("a", None, ttl=None)
+        await cache.aset("b", "2")
+        assert await cache.aget_many(["a", "b"]) == {"b": "2"}
 
 
 # --- acontains_many ---
@@ -1054,10 +1068,10 @@ async def test_acontains_many_cached_none_is_hit_by_default(cache: Cache) -> Non
 
 
 async def test_acontains_many_cached_none_is_omitted_with_ignore_none() -> None:
-    cache = Cache(ignore_none=True)
-    await cache.aset("a", None, ttl=None)
-    await cache.aset("b", "2")
-    assert await cache.acontains_many(["a", "b"]) == [False, True]
+    with Cache(ignore_none=True) as cache:
+        await cache.aset("a", None, ttl=None)
+        await cache.aset("b", "2")
+        assert await cache.acontains_many(["a", "b"]) == [False, True]
 
 
 # --- aset_many ---
@@ -1109,9 +1123,9 @@ async def test_aset_many_ttl_negative_raises(cache: Cache) -> None:
 
 
 async def test_aset_many_uses_default_ttl() -> None:
-    cache = Cache(default_ttl=60)
-    await cache.aset_many({"a": "1"})
-    assert await cache.acontains("a") is True
+    with Cache(default_ttl=60) as cache:
+        await cache.aset_many({"a": "1"})
+        assert await cache.acontains("a") is True
 
 
 # --- adelete_many ---
@@ -1256,6 +1270,7 @@ async def test_amemoize_respects_ttl(cache: Cache, fake_time: list[float]) -> No
 
 async def test_amemoize_uses_default_ttl_when_not_set(fake_time: list[float]) -> None:
     cache = Cache(default_ttl=10)
+    cache.open()
     calls = []
 
     @cache.amemoize()
@@ -1327,23 +1342,22 @@ async def test_amemoize_kwargs(cache: Cache) -> None:
 
 
 async def test_amemoize_two_caches_do_not_share_entries() -> None:
-    cache1 = Cache()
-    cache2 = Cache()
-    calls = []
+    with Cache() as cache1, Cache() as cache2:
+        calls = []
 
-    @cache1.amemoize()
-    async def func1(x: int) -> int:
-        calls.append(("func1", x))
-        return x * 2
+        @cache1.amemoize()
+        async def func1(x: int) -> int:
+            calls.append(("func1", x))
+            return x * 2
 
-    @cache2.amemoize()
-    async def func2(x: int) -> int:
-        calls.append(("func2", x))
-        return x * 2
+        @cache2.amemoize()
+        async def func2(x: int) -> int:
+            calls.append(("func2", x))
+            return x * 2
 
-    await func1(1)
-    await func2(1)
-    assert calls == [("func1", 1), ("func2", 1)]
+        await func1(1)
+        await func2(1)
+        assert calls == [("func1", 1), ("func2", 1)]
 
 
 async def test_amemoize_shared_across_functions_with_same_qualname(cache: Cache) -> None:

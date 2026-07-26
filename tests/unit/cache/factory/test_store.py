@@ -32,6 +32,7 @@ def test_store_cache_factory_make_cache_uses_store_from_store_factory() -> None:
     store = InMemoryStore()
     factory = StoreCacheFactory(StoreFactory(store))
     cache = factory.make_cache()
+    cache.open()
     cache.set("key", "value")
     assert store.get("key")["value"] == "value"
 
@@ -49,6 +50,7 @@ def test_store_cache_factory_make_cache_forwards_default_ttl() -> None:
 def test_store_cache_factory_make_cache_forwards_ignore_none() -> None:
     factory = StoreCacheFactory(StoreFactory(InMemoryStore()), ignore_none=True)
     cache = factory.make_cache()
+    cache.open()
     cache.set("key", None)
     assert cache.get("key") is None
     assert not cache.contains("key")

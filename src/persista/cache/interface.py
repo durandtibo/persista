@@ -18,11 +18,17 @@ from persista.cache.cache import _UNSET, Cache
 from persista.cache.utils import make_key
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Generator
 
 T = TypeVar("T")
 
-_state = {"cache": Cache(default_ttl=300)}
+
+def _make_default_cache() -> Generator[Cache]:
+    with Cache(default_ttl=300) as cache:
+        yield cache
+
+
+_state = {"cache": _make_default_cache()}
 
 
 def get_cache() -> Cache:

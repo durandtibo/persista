@@ -45,6 +45,12 @@ def _async_client(handler: Callable) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
+def _cache() -> Cache:
+    cache = Cache()
+    cache.open()
+    return cache
+
+
 ############################
 #       HttpClient        #
 ############################
@@ -61,7 +67,7 @@ def test_http_client_no_cache_by_default() -> None:
 
 def test_http_client_caches_get_on_hit() -> None:
     handler, calls = _counting_handler(lambda n: {"n": n})
-    client = HttpClient(cache=Cache(), client=_client(handler))
+    client = HttpClient(cache=_cache(), client=_client(handler))
 
     r1 = client.get("https://example.com/foo")
     r2 = client.get("https://example.com/foo")
@@ -72,7 +78,7 @@ def test_http_client_caches_get_on_hit() -> None:
 
 def test_http_client_cache_keys_differ_by_url() -> None:
     handler, calls = _counting_handler(lambda n: {"n": n})
-    client = HttpClient(cache=Cache(), client=_client(handler))
+    client = HttpClient(cache=_cache(), client=_client(handler))
 
     client.get("https://example.com/foo")
     client.get("https://example.com/bar")
@@ -82,7 +88,7 @@ def test_http_client_cache_keys_differ_by_url() -> None:
 
 def test_http_client_cache_keys_differ_by_params() -> None:
     handler, calls = _counting_handler(lambda n: {"n": n})
-    client = HttpClient(cache=Cache(), client=_client(handler))
+    client = HttpClient(cache=_cache(), client=_client(handler))
 
     client.get("https://example.com", params={"x": 1})
     client.get("https://example.com", params={"x": 2})
@@ -122,7 +128,7 @@ def test_http_client_delete() -> None:
 
 def test_http_client_does_not_cache_non_cacheable_method() -> None:
     handler, calls = _counting_handler(lambda n: {"n": n})
-    client = HttpClient(cache=Cache(), client=_client(handler))
+    client = HttpClient(cache=_cache(), client=_client(handler))
 
     client.post("https://example.com", json={"a": 1})
     client.post("https://example.com", json={"a": 1})
@@ -137,7 +143,7 @@ def test_http_client_does_not_cache_error_response() -> None:
         calls()
         return httpx.Response(500, request=request)
 
-    client = HttpClient(cache=Cache(), max_retries=0, client=_client(handler))
+    client = HttpClient(cache=_cache(), max_retries=0, client=_client(handler))
 
     with pytest.raises(httpx.HTTPStatusError):
         client.get("https://example.com")
@@ -154,7 +160,7 @@ def test_http_client_does_not_cache_error_response() -> None:
 
 async def test_async_http_client_caches_get_on_hit() -> None:
     handler, calls = _counting_handler(lambda n: {"n": n})
-    client = AsyncHttpClient(cache=Cache(), client=_async_client(handler))
+    client = AsyncHttpClient(cache=_cache(), client=_async_client(handler))
 
     r1 = await client.get("https://example.com/foo")
     r2 = await client.get("https://example.com/foo")
