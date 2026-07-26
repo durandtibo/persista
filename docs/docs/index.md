@@ -77,10 +77,10 @@ solves this with a single, consistent `BaseStore` interface:
 
 ```pycon
 >>> from persista.store import InMemoryStore
->>> store = InMemoryStore()
->>> store.open()
->>> store.set("user:1", {"name": "Alice"})
->>> store.get("user:1")
+>>> with InMemoryStore() as store:
+...     store.set("user:1", {"name": "Alice"})
+...     store.get("user:1")
+...
 {'name': 'Alice'}
 
 ```

@@ -247,7 +247,9 @@ string, and store values in a configurable `table` (requires the `psycopg` extra
 ```python
 from persista.store import PostgresStore
 
-with PostgresStore("postgresql://user:pass@localhost/dbname", table="documents") as store:
+with PostgresStore(
+    "postgresql://user:pass@localhost/dbname", table="documents"
+) as store:
     store.set_many(
         {
             "1": {"title": "Intro to Python", "author": "Alice"},
@@ -275,8 +277,16 @@ from persista.store import LmdbStore
 with LmdbStore("/tmp/lmdb_store") as store:
     store.set_many(
         {
-            "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-            "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
+            "1": {
+                "title": "Intro to Python",
+                "author": "Alice",
+                "category": "Programming",
+            },
+            "2": {
+                "title": "Advanced Python",
+                "author": "Alice",
+                "category": "Programming",
+            },
             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
         }
     )
@@ -309,8 +319,16 @@ from persista.store import RedisStore
 with RedisStore("redis://localhost:6379/0") as store:
     store.set_many(
         {
-            "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-            "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
+            "1": {
+                "title": "Intro to Python",
+                "author": "Alice",
+                "category": "Programming",
+            },
+            "2": {
+                "title": "Advanced Python",
+                "author": "Alice",
+                "category": "Programming",
+            },
             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
         }
     )
@@ -464,8 +482,8 @@ class from that URI:
 >>> from persista.store import SQLiteStore
 >>> with SQLiteStore("tmp/data.sqlite") as store:
 ...     uri = store.to_uri()
-...     print(uri)
 ...
+>>> uri
 'sqlite:tmp/data.sqlite'
 >>> with SQLiteStore.from_uri(uri) as reloaded:
 ...     pass
@@ -487,6 +505,7 @@ URI's scheme to the right class automatically:
 >>> with JsonFileStore("data") as store:
 ...     store.set("1", {"title": "Intro to Python"})
 ...     uri = store.to_uri()
+...
 >>> with store_from_uri(uri) as reloaded:
 ...     print(isinstance(reloaded, JsonFileStore))
 ...     print(reloaded.get("1"))
