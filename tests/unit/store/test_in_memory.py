@@ -613,6 +613,12 @@ def test_close_is_idempotent(store: InMemoryStore) -> None:
     store.close()  # should not raise
 
 
+def test_get_before_open_raises() -> None:
+    store = InMemoryStore()
+    with pytest.raises(RuntimeError, match="not open"):
+        store.get("1")
+
+
 def test_close_returns_none(store: InMemoryStore) -> None:
     assert store.close() is None
 

@@ -588,6 +588,12 @@ def test_close_is_idempotent(store: BaseLmdbStore) -> None:
     store.close()  # should not raise
 
 
+def test_get_before_open_raises(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> None:
+    store = store_cls(str(tmp_path / "unopened"))
+    with pytest.raises(RuntimeError, match="not open"):
+        store.get("1")
+
+
 def test_close_returns_none(store: BaseLmdbStore) -> None:
     assert store.close() is None
 

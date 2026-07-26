@@ -1055,6 +1055,12 @@ def test_close_is_idempotent(store: BasePostgresStore) -> None:
     store.close()  # should not raise
 
 
+def test_get_before_open_raises(store_cls: type[BasePostgresStore]) -> None:
+    store = store_cls("postgresql://localhost/db", table="items")
+    with pytest.raises(RuntimeError, match="not open"):
+        store.get("1")
+
+
 def test_close_returns_none(store: BasePostgresStore) -> None:
     assert store.close() is None
 

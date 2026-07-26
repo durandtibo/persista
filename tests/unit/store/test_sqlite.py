@@ -858,6 +858,18 @@ def test_close_is_idempotent(store: BaseSQLiteStore) -> None:
     store.close()  # should not raise
 
 
+def test_open_is_idempotent(store: BaseSQLiteStore) -> None:
+    store.open()  # already open; should not raise or reconnect
+    store.set("1", {"a": 1})
+    assert store.get("1") == {"a": 1}
+
+
+async def test_aopen_is_idempotent(store: BaseSQLiteStore) -> None:
+    await store.aopen()  # already open; should not raise or reconnect
+    await store.aset("1", {"a": 1})
+    assert await store.aget("1") == {"a": 1}
+
+
 def test_close_returns_none(store: BaseSQLiteStore) -> None:
     assert store.close() is None
 
