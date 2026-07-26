@@ -20,7 +20,7 @@ class DuckDBStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
     instance on each call to :meth:`make_store`.
 
     Args:
-        path: Path to the DuckDB file, or ``":memory:"`` for an
+        database: Path to the DuckDB file, or ``":memory:"`` for an
             in-memory database.
         **kwargs: Additional keyword arguments to pass to
             ``duckdb.connect``.
@@ -34,15 +34,15 @@ class DuckDBStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
         ```
     """
 
-    def __init__(self, path: Path | str = ":memory:", **kwargs: Any) -> None:
-        self._path = path
+    def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
+        self._database = database
         self._kwargs = kwargs
 
     def make_store(self) -> DuckDBStore:
-        return DuckDBStore(self._path, **self._kwargs)
+        return DuckDBStore(self._database, **self._kwargs)
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
-        return {"path": self._path} | self._kwargs
+        return {"database": self._database} | self._kwargs
 
 
 class TypedDuckDBStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
@@ -51,7 +51,7 @@ class TypedDuckDBStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
     :meth:`make_store`.
 
     Args:
-        path: Path to the DuckDB file, or ``":memory:"`` for an
+        database: Path to the DuckDB file, or ``":memory:"`` for an
             in-memory database.
         value_schema: Optional mapping of value field names to DuckDB
             type strings.
@@ -69,16 +69,16 @@ class TypedDuckDBStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
 
     def __init__(
         self,
-        path: Path | str = ":memory:",
+        database: Path | str = ":memory:",
         value_schema: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> None:
-        self._path = path
+        self._database = database
         self._value_schema = value_schema
         self._kwargs = kwargs
 
     def make_store(self) -> TypedDuckDBStore:
-        return TypedDuckDBStore(self._path, value_schema=self._value_schema, **self._kwargs)
+        return TypedDuckDBStore(self._database, value_schema=self._value_schema, **self._kwargs)
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
-        return {"path": self._path, "value_schema": self._value_schema} | self._kwargs
+        return {"database": self._database, "value_schema": self._value_schema} | self._kwargs
