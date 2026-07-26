@@ -71,8 +71,7 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             msg = f"path must be a directory: {self._path}"
             raise NotADirectoryError(msg)
         self._kwargs = kwargs
-        self._closed = False
-        self._path.mkdir(parents=True, exist_ok=True)
+        self._closed = True
 
     @property
     def path(self) -> Path:
@@ -102,6 +101,12 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def _path_to_key(self, path: Path) -> str:
         return unquote(path.name[: -len(self.extension)] if self.extension else path.name)
 
+    def open(self) -> None:
+        if not self._closed:
+            return
+        self._path.mkdir(parents=True, exist_ok=True)
+        self._closed = False
+
     def close(self) -> None:
         self._closed = True
 
@@ -111,8 +116,11 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
 
     def _check_open(self) -> None:
         if self._closed:
-            msg = "Cannot operate on a closed store."
-            raise ValueError(msg)
+            msg = (
+                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
+                "context manager."
+            )
+            raise RuntimeError(msg)
 
     def get(self, key: str) -> dict[str, Any] | None:
         self._check_open()
@@ -210,20 +218,6 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         if not self._closed:
             kwargs["count"] = self.count()
         return kwargs | self._kwargs
-
-    def __enter__(self) -> Self:
-        self._closed = False
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.close()
-
-    async def __aenter__(self) -> Self:
-        self._closed = False
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.aclose()
 
 
 class JsonFileStore(BaseFileStore):

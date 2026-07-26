@@ -89,5 +89,8 @@ class ThreadedAsyncStoreMixin:
     async def acount(self) -> int:
         return await asyncio.to_thread(self.count)
 
+    async def aopen(self) -> None:
+        await asyncio.to_thread(self.open)
+
     async def aclose(self) -> None:
         await asyncio.to_thread(self.close)

@@ -71,7 +71,7 @@ def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
         read_only: Forwarded to the matched class's ``from_uri``.
 
     Returns:
-        A new store instance.
+        A new, already-open store instance.
 
     Raises:
         ValueError: If ``uri``'s scheme is not registered.
@@ -81,4 +81,6 @@ def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
     if store_cls is None:
         msg = f"No store registered for scheme {scheme!r} (from {uri!r})"
         raise ValueError(msg)
-    return store_cls.from_uri(uri, read_only=read_only)
+    store = store_cls.from_uri(uri, read_only=read_only)
+    store.open()
+    return store

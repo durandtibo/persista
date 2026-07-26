@@ -228,6 +228,7 @@ def test_to_uri_returns_null_scheme(store: NullStore) -> None:
 
 def test_from_uri_returns_new_store() -> None:
     store = NullStore.from_uri("null://")
+    store.open()
     assert store.count() == 0
     assert not store.closed
 

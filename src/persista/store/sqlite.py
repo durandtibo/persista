@@ -122,7 +122,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         # the original path rather than double-wrapping it.
         self._path_for_uri: Path | str = database
         self._kwargs = kwargs
-        self._closed = False
+        self._closed = True
         # Guards every access to self._conn: the no-aiosqlite async fallback
         # runs sync methods via asyncio.to_thread, which can execute
         # concurrently on the same sqlite3.Connection from different OS
@@ -132,12 +132,32 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         # themselves taking the lock) while still serializing against other
         # threads for the entire operation.
         self._lock = threading.RLock()
-        self._conn = self._connect()
-        self._ensure_schema()
+        self._conn: sqlite3.Connection | None = None
         self._aconn: aiosqlite.Connection | None = None
         self._aconn_lock = asyncio.Lock()
         self._awrite_lock = asyncio.Lock()
         self._aschema_ready = False
+
+    def _check_open(self) -> None:
+        if self._closed:
+            msg = (
+                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
+                "context manager."
+            )
+            raise RuntimeError(msg)
+
+    def open(self) -> None:
+        if not self._closed:
+            return
+        self._conn = self._connect()
+        self._ensure_schema()
+        self._aschema_ready = False
+        self._closed = False
+
+    async def aopen(self) -> None:
+        if not self._closed:
+            return
+        await asyncio.to_thread(self.open)
 
     async def _ensure_aconn(self) -> aiosqlite.Connection:
         """Lazily open (and schema-initialize) the aiosqlite connection.
@@ -146,9 +166,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         callers must check that first and fall back to
         ``asyncio.to_thread`` otherwise (see e.g. :meth:`aget`).
         """
-        if self._closed:
-            msg = "Cannot operate on a closed database."
-            raise sqlite3.ProgrammingError(msg)
+        self._check_open()
         async with self._aconn_lock:
             if self._aconn is None:
                 self._aconn = await aiosqlite.connect(self._database, **self._kwargs)
@@ -316,6 +334,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         return self._closed
 
     def get(self, key: str) -> dict[str, Any] | None:
+        self._check_open()
         with self._lock:
             row = self._conn.execute(
                 f"SELECT * FROM store WHERE {self._key_column} = ?",  # noqa: S608
@@ -335,6 +354,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         return self._row_to_value(row) if row else None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        self._check_open()
         if not keys:
             return []
         by_key: dict[str, dict[str, Any]] = {}
@@ -376,6 +396,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
+        self._check_open()
         if not items:
             return
         on_conflict = normalize_on_conflict(on_conflict)
@@ -431,6 +452,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         return " AND ".join(conditions), values
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        self._check_open()
         if not field_filters:
             with self._lock:
                 rows = self._conn.execute("SELECT * FROM store").fetchall()
@@ -462,6 +484,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         return [self._row_to_value(row) for row in rows]
 
     def delete(self, key: str) -> None:
+        self._check_open()
         with self._lock:
             self._conn.execute(
                 f"DELETE FROM store WHERE {self._key_column} = ?",  # noqa: S608
@@ -478,6 +501,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         await conn.commit()
 
     def delete_many(self, keys: list[str]) -> None:
+        self._check_open()
         if not keys:
             return
         with self._lock:
@@ -505,6 +529,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         await conn.commit()
 
     def clear(self) -> None:
+        self._check_open()
         with self._lock:
             self._conn.execute("DELETE FROM store")
             self._conn.commit()
@@ -518,6 +543,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         await conn.commit()
 
     def contains(self, key: str) -> bool:
+        self._check_open()
         with self._lock:
             row = self._conn.execute(
                 f"SELECT 1 FROM store WHERE {self._key_column} = ? LIMIT 1",  # noqa: S608
@@ -536,6 +562,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         return await cursor.fetchone() is not None
 
     def contains_many(self, keys: list[str]) -> list[bool]:
+        self._check_open()
         if not keys:
             return []
         existing: set[str] = set()
@@ -568,6 +595,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         return [key in existing for key in keys]
 
     def keys(self) -> Iterator[str]:
+        self._check_open()
         with self._lock:
             rows = self._conn.execute(
                 f"SELECT {self._key_column} FROM store"  # noqa: S608
@@ -592,6 +620,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
+        self._check_open()
         sql = f"SELECT * FROM store ORDER BY {self._key_column} LIMIT ? OFFSET ?"  # noqa: S608
         offset = 0
         while True:
@@ -627,6 +656,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             yield batch
 
     def count(self) -> int:
+        self._check_open()
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM store").fetchone()[0]
 
@@ -654,6 +684,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         Returns:
             A mapping of column name to SQLite declared type.
         """
+        self._check_open()
         with self._lock:
             rows = self._conn.execute("PRAGMA table_info(store)").fetchall()
         # PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
@@ -674,28 +705,6 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         if not self._closed:
             kwargs["count"] = self.count()
         return kwargs | self._kwargs
-
-    def __enter__(self) -> Self:
-        if self._closed:
-            self._conn = self._connect()
-            self._closed = False
-            self._ensure_schema()
-            self._aschema_ready = False
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.close()
-
-    async def __aenter__(self) -> Self:
-        if self._closed:
-            self._conn = self._connect()
-            self._closed = False
-            self._ensure_schema()
-            self._aschema_ready = False
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.aclose()
 
 
 _CREATE_TABLE = """
@@ -981,6 +990,7 @@ class PickleSQLiteStore(BaseSQLiteStore):
         raise NotImplementedError(msg)
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        self._check_open()
         with self._lock:
             rows = self._conn.execute("SELECT * FROM store").fetchall()
         values = (self._row_to_value(row) for row in rows)

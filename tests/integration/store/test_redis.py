@@ -52,7 +52,10 @@ def store(store_cls: type[BaseRedisStore]) -> Generator[BaseRedisStore, None, No
         # isolated.
         store.delete_many(list(store.keys()))
         yield store
-        store.delete_many(list(store.keys()))
+        # test_repr_after_close_does_not_raise closes the store itself, so
+        # only clean up if it is still open.
+        if not store.closed:
+            store.delete_many(list(store.keys()))
 
 
 @pytest.fixture(scope="module")

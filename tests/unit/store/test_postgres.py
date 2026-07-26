@@ -239,7 +239,8 @@ def _connect(
             store = store_cls.from_uri(conninfo, **kwargs)
         else:
             store = store_cls(conninfo, table=table, **kwargs)
-    conn.store = store
+        conn.store = store
+        store.open()
     store._aconn = _AsyncConnAdapter(conn)
     return store
 
@@ -364,10 +365,20 @@ def test_invalid_table_name_raises_before_connect(store_cls: type[BasePostgresSt
         mock_connect.assert_not_called()
 
 
-def test_valid_table_name_calls_connect(store_cls: type[BasePostgresStore]) -> None:
+def test_valid_table_name_does_not_connect_before_open(
+    store_cls: type[BasePostgresStore],
+) -> None:
     with patch(f"{MODULE}.psycopg.connect") as mock_connect:
         mock_connect.return_value = MagicMock()
         store_cls("postgresql://x", table="mytable")
+        mock_connect.assert_not_called()
+
+
+def test_opening_valid_table_name_calls_connect(store_cls: type[BasePostgresStore]) -> None:
+    with patch(f"{MODULE}.psycopg.connect") as mock_connect:
+        mock_connect.return_value = MagicMock()
+        store = store_cls("postgresql://x", table="mytable")
+        store.open()
         mock_connect.assert_called_once()
         assert mock_connect.call_args.args == ("postgresql://x",)
         assert mock_connect.call_args.kwargs["autocommit"] is True
@@ -387,7 +398,9 @@ def test_two_stores_different_tables_are_isolated(store_cls: type[BasePostgresSt
     with patch(f"{MODULE}.psycopg.connect", return_value=conn):
         store_a = store_cls("postgresql://x", table="store_a")
         store_b = store_cls("postgresql://x", table="store_b")
-    conn.store = store_a
+        conn.store = store_a
+        store_a.open()
+        store_b.open()
     store_a.set("1", {"text": "a"})
     assert store_b.get("1") is None
     assert store_b.count() == 0
@@ -1280,11 +1293,9 @@ def test_iter_batches_with_typed_schema(
 
 @pytest.fixture
 def plain_store() -> PostgresStore:
-    with patch(f"{MODULE}.psycopg.connect") as mock_connect:
-        mock_connect.return_value = MagicMock()
-        store = PostgresStore("postgresql://x", table="store")
-    store._conn.reset_mock()
-    return store
+    # These tests only exercise pure SQL-building helpers, which don't touch
+    # the connection, so the store is left unopened.
+    return PostgresStore("postgresql://x", table="store")
 
 
 def test_plain_create_table_sql(plain_store: PostgresStore) -> None:
@@ -1316,13 +1327,11 @@ def test_plain_build_filter_condition_invalid_field_name(plain_store: PostgresSt
 
 @pytest.fixture
 def typed_sql_store() -> TypedPostgresStore:
-    with patch(f"{MODULE}.psycopg.connect") as mock_connect:
-        mock_connect.return_value = MagicMock()
-        store = TypedPostgresStore(
-            "postgresql://x", table="store", value_schema={"author": "TEXT", "year": "INTEGER"}
-        )
-    store._conn.reset_mock()
-    return store
+    # These tests only exercise pure SQL-building helpers, which don't touch
+    # the connection, so the store is left unopened.
+    return TypedPostgresStore(
+        "postgresql://x", table="store", value_schema={"author": "TEXT", "year": "INTEGER"}
+    )
 
 
 def test_typed_create_table_sql(typed_sql_store: TypedPostgresStore) -> None:
@@ -1594,6 +1603,7 @@ async def test_ensure_aconn_opens_connection_lazily(
     aconn = _AsyncConnAdapter(aconn_fake)
     with patch(f"{MODULE}.psycopg.connect", return_value=conn):
         store = store_cls("postgresql://x", table="store")
+        store.open()
     aconn_fake.store = store
     assert store._aconn is None
     with patch(f"{MODULE}.psycopg.AsyncConnection.connect", new=AsyncMock(return_value=aconn)):
@@ -1887,7 +1897,9 @@ async def test_two_stores_different_tables_are_isolated_async(
     with patch(f"{MODULE}.psycopg.connect", return_value=conn):
         store_a = store_cls("postgresql://x", table="store_a")
         store_b = store_cls("postgresql://x", table="store_b")
-    conn.store = store_a
+        conn.store = store_a
+        store_a.open()
+        store_b.open()
     store_a._aconn = _AsyncConnAdapter(conn)
     store_b._aconn = _AsyncConnAdapter(conn)
     await store_a.aset("1", {"text": "a"})

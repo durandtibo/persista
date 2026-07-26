@@ -7,8 +7,10 @@ from persista.store.factory import BaseStoreFactory, StoreFactory
 
 
 def _make_store() -> InMemoryStore:
-    """Return an InMemoryStore instance for testing."""
-    return InMemoryStore()
+    """Return an opened InMemoryStore instance for testing."""
+    store = InMemoryStore()
+    store.open()
+    return store
 
 
 ##################################

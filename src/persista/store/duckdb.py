@@ -67,8 +67,8 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         check_duckdb()
         self._path = prepare_store_path(path)
         self._kwargs = kwargs
-        self._closed = False
-        self._conn = duckdb.connect(str(self._path), **kwargs)
+        self._closed = True
+        self._conn: duckdb.DuckDBPyConnection | None = None
         # DuckDB connections aren't safe for concurrent use from multiple
         # threads; ThreadedAsyncStoreMixin runs each async call in a worker
         # thread, so every access to self._conn must be serialized.
@@ -112,6 +112,22 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             sql += f" WHERE {where}"
         return sql
 
+    def _check_open(self) -> None:
+        if self._closed:
+            msg = (
+                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
+                "context manager."
+            )
+            raise RuntimeError(msg)
+
+    def open(self) -> None:
+        if not self._closed:
+            return
+        with self._lock:
+            self._conn = duckdb.connect(str(self._path), **self._kwargs)
+        self._closed = False
+        self._ensure_schema()
+
     def close(self) -> None:
         if self._closed:
             return
@@ -125,11 +141,13 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         return self._closed
 
     def get(self, key: str) -> dict[str, Any] | None:
+        self._check_open()
         with self._lock:
             row = self._conn.execute(self._select_sql(f"{self._key_column} = ?"), [key]).fetchone()
         return self._row_to_kv(row)[1] if row else None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        self._check_open()
         if not keys:
             return []
         placeholders = ", ".join("?" * len(keys))
@@ -146,6 +164,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
+        self._check_open()
         if not items:
             return
         on_conflict = normalize_on_conflict(on_conflict)
@@ -158,6 +177,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             self._set_many(to_write)
 
     def delete(self, key: str) -> None:
+        self._check_open()
         with self._lock:
             self._conn.execute(
                 f"DELETE FROM store WHERE {self._key_column} = ?",  # noqa: S608
@@ -165,6 +185,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             )
 
     def delete_many(self, keys: list[str]) -> None:
+        self._check_open()
         if not keys:
             return
         placeholders = ", ".join("?" * len(keys))
@@ -175,10 +196,12 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             )
 
     def clear(self) -> None:
+        self._check_open()
         with self._lock:
             self._conn.execute("DELETE FROM store")
 
     def contains(self, key: str) -> bool:
+        self._check_open()
         with self._lock:
             row = self._conn.execute(
                 f"SELECT 1 FROM store WHERE {self._key_column} = ? LIMIT 1",  # noqa: S608
@@ -187,6 +210,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         return row is not None
 
     def contains_many(self, keys: list[str]) -> list[bool]:
+        self._check_open()
         if not keys:
             return []
         placeholders = ", ".join("?" * len(keys))
@@ -202,6 +226,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         return [key in existing for key in keys]
 
     def keys(self) -> Iterator[str]:
+        self._check_open()
         with self._lock:
             rows = self._conn.execute(
                 f"SELECT {self._key_column} FROM store"  # noqa: S608
@@ -213,6 +238,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
+        self._check_open()
         sql = f"{self._select_sql()} ORDER BY {self._key_column} LIMIT ? OFFSET ?"
         offset = 0
         while True:
@@ -226,6 +252,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             offset += batch_size
 
     def count(self) -> int:
+        self._check_open()
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) FROM store").fetchone()[0]
 
@@ -235,6 +262,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         Returns:
             A mapping of column name to DuckDB type name.
         """
+        self._check_open()
         with self._lock:
             rows = self._conn.sql("DESCRIBE store").fetchall()
         return {row[0]: str(row[1]) for row in rows}
@@ -246,6 +274,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         for interactive/debugging use. For programmatic access, use
         :meth:`get_columns_info` instead.
         """
+        self._check_open()
         with self._lock:
             self._conn.sql("DESCRIBE store").show()
 
@@ -262,28 +291,6 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         if not self._closed:
             kwargs["count"] = self.count()
         return kwargs | self._kwargs
-
-    def __enter__(self) -> Self:
-        if self._closed:
-            with self._lock:
-                self._conn = duckdb.connect(str(self._path), **self._kwargs)
-            self._closed = False
-            self._ensure_schema()
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.close()
-
-    async def __aenter__(self) -> Self:
-        if self._closed:
-            with self._lock:
-                self._conn = duckdb.connect(str(self._path), **self._kwargs)
-            self._closed = False
-            self._ensure_schema()
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.aclose()
 
 
 _CREATE_TABLE = """
@@ -331,7 +338,6 @@ class DuckDBStore(BaseDuckDBStore):
 
     def __init__(self, path: Path | str = ":memory:", **kwargs: Any) -> None:
         super().__init__(path, **kwargs)
-        self._ensure_schema()
 
     def _ensure_schema(self) -> None:
         if not self._kwargs.get("read_only", False):
@@ -355,6 +361,7 @@ class DuckDBStore(BaseDuckDBStore):
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        self._check_open()
         if not field_filters:
             with self._lock:
                 rows = self._conn.execute("SELECT value FROM store").fetchall()
@@ -451,7 +458,6 @@ class TypedDuckDBStore(BaseDuckDBStore):
         validate_value_schema(value_schema)
         super().__init__(path, **kwargs)
         self._schema: dict[str, str] = value_schema
-        self._ensure_schema()
 
     def _ensure_schema(self) -> None:
         if not self._kwargs.get("read_only", False):
@@ -475,6 +481,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        self._check_open()
         if not field_filters:
             with self._lock:
                 rows = self._conn.execute("SELECT * FROM store").fetchall()

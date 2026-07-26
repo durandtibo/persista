@@ -55,6 +55,24 @@ class NullStore(BaseStore, InlineDisplayMixin):
     """
 
     def __init__(self) -> None:
+        self._closed = True
+
+    def _check_open(self) -> None:
+        if self._closed:
+            msg = (
+                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
+                "context manager."
+            )
+            raise RuntimeError(msg)
+
+    def open(self) -> None:
+        if not self._closed:
+            return
+        self._closed = False
+
+    async def aopen(self) -> None:
+        if not self._closed:
+            return
         self._closed = False
 
     def close(self) -> None:
@@ -67,24 +85,20 @@ class NullStore(BaseStore, InlineDisplayMixin):
     def closed(self) -> bool:
         return self._closed
 
-    def __enter__(self) -> Self:
-        self._closed = False
-        return self
-
-    async def __aenter__(self) -> Self:
-        self._closed = False
-        return self
-
     def get(self, key: str) -> dict[str, Any] | None:  # noqa: ARG002
+        self._check_open()
         return None
 
     async def aget(self, key: str) -> dict[str, Any] | None:  # noqa: ARG002
+        self._check_open()
         return None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        self._check_open()
         return [None] * len(keys)
 
     async def aget_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        self._check_open()
         return [None] * len(keys)
 
     def set(
@@ -93,6 +107,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
         value: dict[str, Any],  # noqa: ARG002
         on_conflict: OnConflict = "overwrite",  # noqa: ARG002
     ) -> None:
+        self._check_open()
         logger.debug("Discarding key-value pair: %s", key)
 
     async def aset(
@@ -101,6 +116,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
         value: dict[str, Any],  # noqa: ARG002
         on_conflict: OnConflict = "overwrite",  # noqa: ARG002
     ) -> None:
+        self._check_open()
         logger.debug("Discarding key-value pair: %s", key)
 
     def set_many(
@@ -108,6 +124,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
         items: Mapping[str, dict[str, Any]],
         on_conflict: OnConflict = "overwrite",  # noqa: ARG002
     ) -> None:
+        self._check_open()
         logger.debug("Discarding %d key-value pair(s)", len(items))
 
     async def aset_many(
@@ -115,48 +132,57 @@ class NullStore(BaseStore, InlineDisplayMixin):
         items: Mapping[str, dict[str, Any]],
         on_conflict: OnConflict = "overwrite",  # noqa: ARG002
     ) -> None:
+        self._check_open()
         logger.debug("Discarding %d key-value pair(s)", len(items))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:  # noqa: ARG002
+        self._check_open()
         return []
 
     async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:  # noqa: ARG002
+        self._check_open()
         return []
 
     def delete(self, key: str) -> None:  # noqa: ARG002
-        return
+        self._check_open()
 
     async def adelete(self, key: str) -> None:  # noqa: ARG002
-        return
+        self._check_open()
 
     def delete_many(self, keys: list[str]) -> None:  # noqa: ARG002
-        return
+        self._check_open()
 
     async def adelete_many(self, keys: list[str]) -> None:  # noqa: ARG002
-        return
+        self._check_open()
 
     def clear(self) -> None:
-        return
+        self._check_open()
 
     async def aclear(self) -> None:
-        return
+        self._check_open()
 
     def contains(self, key: str) -> bool:  # noqa: ARG002
+        self._check_open()
         return False
 
     async def acontains(self, key: str) -> bool:  # noqa: ARG002
+        self._check_open()
         return False
 
     def contains_many(self, keys: list[str]) -> list[bool]:
+        self._check_open()
         return [False] * len(keys)
 
     async def acontains_many(self, keys: list[str]) -> list[bool]:
+        self._check_open()
         return [False] * len(keys)
 
     def keys(self) -> Iterator[str]:
+        self._check_open()
         return iter(())
 
     def akeys(self) -> AsyncIterator[str]:
+        self._check_open()
         return EmptyAsyncIterator()
 
     def iter_batches(
@@ -164,6 +190,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
         batch_size: int = 32,
     ) -> Iterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
+        self._check_open()
         yield from ()
 
     def aiter_batches(
@@ -171,12 +198,15 @@ class NullStore(BaseStore, InlineDisplayMixin):
         batch_size: int = 32,
     ) -> AsyncIterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
+        self._check_open()
         return EmptyAsyncIterator()
 
     def count(self) -> int:
+        self._check_open()
         return 0
 
     async def acount(self) -> int:
+        self._check_open()
         return 0
 
     def to_uri(self) -> str:

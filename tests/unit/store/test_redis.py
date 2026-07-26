@@ -780,6 +780,7 @@ def test_from_uri_constructs_with_same_url(
     url = "redis://localhost:6379/0"
     new_store = store_cls.from_uri(url)
     assert new_store._url == url
+    new_store.open()
     new_store.set("1", {"text": "hello"})
     assert new_store.get("1") == {"text": "hello"}
 
@@ -791,6 +792,7 @@ def test_from_uri_ignores_read_only(
     url = "redis://localhost:6379/0"
     new_store = store_cls.from_uri(url, read_only=True)
     assert new_store._url == url
+    new_store.open()
     new_store.set("1", {"text": "hello"})
     assert new_store.get("1") == {"text": "hello"}
 

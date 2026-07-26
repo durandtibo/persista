@@ -691,7 +691,7 @@ def test_operations_raise_on_closed_store(
     store: BaseFileStore, op: Callable[[BaseFileStore], Any]
 ) -> None:
     store.close()
-    with pytest.raises(ValueError, match="closed"):
+    with pytest.raises(RuntimeError, match="not open"):
         op(store)
 
 
@@ -834,11 +834,12 @@ def test_to_uri_round_trips_path(tmp_path: Path, store_cls: type[BaseFileStore])
 def test_to_uri_from_uri_preserves_data(
     tmp_path: Path, store_cls: type[BaseFileStore], items: dict[str, dict]
 ) -> None:
-    store = store_cls(tmp_path / "db")
-    store.set_many(items)
-    reloaded = store_cls.from_uri(store.to_uri())
-    assert reloaded.count() == len(items)
-    assert reloaded.get("1") == items["1"]
+    with store_cls(tmp_path / "db") as store:
+        store.set_many(items)
+        uri = store.to_uri()
+    with store_cls.from_uri(uri) as reloaded:
+        assert reloaded.count() == len(items)
+        assert reloaded.get("1") == items["1"]
 
 
 def test_json_file_store_scheme(tmp_path: Path) -> None:
