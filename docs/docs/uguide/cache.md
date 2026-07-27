@@ -115,6 +115,54 @@ True
 
 ```
 
+## Distinguishing a Cache Miss from a Cached `None`
+
+`get`/`aget` return `None` both when a key is missing and when the cached value is itself `None`,
+so `cache.get("key") is None` alone can't tell the two apart. Pass a `default` (like
+`dict.get(key, default)`) to control what's returned on a miss:
+
+```pycon
+>>> from persista.cache import Cache
+>>> cache = Cache()
+>>> cache.get("missing", "fallback")
+'fallback'
+
+```
+
+To actually tell a miss apart from a cached `None`, pass the `MISSING` sentinel as `default` and
+compare the result against it with `is`:
+
+```pycon
+>>> from persista.cache import Cache, MISSING
+>>> cache = Cache()
+>>> cache.set("key", None)
+>>> cache.get("key", MISSING) is MISSING
+False
+>>> cache.get("missing", MISSING) is MISSING
+True
+
+```
+
+`aget` supports the same `default` parameter. If the cached function can never legitimately
+return `None`, `ignore_none=True` (see above) is usually simpler than checking against `MISSING`
+on every call.
+
+`try_get` returns the same `(hit, value)` pair `get` computes internally, without needing a
+sentinel:
+
+```pycon
+>>> from persista.cache import Cache
+>>> cache = Cache()
+>>> cache.set("key", None)
+>>> cache.try_get("key")
+(True, None)
+>>> cache.try_get("missing")
+(False, None)
+
+```
+
+`atry_get` is the async counterpart.
+
 ## Computing a Value on a Cache Miss with `Cache.get_or_compute`
 
 `get_or_compute` returns the cached value for a key, computing and storing it on a cache miss:
@@ -218,7 +266,7 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
 
 Every `Cache` method has an async counterpart, prefixed with `a`, for use with an async backing
 store (an `InMemoryStore` by default).
-`aget`/`aset`/`acontains`/`aget_many`/`aset_many`/`acontains_many`/`adelete`/`adelete_many`/`aclear`
+`aget`/`aset`/`atry_get`/`acontains`/`aget_many`/`aset_many`/`acontains_many`/`adelete`/`adelete_many`/`aclear`
 mirror their sync counterparts but are coroutines, accessing the backing `BaseStore` through its
 async (`a`-prefixed) methods:
 
