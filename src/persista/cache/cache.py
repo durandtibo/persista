@@ -10,6 +10,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from coola.display import MultilineDisplayMixin
+
 from persista.cache.utils import make_key
 from persista.store.in_memory import InMemoryStore
 
@@ -26,7 +28,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 _UNSET: Any = object()
 
 
-class Cache:
+class Cache(MultilineDisplayMixin):
     """Cache with per-entry expiry, backed by any
     :class:`~persista.store.BaseStore`.
 
@@ -1146,3 +1148,10 @@ class Cache:
             ```
         """
         await self._store.aclear()
+
+    def _get_repr_kwargs(self) -> dict[str, Any]:
+        return {
+            "store": self._store,
+            "default_ttl": self._default_ttl,
+            "ignore_none": self._ignore_none,
+        }

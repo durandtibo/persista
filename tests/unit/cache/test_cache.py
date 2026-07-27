@@ -1378,3 +1378,24 @@ async def test_amemoize_shared_across_functions_with_same_qualname(cache: Cache)
     await f1(1)
     await f2(1)
     assert calls == [1]
+
+
+# --- repr / str ---
+
+
+def test_repr() -> None:
+    with Cache() as cache:
+        assert repr(cache).startswith("Cache(")
+
+
+def test_repr_closed() -> None:
+    assert repr(Cache()).startswith("Cache(")
+
+
+def test_str() -> None:
+    with Cache() as cache:
+        assert str(cache).startswith("Cache(")
+
+
+def test_str_closed() -> None:
+    assert str(Cache()).startswith("Cache(")
