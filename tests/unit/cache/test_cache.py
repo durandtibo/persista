@@ -52,6 +52,47 @@ def test_init_default_ttl_negative() -> None:
         Cache(default_ttl=-1)
 
 
+# --- open/close ---
+
+
+def test_closed_true_before_open() -> None:
+    assert Cache().closed is True
+
+
+def test_closed_false_after_open() -> None:
+    cache = Cache()
+    cache.open()
+    assert cache.closed is False
+    cache.close()
+
+
+def test_close_sets_closed_true() -> None:
+    cache = Cache()
+    cache.open()
+    cache.close()
+    assert cache.closed is True
+
+
+async def test_aopen_sets_closed_false() -> None:
+    cache = Cache()
+    await cache.aopen()
+    assert cache.closed is False
+    await cache.aclose()
+
+
+async def test_aclose_sets_closed_true() -> None:
+    cache = Cache()
+    await cache.aopen()
+    await cache.aclose()
+    assert cache.closed is True
+
+
+async def test_async_context_manager_opens_and_closes() -> None:
+    async with Cache() as cache:
+        assert cache.closed is False
+    assert cache.closed is True
+
+
 # --- get/set ---
 
 
