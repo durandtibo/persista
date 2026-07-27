@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from persista.cache.cache import Cache
+from persista.cache.cache import MISSING, Cache
 from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
@@ -166,6 +166,46 @@ def test_get_cached_none_is_miss_with_ignore_none() -> None:
     hit, value = cache._get("key")
     assert hit is False
     assert value is None
+
+
+def test_get_missing_key_default(cache: Cache) -> None:
+    assert cache.get("missing", "fallback") == "fallback"
+
+
+def test_get_hit_ignores_default(cache: Cache) -> None:
+    cache.set("key", "value")
+    assert cache.get("key", "fallback") == "value"
+
+
+def test_get_missing_key_with_missing_sentinel(cache: Cache) -> None:
+    assert cache.get("missing", MISSING) is MISSING
+
+
+def test_get_cached_none_distinguishable_from_miss_via_missing_sentinel(cache: Cache) -> None:
+    cache.set("key", None, ttl=None)
+    assert cache.get("key", MISSING) is None
+    assert cache.get("missing", MISSING) is MISSING
+
+
+def test_try_get_missing_key(cache: Cache) -> None:
+    assert cache.try_get("missing") == (False, None)
+
+
+def test_try_get_hit(cache: Cache) -> None:
+    cache.set("key", "value")
+    assert cache.try_get("key") == (True, "value")
+
+
+def test_try_get_cached_none_is_hit_by_default(cache: Cache) -> None:
+    cache.set("key", None, ttl=None)
+    assert cache.try_get("key") == (True, None)
+
+
+def test_try_get_cached_none_is_miss_with_ignore_none() -> None:
+    cache = Cache(ignore_none=True)
+    cache.open()
+    cache.set("key", None, ttl=None)
+    assert cache.try_get("key") == (False, None)
 
 
 # --- contains ---
@@ -1005,6 +1045,47 @@ async def test_aget_cached_none_is_miss_with_ignore_none() -> None:
 async def test_aget_cached_none_is_hit_without_ignore_none(cache: Cache) -> None:
     await cache.aset("key", None)
     assert await cache._aget("key") == (True, None)
+
+
+async def test_aget_missing_key_default(cache: Cache) -> None:
+    assert await cache.aget("missing", "fallback") == "fallback"
+
+
+async def test_aget_hit_ignores_default(cache: Cache) -> None:
+    await cache.aset("key", "value")
+    assert await cache.aget("key", "fallback") == "value"
+
+
+async def test_aget_missing_key_with_missing_sentinel(cache: Cache) -> None:
+    assert await cache.aget("missing", MISSING) is MISSING
+
+
+async def test_aget_cached_none_distinguishable_from_miss_via_missing_sentinel(
+    cache: Cache,
+) -> None:
+    await cache.aset("key", None)
+    assert await cache.aget("key", MISSING) is None
+    assert await cache.aget("missing", MISSING) is MISSING
+
+
+async def test_atry_get_missing_key(cache: Cache) -> None:
+    assert await cache.atry_get("missing") == (False, None)
+
+
+async def test_atry_get_hit(cache: Cache) -> None:
+    await cache.aset("key", "value")
+    assert await cache.atry_get("key") == (True, "value")
+
+
+async def test_atry_get_cached_none_is_hit_by_default(cache: Cache) -> None:
+    await cache.aset("key", None)
+    assert await cache.atry_get("key") == (True, None)
+
+
+async def test_atry_get_cached_none_is_miss_with_ignore_none() -> None:
+    with Cache(ignore_none=True) as cache:
+        await cache.aset("key", None)
+        assert await cache.atry_get("key") == (False, None)
 
 
 # --- contains ---

@@ -2,7 +2,7 @@ r"""Provide a TTL cache backed by any ``BaseStore``."""
 
 from __future__ import annotations
 
-__all__ = ["Cache"]
+__all__ = ["MISSING", "Cache"]
 
 import functools
 import inspect
@@ -26,6 +26,11 @@ T = TypeVar("T")
 logger: logging.Logger = logging.getLogger(__name__)
 
 _UNSET: Any = object()
+
+MISSING: Any = object()
+"""Sentinel usable as the ``default`` argument to :meth:`Cache.get` /
+:meth:`Cache.aget` to distinguish a cache miss from a cached
+``None``."""
 
 
 class Cache(MultilineDisplayMixin):
@@ -162,25 +167,28 @@ class Cache(MultilineDisplayMixin):
     async def __aexit__(self, *exc_info: object) -> None:
         await self.aclose()
 
-    def get(self, key: str) -> Any | None:
+    def get(self, key: str, default: Any = None) -> Any:
         """Retrieve a value by its key.
 
         If the entry has expired, it is evicted from the backing
-        store as a side effect of this call, before ``None`` is
+        store as a side effect of this call, before ``default`` is
         returned.
 
         Args:
             key: The key to look up.
+            default: The value to return if the key is missing, its
+                entry has expired, or (when ``ignore_none`` is
+                ``True``) the cached value is itself ``None``. Pass
+                the :data:`~persista.cache.cache.MISSING` sentinel
+                here to distinguish a cache miss from a cached
+                ``None``.
 
         Returns:
-            The cached value, or ``None`` if the key is missing, its
-            entry has expired, or (when ``ignore_none`` is ``True``)
-            the cached value is itself ``None``. This means a cached
-            value of ``None`` is indistinguishable from a cache miss.
+            The cached value, or ``default`` on a miss.
 
         Example:
             ```pycon
-            >>> from persista.cache.cache import Cache
+            >>> from persista.cache.cache import MISSING, Cache
             >>> cache = Cache()
             >>> cache.open()
             >>> cache.set("greeting", "hello")
@@ -188,11 +196,46 @@ class Cache(MultilineDisplayMixin):
             'hello'
             >>> cache.get("missing") is None
             True
+            >>> cache.set("empty", None)
+            >>> cache.get("empty", MISSING) is MISSING
+            False
+            >>> cache.get("missing", MISSING) is MISSING
+            True
 
             ```
         """
-        _, value = self._get(key)
-        return value
+        hit, value = self._get(key)
+        return value if hit else default
+
+    def try_get(self, key: str) -> tuple[bool, Any]:
+        """Look up a key, returning both hit/miss and the value.
+
+        Unlike :meth:`get`, this distinguishes a cache miss from a
+        cached ``None`` without needing the :data:`MISSING` sentinel.
+
+        Args:
+            key: The key to look up.
+
+        Returns:
+            A ``(hit, value)`` tuple. ``hit`` is ``True`` only when
+            ``key`` exists in the store, has not expired, and (when
+            ``ignore_none`` is ``True``) its value is not ``None``.
+            ``value`` is ``None`` when ``hit`` is ``False``.
+
+        Example:
+            ```pycon
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> cache.open()
+            >>> cache.set("key", None)
+            >>> cache.try_get("key")
+            (True, None)
+            >>> cache.try_get("missing")
+            (False, None)
+
+            ```
+        """
+        return self._get(key)
 
     def _get(self, key: str) -> tuple[bool, Any]:
         """Look up a key, returning both hit/miss and the value.
@@ -281,7 +324,7 @@ class Cache(MultilineDisplayMixin):
         expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
         self._store.set(key, {"value": value, "expires_at": expires_at})
 
-    async def aget(self, key: str) -> Any | None:
+    async def aget(self, key: str, default: Any = None) -> Any:
         """Retrieve a value by its key.
 
         This is the async counterpart of :meth:`get`, for use with an
@@ -289,11 +332,15 @@ class Cache(MultilineDisplayMixin):
 
         Args:
             key: The key to look up.
+            default: The value to return if the key is missing, its
+                entry has expired, or (when ``ignore_none`` is
+                ``True``) the cached value is itself ``None``. Pass
+                the :data:`~persista.cache.cache.MISSING` sentinel
+                here to distinguish a cache miss from a cached
+                ``None``.
 
         Returns:
-            The cached value, or ``None`` if the key is missing, its
-            entry has expired, or (when ``ignore_none`` is ``True``)
-            the cached value is itself ``None``.
+            The cached value, or ``default`` on a miss.
 
         Example:
             ```pycon
@@ -310,8 +357,41 @@ class Cache(MultilineDisplayMixin):
 
             ```
         """
-        _, value = await self._aget(key)
-        return value
+        hit, value = await self._aget(key)
+        return value if hit else default
+
+    async def atry_get(self, key: str) -> tuple[bool, Any]:
+        """Look up a key, returning both hit/miss and the value.
+
+        This is the async counterpart of :meth:`try_get`.
+
+        Args:
+            key: The key to look up.
+
+        Returns:
+            A ``(hit, value)`` tuple. ``hit`` is ``True`` only when
+            ``key`` exists in the store, has not expired, and (when
+            ``ignore_none`` is ``True``) its value is not ``None``.
+            ``value`` is ``None`` when ``hit`` is ``False``.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache.cache import Cache
+            >>> cache = Cache()
+            >>> cache.open()
+            >>> async def main():
+            ...     await cache.aset("key", None)
+            ...     print(await cache.atry_get("key"))
+            ...     print(await cache.atry_get("missing"))
+            ...
+            >>> asyncio.run(main())
+            (True, None)
+            (False, None)
+
+            ```
+        """
+        return await self._aget(key)
 
     async def _aget(self, key: str) -> tuple[bool, Any]:
         """Look up a key, returning both hit/miss and the value.
