@@ -46,10 +46,10 @@ class NullStore(BaseStore, InlineDisplayMixin):
         ```pycon
         >>> from persista.store import NullStore
         >>> from persista.cache import Cache
-        >>> cache = Cache(store=NullStore())
-        >>> cache.open()
-        >>> cache.set("greeting", "hello")
-        >>> cache.get("greeting") is None
+        >>> with Cache(store=NullStore()) as cache:
+        ...     cache.set("greeting", "hello")
+        ...     cache.get("greeting") is None
+        ...
         True
 
         ```

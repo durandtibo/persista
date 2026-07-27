@@ -16,11 +16,11 @@ written already has a value in the store.
 Example:
     ```pycon
     >>> from persista.store import InMemoryStore
-    >>> store = InMemoryStore()
-    >>> store.open()
-    >>> store.set("key", {"a": 1})
-    >>> store.set("key", {"b": 2}, on_conflict="merge")
-    >>> store.get("key")
+    >>> with InMemoryStore() as store:
+    ...     store.set("key", {"a": 1})
+    ...     store.set("key", {"b": 2}, on_conflict="merge")
+    ...     store.get("key")
+    ...
     {'a': 1, 'b': 2}
 
     ```

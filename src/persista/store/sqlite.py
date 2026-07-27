@@ -272,11 +272,9 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             >>> import tempfile
             >>> from persista.store import SQLiteStore
             >>> with tempfile.TemporaryDirectory() as tmpdir:
-            ...     store = SQLiteStore.from_path(f"{tmpdir}/data.db")
-            ...     store.open()
-            ...     store.set("1", {"title": "Intro to Python"})
-            ...     store.get("1")
-            ...     store.close()
+            ...     with SQLiteStore.from_path(f"{tmpdir}/data.db") as store:
+            ...         store.set("1", {"title": "Intro to Python"})
+            ...         store.get("1")
             ...
             {'title': 'Intro to Python'}
 

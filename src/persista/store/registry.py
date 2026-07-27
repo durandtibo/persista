@@ -89,14 +89,12 @@ def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
         >>> import tempfile
         >>> from persista.store import JsonFileStore, store_from_uri
         >>> with tempfile.TemporaryDirectory() as tmpdir:
-        ...     store = JsonFileStore(tmpdir)
-        ...     store.open()
-        ...     store.set("key", {"value": 1})
-        ...     uri = store.to_uri()
-        ...     store.close()
-        ...     restored = store_from_uri(uri)
-        ...     print(restored.get("key"))
-        ...     restored.close()
+        ...     with JsonFileStore(tmpdir) as store:
+        ...         store.set("key", {"value": 1})
+        ...         uri = store.to_uri()
+        ...
+        ...     with store_from_uri(uri) as restored:
+        ...         print(restored.get("key"))
         ...
         {'value': 1}
 
