@@ -11,6 +11,8 @@ from persista.cache.utils import (
     make_json_key,
     make_key,
     make_pickle_key,
+    split_get_many,
+    split_try_get_many,
 )
 
 logger = logging.getLogger(__name__)
@@ -309,3 +311,53 @@ def test_is_picklable(value: object, expected: bool) -> None:
 )
 def test_is_picklable_repeated_calls_are_consistent(value: object) -> None:
     assert is_picklable(value) is is_picklable(value)
+
+
+########################
+#     split_get_many     #
+########################
+
+
+def test_split_get_many_all_present() -> None:
+    assert split_get_many(["a", "b"], {"a": 1, "b": 2}, None) == (["a", "b"], [])
+
+
+def test_split_get_many_all_missing() -> None:
+    assert split_get_many(["a", "b"], {"a": None, "b": None}, None) == ([], ["a", "b"])
+
+
+def test_split_get_many_mixed() -> None:
+    assert split_get_many(["a", "b", "c"], {"a": 1, "b": None, "c": 3}, None) == (
+        ["a", "c"],
+        ["b"],
+    )
+
+
+def test_split_get_many_empty() -> None:
+    assert split_get_many([], {}, None) == ([], [])
+
+
+def test_split_get_many_default_sentinel() -> None:
+    sentinel = object()
+    assert split_get_many(["a", "b"], {"a": None, "b": sentinel}, sentinel) == (["a"], ["b"])
+
+
+############################
+#     split_try_get_many     #
+############################
+
+
+def test_split_try_get_many_all_present() -> None:
+    assert split_try_get_many(["a", "b"], {"a": 1, "b": 2}) == (["a", "b"], [])
+
+
+def test_split_try_get_many_all_missing() -> None:
+    assert split_try_get_many(["a", "b"], {}) == ([], ["a", "b"])
+
+
+def test_split_try_get_many_mixed() -> None:
+    assert split_try_get_many(["a", "b", "c"], {"a": 1, "c": 3}) == (["a", "c"], ["b"])
+
+
+def test_split_try_get_many_empty() -> None:
+    assert split_try_get_many([], {}) == ([], [])
