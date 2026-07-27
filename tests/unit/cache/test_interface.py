@@ -6,7 +6,13 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from persista.cache.cache import Cache
-from persista.cache.interface import async_cached, cached, get_cache, set_cache
+from persista.cache.interface import (
+    _make_default_cache,
+    async_cached,
+    cached,
+    get_cache,
+    set_cache,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -43,6 +49,16 @@ def test_get_cache_returns_cache() -> None:
 
 def test_get_cache_returns_same_instance() -> None:
     assert get_cache() is get_cache()
+
+
+def test_make_default_cache_yields_open_cache() -> None:
+    generator = _make_default_cache()
+    cache = next(generator)
+    try:
+        assert isinstance(cache, Cache)
+        assert cache.closed is False
+    finally:
+        generator.close()
 
 
 #################################
