@@ -691,9 +691,9 @@ async def test_async_context_manager_multiple_open_close_same_path(
             assert store.count() == i + 1
 
 
-###############################
+#####################################
 #     Tests for to_uri/from_uri     #
-###############################
+#####################################
 
 
 def test_to_uri_from_uri_round_trips_data(

@@ -195,4 +195,7 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
         return cls()
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
-        return {"count": self.count()}
+        kwargs: dict[str, Any] = {"closed": self._closed}
+        if not self._closed:
+            kwargs["count"] = self.count()
+        return kwargs

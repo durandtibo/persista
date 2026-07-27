@@ -44,6 +44,26 @@ def test_str(store: InMemoryStore) -> None:
     assert str(store).startswith("InMemoryStore(")
 
 
+def test_repr_after_close_does_not_raise(store: InMemoryStore) -> None:
+    store.close()
+    assert repr(store).startswith("InMemoryStore(")
+
+
+def test_str_after_close_does_not_raise(store: InMemoryStore) -> None:
+    store.close()
+    assert str(store).startswith("InMemoryStore(")
+
+
+def test_repr_before_open_does_not_raise() -> None:
+    store = InMemoryStore()
+    assert repr(store).startswith("InMemoryStore(")
+
+
+def test_str_before_open_does_not_raise() -> None:
+    store = InMemoryStore()
+    assert str(store).startswith("InMemoryStore(")
+
+
 # --- set ---
 
 

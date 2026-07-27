@@ -33,6 +33,26 @@ def test_str(store: NullStore) -> None:
     assert str(store).startswith("NullStore(")
 
 
+def test_repr_after_close_does_not_raise(store: NullStore) -> None:
+    store.close()
+    assert repr(store).startswith("NullStore(")
+
+
+def test_str_after_close_does_not_raise(store: NullStore) -> None:
+    store.close()
+    assert str(store).startswith("NullStore(")
+
+
+def test_repr_before_open_does_not_raise() -> None:
+    store = NullStore()
+    assert repr(store).startswith("NullStore(")
+
+
+def test_str_before_open_does_not_raise() -> None:
+    store = NullStore()
+    assert str(store).startswith("NullStore(")
+
+
 # --- set / get ---
 
 
