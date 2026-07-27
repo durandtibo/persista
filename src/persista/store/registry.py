@@ -92,7 +92,6 @@ def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
         ...     with JsonFileStore(tmpdir) as store:
         ...         store.set("key", {"value": 1})
         ...         uri = store.to_uri()
-        ...
         ...     with store_from_uri(uri) as restored:
         ...         print(restored.get("key"))
         ...

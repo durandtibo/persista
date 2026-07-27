@@ -231,7 +231,6 @@ and its arguments. It works on both sync and `async def` functions:
 ...     def square(x):
 ...         calls.append(x)
 ...         return x * x
-...
 ...     square(4)
 ...     square(4)  # served from the cache, not re-computed
 ...
@@ -263,9 +262,10 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
 ...     def greet(name, client=None):
 ...         calls.append(name)
 ...         return f"hello {name}"
-...
 ...     greet("Ann", client=object())
-...     greet("Ann", client=object())  # different (non-serializable) client, still a cache hit
+...     greet(
+...         "Ann", client=object()
+...     )  # different (non-serializable) client, still a cache hit
 ...
 'hello Ann'
 'hello Ann'
@@ -286,12 +286,11 @@ async (`a`-prefixed) methods:
 >>> import asyncio
 >>> from persista.cache import Cache
 >>> async def main():
-...     cache = Cache(default_ttl=60)
-...     await cache.aopen()
-...     await cache.aset("greeting", "hello")
-...     print(await cache.aget("greeting"))
-...     await cache.aclear()
-...     print(await cache.aget("greeting"))
+...     async with Cache(default_ttl=60) as cache:
+...         await cache.aset("greeting", "hello")
+...         print(await cache.aget("greeting"))
+...         await cache.aclear()
+...         print(await cache.aget("greeting"))
 ...
 >>> asyncio.run(main())
 hello
@@ -306,16 +305,15 @@ if the result is awaitable. The backing store is always accessed with `await`, v
 ```pycon
 >>> import asyncio
 >>> from persista.cache import Cache
->>> cache = Cache()
->>> cache.open()
 >>> calls = []
 >>> def compute(x):  # a plain sync function works too
 ...     calls.append(x)
 ...     return x * 2
 ...
 >>> async def main():
-...     print(await cache.aget_or_compute("key", compute, (4,), {}))
-...     print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
+...     async with Cache() as cache:
+...         print(await cache.aget_or_compute("key", compute, (4,), {}))
+...         print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
 ...
 >>> asyncio.run(main())
 8
@@ -330,17 +328,15 @@ if the result is awaitable. The backing store is always accessed with `await`, v
 ```pycon
 >>> import asyncio
 >>> from persista.cache import Cache
->>> cache = Cache()
->>> cache.open()
 >>> calls = []
->>> @cache.amemoize(ttl=60)
-... async def cube(x):
-...     calls.append(x)
-...     return x * x * x
-...
 >>> async def main():
-...     print(await cube(4))
-...     print(await cube(4))  # served from the cache, not re-computed
+...     async with Cache() as cache:
+...         @cache.amemoize(ttl=60)
+...         async def cube(x):
+...             calls.append(x)
+...             return x * x * x
+...         print(await cube(4))
+...         print(await cube(4))  # served from the cache, not re-computed
 ...
 >>> asyncio.run(main())
 64

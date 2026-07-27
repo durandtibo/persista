@@ -1045,7 +1045,6 @@ class Cache(MultilineDisplayMixin):
             ...     def square(x):
             ...         calls.append(x)
             ...         return x * x
-            ...
             ...     square(4)
             ...     square(4)  # served from the cache, not re-computed
             ...
@@ -1142,12 +1141,10 @@ class Cache(MultilineDisplayMixin):
             >>> calls = []
             >>> async def main():
             ...     async with Cache() as cache:
-            ...
             ...         @cache.amemoize()
             ...         async def square(x):
             ...             calls.append(x)
             ...             return x * x
-            ...
             ...         print(await square(4))
             ...         print(await square(4))  # served from the cache, not re-computed
             ...
