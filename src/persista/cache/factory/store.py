@@ -41,8 +41,11 @@ class StoreCacheFactory(BaseCacheFactory, MultilineDisplayMixin):
         >>> from persista.store.factory import StoreFactory
         >>> from persista.store import InMemoryStore
         >>> factory = StoreCacheFactory(StoreFactory(InMemoryStore()))
-        >>> cache = factory.make_cache()
-        >>> cache.open()
+        >>> with factory.make_cache() as cache:
+        ...     cache.set("greeting", "hello")
+        ...     cache.get("greeting")
+        ...
+        'hello'
 
         ```
     """

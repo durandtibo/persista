@@ -13,6 +13,18 @@ class EmptyAsyncIterator:
     Useful for implementing async stores/iterables that never yield
     anything (e.g. a no-op store), without resorting to an async
     generator whose ``yield`` line can never be reached.
+
+    Example:
+        ```pycon
+        >>> import asyncio
+        >>> from persista.utils.asyncio import EmptyAsyncIterator
+        >>> async def main():
+        ...     return [x async for x in EmptyAsyncIterator()]
+        ...
+        >>> asyncio.run(main())
+        []
+
+        ```
     """
 
     def __aiter__(self) -> EmptyAsyncIterator:

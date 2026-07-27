@@ -49,6 +49,14 @@ def register_scheme(scheme: str, store_cls: type[BaseStore]) -> None:
             this scheme.
         store_cls: The ``BaseStore`` subclass to dispatch to for
             ``scheme``. Must implement ``from_uri``.
+
+    Example:
+        ```pycon
+        >>> from persista.store import InMemoryStore
+        >>> from persista.store.registry import register_scheme
+        >>> register_scheme("memory", InMemoryStore)
+
+        ```
     """
     _SCHEMES[scheme] = store_cls
 
@@ -75,6 +83,21 @@ def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
 
     Raises:
         ValueError: If ``uri``'s scheme is not registered.
+
+    Example:
+        ```pycon
+        >>> import tempfile
+        >>> from persista.store import JsonFileStore, store_from_uri
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     with JsonFileStore(tmpdir) as store:
+        ...         store.set("key", {"value": 1})
+        ...         uri = store.to_uri()
+        ...     with store_from_uri(uri) as restored:
+        ...         print(restored.get("key"))
+        ...
+        {'value': 1}
+
+        ```
     """
     scheme = urlsplit(uri).scheme
     store_cls = _SCHEMES.get(scheme)

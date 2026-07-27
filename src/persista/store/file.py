@@ -238,8 +238,9 @@ class JsonFileStore(BaseFileStore):
 
     Example:
         ```pycon
+        >>> import tempfile
         >>> from persista.store import JsonFileStore
-        >>> with JsonFileStore("/tmp/file_store") as store:  # doctest: +SKIP
+        >>> with tempfile.TemporaryDirectory() as tmpdir, JsonFileStore(tmpdir) as store:
         ...     store.set_many(
         ...         {
         ...             "1": {
@@ -295,12 +296,13 @@ class PickleFileStore(BaseFileStore):
 
     Example:
         ```pycon
+        >>> import tempfile
         >>> from persista.store import PickleFileStore
-        >>> with PickleFileStore("/tmp/file_store") as store:  # doctest: +SKIP
-        ...     store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
+        >>> with tempfile.TemporaryDirectory() as tmpdir, PickleFileStore(tmpdir) as store:
+        ...     store.set("1", {"title": "Intro to Python", "tags": ("python", "intro")})
         ...     store.get("1")
         ...
-        {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
+        {'title': 'Intro to Python', 'tags': ('python', 'intro')}
 
         ```
     """

@@ -189,17 +189,17 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import MISSING, Cache
-            >>> cache = Cache()
-            >>> cache.open()
-            >>> cache.set("greeting", "hello")
-            >>> cache.get("greeting")
+            >>> with Cache() as cache:
+            ...     cache.set("greeting", "hello")
+            ...     cache.get("greeting")
+            ...     cache.get("missing") is None
+            ...     cache.set("empty", None)
+            ...     cache.get("empty", MISSING) is MISSING
+            ...     cache.get("missing", MISSING) is MISSING
+            ...
             'hello'
-            >>> cache.get("missing") is None
             True
-            >>> cache.set("empty", None)
-            >>> cache.get("empty", MISSING) is MISSING
             False
-            >>> cache.get("missing", MISSING) is MISSING
             True
 
             ```
@@ -225,12 +225,12 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
-            >>> cache.set("key", None)
-            >>> cache.try_get("key")
+            >>> with Cache() as cache:
+            ...     cache.set("key", None)
+            ...     cache.try_get("key")
+            ...     cache.try_get("missing")
+            ...
             (True, None)
-            >>> cache.try_get("missing")
             (False, None)
 
             ```
@@ -305,15 +305,15 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
-            >>> cache.set("greeting", "hello")
-            >>> cache.get("greeting")
+            >>> with Cache() as cache:
+            ...     cache.set("greeting", "hello")
+            ...     cache.get("greeting")
+            ...     cache.set("greeting", "bonjour")
+            ...     cache.get("greeting")
+            ...     cache.set("short-lived", "value", ttl=30)
+            ...
             'hello'
-            >>> cache.set("greeting", "bonjour")
-            >>> cache.get("greeting")
             'bonjour'
-            >>> cache.set("short-lived", "value", ttl=30)
 
             ```
         """
@@ -346,11 +346,10 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> async def main():
-            ...     await cache.aset("greeting", "hello")
-            ...     print(await cache.aget("greeting"))
+            ...     async with Cache() as cache:
+            ...         await cache.aset("greeting", "hello")
+            ...         print(await cache.aget("greeting"))
             ...
             >>> asyncio.run(main())
             hello
@@ -378,12 +377,11 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> async def main():
-            ...     await cache.aset("key", None)
-            ...     print(await cache.atry_get("key"))
-            ...     print(await cache.atry_get("missing"))
+            ...     async with Cache() as cache:
+            ...         await cache.aset("key", None)
+            ...         print(await cache.atry_get("key"))
+            ...         print(await cache.atry_get("missing"))
             ...
             >>> asyncio.run(main())
             (True, None)
@@ -445,11 +443,10 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> async def main():
-            ...     await cache.aset("greeting", "hello")
-            ...     print(await cache.aget("greeting"))
+            ...     async with Cache() as cache:
+            ...         await cache.aset("greeting", "hello")
+            ...         print(await cache.aget("greeting"))
             ...
             >>> asyncio.run(main())
             hello
@@ -478,12 +475,12 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
-            >>> cache.set("greeting", "hello")
-            >>> cache.contains("greeting")
+            >>> with Cache() as cache:
+            ...     cache.set("greeting", "hello")
+            ...     cache.contains("greeting")
+            ...     cache.contains("missing")
+            ...
             True
-            >>> cache.contains("missing")
             False
 
             ```
@@ -510,12 +507,11 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> async def main():
-            ...     await cache.aset("greeting", "hello")
-            ...     print(await cache.acontains("greeting"))
-            ...     print(await cache.acontains("missing"))
+            ...     async with Cache() as cache:
+            ...         await cache.aset("greeting", "hello")
+            ...         print(await cache.acontains("greeting"))
+            ...         print(await cache.acontains("missing"))
             ...
             >>> asyncio.run(main())
             True
@@ -551,11 +547,11 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
-            >>> cache.set("a", "hello")
-            >>> cache.set("b", "world")
-            >>> sorted(cache.get_many(["a", "b", "missing"]).items())
+            >>> with Cache() as cache:
+            ...     cache.set("a", "hello")
+            ...     cache.set("b", "world")
+            ...     sorted(cache.get_many(["a", "b", "missing"]).items())
+            ...
             [('a', 'hello'), ('b', 'world')]
 
             ```
@@ -585,12 +581,11 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> async def main():
-            ...     await cache.aset("a", "hello")
-            ...     await cache.aset("b", "world")
-            ...     print(sorted((await cache.aget_many(["a", "b", "missing"])).items()))
+            ...     async with Cache() as cache:
+            ...         await cache.aset("a", "hello")
+            ...         await cache.aset("b", "world")
+            ...         print(sorted((await cache.aget_many(["a", "b", "missing"])).items()))
             ...
             >>> asyncio.run(main())
             [('a', 'hello'), ('b', 'world')]
@@ -661,10 +656,10 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
-            >>> cache.set_many({"a": "hello", "b": "world"})
-            >>> sorted(cache.get_many(["a", "b"]).items())
+            >>> with Cache() as cache:
+            ...     cache.set_many({"a": "hello", "b": "world"})
+            ...     sorted(cache.get_many(["a", "b"]).items())
+            ...
             [('a', 'hello'), ('b', 'world')]
 
             ```
@@ -701,11 +696,10 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> async def main():
-            ...     await cache.aset_many({"a": "hello", "b": "world"})
-            ...     print(sorted((await cache.aget_many(["a", "b"])).items()))
+            ...     async with Cache() as cache:
+            ...         await cache.aset_many({"a": "hello", "b": "world"})
+            ...         print(sorted((await cache.aget_many(["a", "b"])).items()))
             ...
             >>> asyncio.run(main())
             [('a', 'hello'), ('b', 'world')]
@@ -747,10 +741,10 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
-            >>> cache.set("a", "hello")
-            >>> cache.contains_many(["a", "b"])
+            >>> with Cache() as cache:
+            ...     cache.set("a", "hello")
+            ...     cache.contains_many(["a", "b"])
+            ...
             [True, False]
 
             ```
@@ -781,11 +775,10 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> async def main():
-            ...     await cache.aset("a", "hello")
-            ...     print(await cache.acontains_many(["a", "b"]))
+            ...     async with Cache() as cache:
+            ...         await cache.aset("a", "hello")
+            ...         print(await cache.acontains_many(["a", "b"]))
             ...
             >>> asyncio.run(main())
             [True, False]
@@ -807,11 +800,11 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
-            >>> cache.set("greeting", "hello")
-            >>> cache.delete("greeting")
-            >>> cache.get("greeting") is None
+            >>> with Cache() as cache:
+            ...     cache.set("greeting", "hello")
+            ...     cache.delete("greeting")
+            ...     cache.get("greeting") is None
+            ...
             True
 
             ```
@@ -828,11 +821,11 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
-            >>> cache.set_many({"a": "hello", "b": "world"})
-            >>> cache.delete_many(["a", "b"])
-            >>> cache.get_many(["a", "b"])
+            >>> with Cache() as cache:
+            ...     cache.set_many({"a": "hello", "b": "world"})
+            ...     cache.delete_many(["a", "b"])
+            ...     cache.get_many(["a", "b"])
+            ...
             {}
 
             ```
@@ -853,12 +846,11 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> async def main():
-            ...     await cache.aset_many({"a": "hello", "b": "world"})
-            ...     await cache.adelete_many(["a", "b"])
-            ...     print(await cache.aget_many(["a", "b"]))
+            ...     async with Cache() as cache:
+            ...         await cache.aset_many({"a": "hello", "b": "world"})
+            ...         await cache.adelete_many(["a", "b"])
+            ...         print(await cache.aget_many(["a", "b"]))
             ...
             >>> asyncio.run(main())
             {}
@@ -880,12 +872,11 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> async def main():
-            ...     await cache.aset("greeting", "hello")
-            ...     await cache.adelete("greeting")
-            ...     print(await cache.aget("greeting"))
+            ...     async with Cache() as cache:
+            ...         await cache.aset("greeting", "hello")
+            ...         await cache.adelete("greeting")
+            ...         print(await cache.aget("greeting"))
             ...
             >>> asyncio.run(main())
             None
@@ -922,16 +913,16 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> calls = []
             >>> def compute(x):
             ...     calls.append(x)
             ...     return x * 2
             ...
-            >>> cache.get_or_compute("key", compute, (4,), {})
+            >>> with Cache() as cache:
+            ...     cache.get_or_compute("key", compute, (4,), {})
+            ...     cache.get_or_compute("key", compute, (4,), {})  # served from the cache
+            ...
             8
-            >>> cache.get_or_compute("key", compute, (4,), {})  # served from the cache
             8
             >>> calls
             [4]
@@ -979,16 +970,15 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> calls = []
             >>> async def compute(x):
             ...     calls.append(x)
             ...     return x * 2
             ...
             >>> async def main():
-            ...     print(await cache.aget_or_compute("key", compute, (4,), {}))
-            ...     print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
+            ...     async with Cache() as cache:
+            ...         print(await cache.aget_or_compute("key", compute, (4,), {}))
+            ...         print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
             ...
             >>> asyncio.run(main())
             8
@@ -1049,17 +1039,16 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> calls = []
-            >>> @cache.memoize()
-            ... def square(x):
-            ...     calls.append(x)
-            ...     return x * x
+            >>> with Cache() as cache:
+            ...     @cache.memoize()
+            ...     def square(x):
+            ...         calls.append(x)
+            ...         return x * x
+            ...     square(4)
+            ...     square(4)  # served from the cache, not re-computed
             ...
-            >>> square(4)
             16
-            >>> square(4)  # served from the cache, not re-computed
             16
             >>> calls
             [4]
@@ -1149,17 +1138,15 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> calls = []
-            >>> @cache.amemoize()
-            ... async def square(x):
-            ...     calls.append(x)
-            ...     return x * x
-            ...
             >>> async def main():
-            ...     print(await square(4))
-            ...     print(await square(4))  # served from the cache, not re-computed
+            ...     async with Cache() as cache:
+            ...         @cache.amemoize()
+            ...         async def square(x):
+            ...             calls.append(x)
+            ...             return x * x
+            ...         print(await square(4))
+            ...         print(await square(4))  # served from the cache, not re-computed
             ...
             >>> asyncio.run(main())
             16
@@ -1194,11 +1181,11 @@ class Cache(MultilineDisplayMixin):
         Example:
             ```pycon
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
-            >>> cache.set("greeting", "hello")
-            >>> cache.clear()
-            >>> cache.get("greeting") is None
+            >>> with Cache() as cache:
+            ...     cache.set("greeting", "hello")
+            ...     cache.clear()
+            ...     cache.get("greeting") is None
+            ...
             True
 
             ```
@@ -1215,12 +1202,11 @@ class Cache(MultilineDisplayMixin):
             ```pycon
             >>> import asyncio
             >>> from persista.cache.cache import Cache
-            >>> cache = Cache()
-            >>> cache.open()
             >>> async def main():
-            ...     await cache.aset("greeting", "hello")
-            ...     await cache.aclear()
-            ...     print(await cache.aget("greeting"))
+            ...     async with Cache() as cache:
+            ...         await cache.aset("greeting", "hello")
+            ...         await cache.aclear()
+            ...         print(await cache.aget("greeting"))
             ...
             >>> asyncio.run(main())
             None

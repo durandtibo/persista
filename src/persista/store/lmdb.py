@@ -287,8 +287,9 @@ class LmdbStore(BaseLmdbStore):
 
     Example:
         ```pycon
+        >>> import tempfile
         >>> from persista.store import LmdbStore
-        >>> with LmdbStore("/tmp/lmdb_store") as store:  # doctest: +SKIP
+        >>> with tempfile.TemporaryDirectory() as tmpdir, LmdbStore(tmpdir) as store:
         ...     store.set_many(
         ...         {
         ...             "1": {
@@ -342,12 +343,13 @@ class PickleLmdbStore(BaseLmdbStore):
 
     Example:
         ```pycon
+        >>> import tempfile
         >>> from persista.store import PickleLmdbStore
-        >>> with PickleLmdbStore("/tmp/lmdb_store") as store:  # doctest: +SKIP
-        ...     store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
+        >>> with tempfile.TemporaryDirectory() as tmpdir, PickleLmdbStore(tmpdir) as store:
+        ...     store.set("1", {"title": "Intro to Python", "tags": ("python", "intro")})
         ...     store.get("1")
         ...
-        {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
+        {'title': 'Intro to Python', 'tags': ('python', 'intro')}
 
         ```
     """

@@ -25,11 +25,12 @@ Create a `Cache` and use `set`/`get` like a dictionary, optionally with expirati
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache(default_ttl=60)
->>> cache.set("greeting", "hello")
->>> cache.get("greeting")
+>>> with Cache(default_ttl=60) as cache:
+...     cache.set("greeting", "hello")
+...     cache.get("greeting")
+...     cache.get("missing") is None
+...
 'hello'
->>> cache.get("missing") is None
 True
 
 ```
@@ -40,9 +41,10 @@ override it for a single entry; `ttl=0` evicts the entry instead of storing it:
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache()
->>> cache.set("greeting", "hello")
->>> cache.set("short-lived", "value", ttl=30)
+>>> with Cache() as cache:
+...     cache.set("greeting", "hello")
+...     cache.set("short-lived", "value", ttl=30)
+...
 
 ```
 
@@ -51,12 +53,13 @@ removes a single entry (unlike `set` with `ttl=0`, it doesn't require a value to
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache()
->>> cache.set("greeting", "hello")
->>> cache.contains("greeting")
+>>> with Cache() as cache:
+...     cache.set("greeting", "hello")
+...     cache.contains("greeting")
+...     cache.delete("greeting")
+...     cache.contains("greeting")
+...
 True
->>> cache.delete("greeting")
->>> cache.contains("greeting")
 False
 
 ```
@@ -68,14 +71,15 @@ every item passed to `set_many`:
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache()
->>> cache.set_many({"a": "hello", "b": "world"}, ttl=60)
->>> sorted(cache.get_many(["a", "b", "missing"]).items())
+>>> with Cache() as cache:
+...     cache.set_many({"a": "hello", "b": "world"}, ttl=60)
+...     sorted(cache.get_many(["a", "b", "missing"]).items())
+...     cache.contains_many(["a", "missing"])
+...     cache.delete_many(["a", "b"])
+...     cache.get_many(["a", "b"])
+...
 [('a', 'hello'), ('b', 'world')]
->>> cache.contains_many(["a", "missing"])
 [True, False]
->>> cache.delete_many(["a", "b"])
->>> cache.get_many(["a", "b"])
 {}
 
 ```
@@ -84,10 +88,11 @@ every item passed to `set_many`:
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache()
->>> cache.set("greeting", "hello")
->>> cache.clear()
->>> cache.get("greeting") is None
+>>> with Cache() as cache:
+...     cache.set("greeting", "hello")
+...     cache.clear()
+...     cache.get("greeting") is None
+...
 True
 
 ```
@@ -108,9 +113,10 @@ legitimately return `None` for a value that isn't ready yet:
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache(ignore_none=True)
->>> cache.set("key", None)
->>> cache.get("key") is None  # treated as a miss, not a cached None
+>>> with Cache(ignore_none=True) as cache:
+...     cache.set("key", None)
+...     cache.get("key") is None  # treated as a miss, not a cached None
+...
 True
 
 ```
@@ -123,8 +129,9 @@ so `cache.get("key") is None` alone can't tell the two apart. Pass a `default` (
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache()
->>> cache.get("missing", "fallback")
+>>> with Cache() as cache:
+...     cache.get("missing", "fallback")
+...
 'fallback'
 
 ```
@@ -134,11 +141,12 @@ compare the result against it with `is`:
 
 ```pycon
 >>> from persista.cache import Cache, MISSING
->>> cache = Cache()
->>> cache.set("key", None)
->>> cache.get("key", MISSING) is MISSING
+>>> with Cache() as cache:
+...     cache.set("key", None)
+...     cache.get("key", MISSING) is MISSING
+...     cache.get("missing", MISSING) is MISSING
+...
 False
->>> cache.get("missing", MISSING) is MISSING
 True
 
 ```
@@ -152,11 +160,12 @@ sentinel:
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache()
->>> cache.set("key", None)
->>> cache.try_get("key")
+>>> with Cache() as cache:
+...     cache.set("key", None)
+...     cache.try_get("key")
+...     cache.try_get("missing")
+...
 (True, None)
->>> cache.try_get("missing")
 (False, None)
 
 ```
@@ -169,15 +178,16 @@ sentinel:
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache()
 >>> calls = []
 >>> def compute(x):
 ...     calls.append(x)
 ...     return x * 2
 ...
->>> cache.get_or_compute("key", compute, (4,), {})
+>>> with Cache() as cache:
+...     cache.get_or_compute("key", compute, (4,), {})
+...     cache.get_or_compute("key", compute, (4,), {})  # served from the cache
+...
 8
->>> cache.get_or_compute("key", compute, (4,), {})  # served from the cache
 8
 >>> calls
 [4]
@@ -190,15 +200,15 @@ store is still accessed synchronously; only the function is awaited:
 ```pycon
 >>> import asyncio
 >>> from persista.cache import Cache
->>> cache = Cache()
 >>> calls = []
 >>> async def compute(x):
 ...     calls.append(x)
 ...     return x * 2
 ...
 >>> async def main():
-...     print(await cache.aget_or_compute("key", compute, (4,), {}))
-...     print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
+...     async with Cache() as cache:
+...         print(await cache.aget_or_compute("key", compute, (4,), {}))
+...         print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
 ...
 >>> asyncio.run(main())
 8
@@ -215,16 +225,16 @@ and its arguments. It works on both sync and `async def` functions:
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache()
 >>> calls = []
->>> @cache.memoize(ttl=60)
-... def square(x):
-...     calls.append(x)
-...     return x * x
+>>> with Cache() as cache:
+...     @cache.memoize(ttl=60)
+...     def square(x):
+...         calls.append(x)
+...         return x * x
+...     square(4)
+...     square(4)  # served from the cache, not re-computed
 ...
->>> square(4)
 16
->>> square(4)  # served from the cache, not re-computed
 16
 >>> calls
 [4]
@@ -246,16 +256,18 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
 
 ```pycon
 >>> from persista.cache import Cache
->>> cache = Cache()
 >>> calls = []
->>> @cache.memoize(ttl=60, strategy="json", ignore_non_serializable=True)
-... def greet(name, client=None):
-...     calls.append(name)
-...     return f"hello {name}"
+>>> with Cache() as cache:
+...     @cache.memoize(ttl=60, strategy="json", ignore_non_serializable=True)
+...     def greet(name, client=None):
+...         calls.append(name)
+...         return f"hello {name}"
+...     greet("Ann", client=object())
+...     greet(
+...         "Ann", client=object()
+...     )  # different (non-serializable) client, still a cache hit
 ...
->>> greet("Ann", client=object())
 'hello Ann'
->>> greet("Ann", client=object())  # different (non-serializable) client, still a cache hit
 'hello Ann'
 >>> calls
 ['Ann']
@@ -274,11 +286,11 @@ async (`a`-prefixed) methods:
 >>> import asyncio
 >>> from persista.cache import Cache
 >>> async def main():
-...     cache = Cache(default_ttl=60)
-...     await cache.aset("greeting", "hello")
-...     print(await cache.aget("greeting"))
-...     await cache.aclear()
-...     print(await cache.aget("greeting"))
+...     async with Cache(default_ttl=60) as cache:
+...         await cache.aset("greeting", "hello")
+...         print(await cache.aget("greeting"))
+...         await cache.aclear()
+...         print(await cache.aget("greeting"))
 ...
 >>> asyncio.run(main())
 hello
@@ -293,15 +305,15 @@ if the result is awaitable. The backing store is always accessed with `await`, v
 ```pycon
 >>> import asyncio
 >>> from persista.cache import Cache
->>> cache = Cache()
 >>> calls = []
 >>> def compute(x):  # a plain sync function works too
 ...     calls.append(x)
 ...     return x * 2
 ...
 >>> async def main():
-...     print(await cache.aget_or_compute("key", compute, (4,), {}))
-...     print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
+...     async with Cache() as cache:
+...         print(await cache.aget_or_compute("key", compute, (4,), {}))
+...         print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
 ...
 >>> asyncio.run(main())
 8
@@ -316,16 +328,15 @@ if the result is awaitable. The backing store is always accessed with `await`, v
 ```pycon
 >>> import asyncio
 >>> from persista.cache import Cache
->>> cache = Cache()
 >>> calls = []
->>> @cache.amemoize(ttl=60)
-... async def cube(x):
-...     calls.append(x)
-...     return x * x * x
-...
 >>> async def main():
-...     print(await cube(4))
-...     print(await cube(4))  # served from the cache, not re-computed
+...     async with Cache() as cache:
+...         @cache.amemoize(ttl=60)
+...         async def cube(x):
+...             calls.append(x)
+...             return x * x * x
+...         print(await cube(4))
+...         print(await cube(4))  # served from the cache, not re-computed
 ...
 >>> asyncio.run(main())
 64
@@ -407,9 +418,13 @@ affects both:
 ```pycon
 >>> from persista.cache import Cache
 >>> from persista.cache import get_cache, set_cache
->>> set_cache(Cache(default_ttl=60))
+>>> previous = get_cache()
+>>> new_cache = Cache(default_ttl=60)
+>>> new_cache.open()
+>>> set_cache(new_cache)
 >>> get_cache().default_ttl
 60
+>>> set_cache(previous)  # restore the previous default cache
 
 ```
 

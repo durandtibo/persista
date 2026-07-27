@@ -266,6 +266,19 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
 
         Returns:
             A new store connected to ``path``.
+
+        Example:
+            ```pycon
+            >>> import tempfile
+            >>> from persista.store import SQLiteStore
+            >>> with tempfile.TemporaryDirectory() as tmpdir:
+            ...     with SQLiteStore.from_path(f"{tmpdir}/data.db") as store:
+            ...         store.set("1", {"title": "Intro to Python"})
+            ...         store.get("1")
+            ...
+            {'title': 'Intro to Python'}
+
+            ```
         """
         if str(path) == ":memory:":
             uri = "file::memory:?cache=shared"
@@ -683,6 +696,16 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
 
         Returns:
             A mapping of column name to SQLite declared type.
+
+        Example:
+            ```pycon
+            >>> from persista.store import SQLiteStore
+            >>> with SQLiteStore(":memory:") as store:
+            ...     store.get_columns_info()
+            ...
+            {'key': 'TEXT', 'value': 'JSON'}
+
+            ```
         """
         self._check_open()
         with self._lock:

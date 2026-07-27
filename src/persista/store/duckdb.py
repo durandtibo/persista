@@ -262,6 +262,16 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
 
         Returns:
             A mapping of column name to DuckDB type name.
+
+        Example:
+            ```pycon
+            >>> from persista.store import DuckDBStore
+            >>> with DuckDBStore(":memory:") as store:
+            ...     store.get_columns_info()
+            ...
+            {'key': 'VARCHAR', 'value': 'JSON'}
+
+            ```
         """
         self._check_open()
         with self._lock:

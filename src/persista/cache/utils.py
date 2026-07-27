@@ -26,6 +26,16 @@ def is_json_serializable(value: Any) -> bool:
 
     Returns:
         ``True`` if ``value`` is JSON-serializable, otherwise ``False``.
+
+    Example:
+        ```pycon
+        >>> from persista.cache.utils import is_json_serializable
+        >>> is_json_serializable({"a": 1})
+        True
+        >>> is_json_serializable(object())
+        False
+
+        ```
     """
     try:
         return _is_json_serializable_cached(value)
@@ -131,6 +141,16 @@ def is_picklable(value: Any) -> bool:
 
     Returns:
         ``True`` if ``value`` is picklable, otherwise ``False``.
+
+    Example:
+        ```pycon
+        >>> from persista.cache.utils import is_picklable
+        >>> is_picklable({"a": 1})
+        True
+        >>> is_picklable(lambda x: x)
+        False
+
+        ```
     """
     try:
         return _is_picklable_cached(value)
