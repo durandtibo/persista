@@ -31,9 +31,6 @@ class StoreCacheFactory(BaseCacheFactory, MultilineDisplayMixin):
         default_ttl: The default time-to-live, in seconds, forwarded
             to each created :class:`~persista.cache.Cache`. See
             :class:`~persista.cache.Cache` for details.
-        ignore_none: Forwarded to each created
-            :class:`~persista.cache.Cache`. See
-            :class:`~persista.cache.Cache` for details.
 
     Example:
         ```pycon
@@ -54,22 +51,18 @@ class StoreCacheFactory(BaseCacheFactory, MultilineDisplayMixin):
         self,
         store_factory: BaseStoreFactory,
         default_ttl: float | None = None,
-        ignore_none: bool = False,
     ) -> None:
         self._store_factory = store_factory
         self._default_ttl = default_ttl
-        self._ignore_none = ignore_none
 
     def make_cache(self) -> Cache:
         return Cache(
             store=self._store_factory.make_store(),
             default_ttl=self._default_ttl,
-            ignore_none=self._ignore_none,
         )
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
         return {
             "store_factory": self._store_factory,
             "default_ttl": self._default_ttl,
-            "ignore_none": self._ignore_none,
         }
