@@ -13,9 +13,11 @@ from persista.cache.interface import (
     get_cache,
     set_cache,
 )
+from persista.cache.utils import make_key
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -38,6 +40,20 @@ def _reset_default_cache() -> Iterator[None]:
     set_cache(original)
 
 
+#########################################
+#     Tests for _make_default_cache      #
+#########################################
+
+
+def test_make_default_cache_returns_open_cache() -> None:
+    cache = _make_default_cache()
+    try:
+        assert isinstance(cache, Cache)
+        assert cache.closed is False
+    finally:
+        cache.close()
+
+
 #################################
 #     Tests for get_cache       #
 #################################
@@ -49,16 +65,6 @@ def test_get_cache_returns_cache() -> None:
 
 def test_get_cache_returns_same_instance() -> None:
     assert get_cache() is get_cache()
-
-
-def test_make_default_cache_yields_open_cache() -> None:
-    generator = _make_default_cache()
-    cache = next(generator)
-    try:
-        assert isinstance(cache, Cache)
-        assert cache.closed is False
-    finally:
-        generator.close()
 
 
 #################################
@@ -136,8 +142,8 @@ def test_cached_uses_shared_default_cache() -> None:
         return x * 2
 
     func(1)
-    key = next(iter(get_cache()._store._data))
-    assert get_cache()._store.get(key) is not None
+    key = make_key(func.__qualname__, (1,), {}, strategy="json")
+    assert get_cache().contains(key)
 
 
 def test_cached_respects_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -334,8 +340,8 @@ async def test_async_cached_uses_shared_default_cache() -> None:
         return x * 2
 
     await func(1)
-    key = next(iter(get_cache()._store._data))
-    assert await get_cache()._store.aget(key) is not None
+    key = make_key(func.__qualname__, (1,), {}, strategy="json")
+    assert await get_cache().acontains(key)
 
 
 async def test_async_cached_respects_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
