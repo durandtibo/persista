@@ -44,6 +44,26 @@ def test_str(store: InMemoryStore) -> None:
     assert str(store).startswith("InMemoryStore(")
 
 
+def test_repr_after_close_does_not_raise(store: InMemoryStore) -> None:
+    store.close()
+    assert repr(store).startswith("InMemoryStore(")
+
+
+def test_str_after_close_does_not_raise(store: InMemoryStore) -> None:
+    store.close()
+    assert str(store).startswith("InMemoryStore(")
+
+
+def test_repr_before_open_does_not_raise() -> None:
+    store = InMemoryStore()
+    assert repr(store).startswith("InMemoryStore(")
+
+
+def test_str_before_open_does_not_raise() -> None:
+    store = InMemoryStore()
+    assert str(store).startswith("InMemoryStore(")
+
+
 # --- set ---
 
 
@@ -601,15 +621,31 @@ def test_count_after_set_many(store: InMemoryStore, items: dict[str, dict[str, A
 # --- close ---
 
 
+def test_open_while_already_open_is_no_op(
+    store: InMemoryStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    store.open()
+    assert not store.closed
+    assert store.count() == len(items)
+
+
 def test_close_discards_values(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     store.close()
+    store.open()
     assert store.count() == 0
 
 
 def test_close_is_idempotent(store: InMemoryStore) -> None:
     store.close()
     store.close()  # should not raise
+
+
+def test_get_before_open_raises() -> None:
+    store = InMemoryStore()
+    with pytest.raises(RuntimeError, match="not open"):
+        store.get("1")
 
 
 def test_close_returns_none(store: InMemoryStore) -> None:
@@ -619,11 +655,13 @@ def test_close_returns_none(store: InMemoryStore) -> None:
 def test_get_after_close_returns_none(store: InMemoryStore) -> None:
     store.set("1", {"text": "hello"})
     store.close()
+    store.open()
     assert store.get("1") is None
 
 
 def test_set_after_close_is_usable_again(store: InMemoryStore) -> None:
     store.close()
+    store.open()
     store.set("1", {"text": "hello"})
     assert store.get("1") == {"text": "hello"}
     assert store.count() == 1
@@ -655,7 +693,7 @@ def test_context_manager_closes_on_normal_exit() -> None:
         assert store.count() == 1
 
     # Closing an in-memory store discards its values.
-    assert store.count() == 0
+    assert store.closed
 
 
 def test_context_manager_closes_on_exception() -> None:
@@ -663,7 +701,7 @@ def test_context_manager_closes_on_exception() -> None:
     with pytest.raises(ValueError, match="boom"), InMemoryStore() as store:
         raise ValueError(msg)
 
-    assert store.count() == 0
+    assert store.closed
 
 
 def test_context_manager_usable_for_reads_and_writes() -> None:
@@ -738,6 +776,7 @@ def test_to_uri_returns_memory_scheme(store: InMemoryStore) -> None:
 
 def test_from_uri_returns_empty_store() -> None:
     store = InMemoryStore.from_uri("memory://")
+    store.open()
     assert store.count() == 0
 
 
@@ -746,6 +785,7 @@ def test_to_uri_from_uri_does_not_carry_data(
 ) -> None:
     store.set_many(items)
     reloaded = InMemoryStore.from_uri(store.to_uri())
+    reloaded.open()
     assert reloaded.count() == 0
 
 
@@ -800,6 +840,7 @@ async def test_in_memory_store_akeys(store: InMemoryStore) -> None:
 
 async def test_in_memory_store_aclose_clears_data() -> None:
     store = InMemoryStore()
+    await store.aopen()
     await store.aset("1", {"a": 1})
     await store.aclose()
     assert store.closed
@@ -852,7 +893,7 @@ async def test_in_memory_store_async_context_manager_closes_on_normal_exit() -> 
         await store.aset("1", {"text": "hello"})
         assert await store.acount() == 1
 
-    assert await store.acount() == 0
+    assert store.closed
 
 
 async def test_in_memory_store_async_context_manager_closes_on_exception() -> None:
@@ -861,7 +902,7 @@ async def test_in_memory_store_async_context_manager_closes_on_exception() -> No
         async with InMemoryStore() as store:
             raise ValueError(msg)
 
-    assert await store.acount() == 0
+    assert store.closed
 
 
 # --- aiter_batches ---

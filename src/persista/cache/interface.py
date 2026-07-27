@@ -22,7 +22,17 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
-_state = {"cache": Cache(default_ttl=300)}
+
+def _make_default_cache() -> Cache:
+    """Create and open the module's initial shared default cache."""
+    cache = Cache(default_ttl=300)
+    cache.open()
+    return cache
+
+
+# A single-key dict, rather than a plain module-level variable, lets
+# `set_cache` reassign the entry without a `global` statement.
+_state: dict[str, Cache] = {"cache": _make_default_cache()}
 
 
 def get_cache() -> Cache:
@@ -58,13 +68,35 @@ def set_cache(cache: Cache) -> None:
         ```pycon
         >>> from persista.cache import Cache
         >>> from persista.cache import get_cache, set_cache
-        >>> set_cache(Cache(default_ttl=60))
+        >>> previous = get_cache()
+        >>> new_cache = Cache(default_ttl=60)
+        >>> new_cache.open()
+        >>> set_cache(new_cache)
         >>> get_cache().default_ttl
         60
+        >>> set_cache(previous)  # restore the previous default cache
 
         ```
     """
     _state["cache"] = cache
+
+
+def _make_call_key(
+    func: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    strategy: str,
+    ignore_non_serializable: bool,
+) -> str:
+    """Derive a cache key for one call, shared by :func:`cached` and
+    :func:`async_cached`'s wrappers."""
+    return make_key(
+        func.__qualname__,
+        args,
+        kwargs,
+        strategy=strategy,
+        ignore_non_serializable=ignore_non_serializable,
+    )
 
 
 def cached(
@@ -127,13 +159,7 @@ def cached(
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 cache = get_cache()
-                key = make_key(
-                    func.__qualname__,
-                    args,
-                    kwargs,
-                    strategy=strategy,
-                    ignore_non_serializable=ignore_non_serializable,
-                )
+                key = _make_call_key(func, args, kwargs, strategy, ignore_non_serializable)
                 return await cache.aget_or_compute(key, func, args, kwargs, ttl=ttl)
 
             return async_wrapper  # pyright: ignore[reportReturnType]
@@ -141,13 +167,7 @@ def cached(
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> T:
             cache = get_cache()
-            key = make_key(
-                func.__qualname__,
-                args,
-                kwargs,
-                strategy=strategy,
-                ignore_non_serializable=ignore_non_serializable,
-            )
+            key = _make_call_key(func, args, kwargs, strategy, ignore_non_serializable)
             return cache.get_or_compute(key, func, args, kwargs, ttl=ttl)
 
         return wrapper
@@ -217,13 +237,7 @@ def async_cached(
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             cache = get_cache()
-            key = make_key(
-                func.__qualname__,
-                args,
-                kwargs,
-                strategy=strategy,
-                ignore_non_serializable=ignore_non_serializable,
-            )
+            key = _make_call_key(func, args, kwargs, strategy, ignore_non_serializable)
             return await cache.aget_or_compute(key, func, args, kwargs, ttl=ttl)
 
         return wrapper

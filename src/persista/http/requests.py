@@ -77,6 +77,7 @@ def create_session(
 
 def fetch_response(
     url: str,
+    *,
     timeout: int = 30,
     max_retries: int = 3,
     retry_status_codes: list[int] | None = None,

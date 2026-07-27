@@ -19,6 +19,14 @@ def encode_path_uri(scheme: str, path: str) -> str:
 
     Returns:
         A URI string that :func:`decode_path_uri` can invert.
+
+    Example:
+        ```pycon
+        >>> from persista.store.uri import encode_path_uri
+        >>> encode_path_uri("sqlite", "/tmp/data.db")
+        'sqlite:/tmp/data.db'
+
+        ```
     """
     return urlunsplit((scheme, "", quote(path, safe="/"), "", ""))
 
@@ -36,6 +44,14 @@ def decode_path_uri(uri: str, *, expected_scheme: str) -> str:
     Raises:
         ValueError: If ``uri``'s scheme does not match
             ``expected_scheme``.
+
+    Example:
+        ```pycon
+        >>> from persista.store.uri import decode_path_uri
+        >>> decode_path_uri("sqlite:///tmp/data.db", expected_scheme="sqlite")
+        '/tmp/data.db'
+
+        ```
     """
     parsed = urlsplit(uri)
     if parsed.scheme != expected_scheme:

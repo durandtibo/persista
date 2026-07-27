@@ -32,6 +32,20 @@ def prepare_store_path(path: Path | str) -> Path | str:
     Returns:
         ``":memory:"`` unchanged, or the sanitized, absolute ``Path``
         whose parent directory is guaranteed to exist.
+
+    Example:
+        ```pycon
+        >>> import tempfile
+        >>> from persista.utils.path import prepare_store_path
+        >>> prepare_store_path(":memory:")
+        ':memory:'
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     path = prepare_store_path(f"{tmpdir}/nested/data.db")
+        ...     path.parent.is_dir()
+        ...
+        True
+
+        ```
     """
     if isinstance(path, str) and path == ":memory:":
         return path

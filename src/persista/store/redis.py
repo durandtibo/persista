@@ -78,12 +78,34 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         check_redis()
         self._url = url
         self._kwargs = kwargs
-        self._closed = False
-        self._client = redis.Redis.from_url(url, decode_responses=self._decode_responses, **kwargs)
+        self._closed = True
+        self._client: redis.Redis | None = None
         self._aclient: aredis.Redis | None = None
         self._aclient_lock = asyncio.Lock()
 
+    def _check_open(self) -> None:
+        if self._closed:
+            msg = (
+                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
+                "context manager."
+            )
+            raise RuntimeError(msg)
+
+    def open(self) -> None:
+        if not self._closed:
+            return
+        self._client = redis.Redis.from_url(
+            self._url, decode_responses=self._decode_responses, **self._kwargs
+        )
+        self._closed = False
+
+    async def aopen(self) -> None:
+        if not self._closed:
+            return
+        await asyncio.to_thread(self.open)
+
     async def _ensure_aclient(self) -> aredis.Redis:
+        self._check_open()
         async with self._aclient_lock:
             if self._aclient is None:
                 self._aclient = aredis.Redis.from_url(
@@ -156,6 +178,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         return cls(uri)
 
     def get(self, key: str) -> dict[str, Any] | None:
+        self._check_open()
         value = self._client.get(key)
         return self._decode(value) if value is not None else None
 
@@ -165,6 +188,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         return self._decode(value) if value is not None else None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        self._check_open()
         if not keys:
             return []
         values = self._client.mget(keys)
@@ -197,6 +221,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
+        self._check_open()
         if not items:
             return
         self._check_no_reserved_keys(items)
@@ -280,6 +305,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        self._check_open()
         return [
             value
             for value in self.values()
@@ -294,6 +320,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         ]
 
     def delete(self, key: str) -> None:
+        self._check_open()
         pipe = self._client.pipeline()
         pipe.delete(key)
         pipe.srem(_KEYS_SET, key)
@@ -307,6 +334,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         await pipe.execute()
 
     def delete_many(self, keys: list[str]) -> None:
+        self._check_open()
         if not keys:
             return
         pipe = self._client.pipeline()
@@ -330,6 +358,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         await self.adelete_many([key async for key in self.akeys()])
 
     def contains(self, key: str) -> bool:
+        self._check_open()
         return bool(self._client.sismember(_KEYS_SET, key))
 
     async def acontains(self, key: str) -> bool:
@@ -337,6 +366,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         return bool(await client.sismember(_KEYS_SET, key))
 
     def contains_many(self, keys: list[str]) -> list[bool]:
+        self._check_open()
         if not keys:
             return []
         flags = self._client.smismember(_KEYS_SET, keys)
@@ -350,6 +380,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         return [bool(flag) for flag in flags]
 
     def keys(self) -> Iterator[str]:
+        self._check_open()
         for key in self._client.smembers(_KEYS_SET):
             yield self._key_str(key)
 
@@ -362,6 +393,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         self, batch_size: int = 32
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
+        self._check_open()
         all_keys = [self._key_str(key) for key in self._client.smembers(_KEYS_SET)]
         for batch in batchify(all_keys, size=batch_size):
             values = self._client.mget(batch)
@@ -384,6 +416,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
             }
 
     def count(self) -> int:
+        self._check_open()
         return self._client.scard(_KEYS_SET)
 
     async def acount(self) -> int:
@@ -395,28 +428,6 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         if not self._closed:
             kwargs["count"] = self.count()
         return kwargs | self._kwargs
-
-    def __enter__(self) -> Self:
-        if self._closed:
-            self._client = redis.Redis.from_url(
-                self._url, decode_responses=self._decode_responses, **self._kwargs
-            )
-            self._closed = False
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.close()
-
-    async def __aenter__(self) -> Self:
-        if self._closed:
-            self._client = redis.Redis.from_url(
-                self._url, decode_responses=self._decode_responses, **self._kwargs
-            )
-            self._closed = False
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.aclose()
 
 
 class RedisStore(BaseRedisStore):
@@ -442,15 +453,24 @@ class RedisStore(BaseRedisStore):
     Example:
         ```pycon
         >>> from persista.store import RedisStore
-        >>> store = RedisStore("redis://localhost:6379/0")  # doctest: +SKIP
-        >>> store.set_many(
-        ...     {
-        ...         "1": {"title": "Intro to Python", "author": "Alice", "category": "Programming"},
-        ...         "2": {"title": "Advanced Python", "author": "Alice", "category": "Programming"},
-        ...         "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-        ...     }
-        ... )  # doctest: +SKIP
-        >>> len(store.filter(author="Alice"))  # doctest: +SKIP
+        >>> with RedisStore("redis://localhost:6379/0") as store:  # doctest: +SKIP
+        ...     store.set_many(
+        ...         {
+        ...             "1": {
+        ...                 "title": "Intro to Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "2": {
+        ...                 "title": "Advanced Python",
+        ...                 "author": "Alice",
+        ...                 "category": "Programming",
+        ...             },
+        ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
+        ...         }
+        ...     )
+        ...     len(store.filter(author="Alice"))
+        ...
         2
 
         ```
@@ -486,11 +506,10 @@ class PickleRedisStore(BaseRedisStore):
     Example:
         ```pycon
         >>> from persista.store import PickleRedisStore
-        >>> store = PickleRedisStore("redis://localhost:6379/0")  # doctest: +SKIP
-        >>> store.set(
-        ...     "1", {"title": "Intro to Python", "tags": {"python", "intro"}}
-        ... )  # doctest: +SKIP
-        >>> store.get("1")  # doctest: +SKIP
+        >>> with PickleRedisStore("redis://localhost:6379/0") as store:  # doctest: +SKIP
+        ...     store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
+        ...     store.get("1")
+        ...
         {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
 
         ```

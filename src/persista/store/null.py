@@ -25,7 +25,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class NullStore(BaseStore, InlineDisplayMixin):
-    """A :class:`~persista.store.base.BaseStore` implementation that
+    """A :class:`~persista.store.BaseStore` implementation that
     forgets everything written to it.
 
     Every :meth:`set`/:meth:`aset`/:meth:`set_many`/:meth:`aset_many`
@@ -33,7 +33,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
     report a miss and the store always reports as empty. Because
     nothing is ever stored, ``on_conflict="raise"`` can never
     actually raise ``KeyError`` here, unlike other
-    :class:`~persista.store.base.BaseStore` implementations. This is
+    :class:`~persista.store.BaseStore` implementations. This is
     primarily useful for plugging into
     :class:`~persista.cache.cache.Cache` to disable caching without
     changing any calling code: every lookup misses, so
@@ -46,15 +46,34 @@ class NullStore(BaseStore, InlineDisplayMixin):
         ```pycon
         >>> from persista.store import NullStore
         >>> from persista.cache import Cache
-        >>> cache = Cache(store=NullStore())
-        >>> cache.set("greeting", "hello")
-        >>> cache.get("greeting") is None
+        >>> with Cache(store=NullStore()) as cache:
+        ...     cache.set("greeting", "hello")
+        ...     cache.get("greeting") is None
+        ...
         True
 
         ```
     """
 
     def __init__(self) -> None:
+        self._closed = True
+
+    def _check_open(self) -> None:
+        if self._closed:
+            msg = (
+                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
+                "context manager."
+            )
+            raise RuntimeError(msg)
+
+    def open(self) -> None:
+        if not self._closed:
+            return
+        self._closed = False
+
+    async def aopen(self) -> None:
+        if not self._closed:
+            return
         self._closed = False
 
     def close(self) -> None:
@@ -67,24 +86,20 @@ class NullStore(BaseStore, InlineDisplayMixin):
     def closed(self) -> bool:
         return self._closed
 
-    def __enter__(self) -> Self:
-        self._closed = False
-        return self
-
-    async def __aenter__(self) -> Self:
-        self._closed = False
-        return self
-
     def get(self, key: str) -> dict[str, Any] | None:  # noqa: ARG002
+        self._check_open()
         return None
 
     async def aget(self, key: str) -> dict[str, Any] | None:  # noqa: ARG002
+        self._check_open()
         return None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        self._check_open()
         return [None] * len(keys)
 
     async def aget_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
+        self._check_open()
         return [None] * len(keys)
 
     def set(
@@ -93,6 +108,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
         value: dict[str, Any],  # noqa: ARG002
         on_conflict: OnConflict = "overwrite",  # noqa: ARG002
     ) -> None:
+        self._check_open()
         logger.debug("Discarding key-value pair: %s", key)
 
     async def aset(
@@ -101,6 +117,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
         value: dict[str, Any],  # noqa: ARG002
         on_conflict: OnConflict = "overwrite",  # noqa: ARG002
     ) -> None:
+        self._check_open()
         logger.debug("Discarding key-value pair: %s", key)
 
     def set_many(
@@ -108,6 +125,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
         items: Mapping[str, dict[str, Any]],
         on_conflict: OnConflict = "overwrite",  # noqa: ARG002
     ) -> None:
+        self._check_open()
         logger.debug("Discarding %d key-value pair(s)", len(items))
 
     async def aset_many(
@@ -115,48 +133,57 @@ class NullStore(BaseStore, InlineDisplayMixin):
         items: Mapping[str, dict[str, Any]],
         on_conflict: OnConflict = "overwrite",  # noqa: ARG002
     ) -> None:
+        self._check_open()
         logger.debug("Discarding %d key-value pair(s)", len(items))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:  # noqa: ARG002
+        self._check_open()
         return []
 
     async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:  # noqa: ARG002
+        self._check_open()
         return []
 
     def delete(self, key: str) -> None:  # noqa: ARG002
-        return
+        self._check_open()
 
     async def adelete(self, key: str) -> None:  # noqa: ARG002
-        return
+        self._check_open()
 
     def delete_many(self, keys: list[str]) -> None:  # noqa: ARG002
-        return
+        self._check_open()
 
     async def adelete_many(self, keys: list[str]) -> None:  # noqa: ARG002
-        return
+        self._check_open()
 
     def clear(self) -> None:
-        return
+        self._check_open()
 
     async def aclear(self) -> None:
-        return
+        self._check_open()
 
     def contains(self, key: str) -> bool:  # noqa: ARG002
+        self._check_open()
         return False
 
     async def acontains(self, key: str) -> bool:  # noqa: ARG002
+        self._check_open()
         return False
 
     def contains_many(self, keys: list[str]) -> list[bool]:
+        self._check_open()
         return [False] * len(keys)
 
     async def acontains_many(self, keys: list[str]) -> list[bool]:
+        self._check_open()
         return [False] * len(keys)
 
     def keys(self) -> Iterator[str]:
+        self._check_open()
         return iter(())
 
     def akeys(self) -> AsyncIterator[str]:
+        self._check_open()
         return EmptyAsyncIterator()
 
     def iter_batches(
@@ -164,6 +191,7 @@ class NullStore(BaseStore, InlineDisplayMixin):
         batch_size: int = 32,
     ) -> Iterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
+        self._check_open()
         yield from ()
 
     def aiter_batches(
@@ -171,12 +199,15 @@ class NullStore(BaseStore, InlineDisplayMixin):
         batch_size: int = 32,
     ) -> AsyncIterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
+        self._check_open()
         return EmptyAsyncIterator()
 
     def count(self) -> int:
+        self._check_open()
         return 0
 
     async def acount(self) -> int:
+        self._check_open()
         return 0
 
     def to_uri(self) -> str:

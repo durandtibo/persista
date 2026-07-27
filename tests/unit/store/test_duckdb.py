@@ -710,6 +710,12 @@ def test_close_is_idempotent(store: BaseDuckDBStore) -> None:
     store.close()  # should not raise
 
 
+def test_get_before_open_raises(store_cls: type[BaseDuckDBStore]) -> None:
+    store = store_cls(":memory:")
+    with pytest.raises(RuntimeError, match="not open"):
+        store.get("1")
+
+
 def test_close_returns_none(store: BaseDuckDBStore) -> None:
     assert store.close() is None
 

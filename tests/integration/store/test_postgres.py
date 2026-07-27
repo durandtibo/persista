@@ -212,6 +212,7 @@ async def test_aclose_is_idempotent(
     store_cls: type[BasePostgresStore], conninfo: str, table_name: str
 ) -> None:
     store = store_cls(conninfo, table=table_name)
+    await store.aopen()
     await store.aget("1")  # forces the lazy async connection open
     await store.aclose()
     await store.aclose()

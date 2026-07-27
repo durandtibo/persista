@@ -18,6 +18,14 @@ def split_present_missing(keys: list[str], flags: list[bool]) -> tuple[list[str]
     Returns:
         A ``(present, missing)`` tuple, each a list of keys in the
         same relative order as ``keys``.
+
+    Example:
+        ```pycon
+        >>> from persista.store.keys import split_present_missing
+        >>> split_present_missing(["a", "b", "c"], [True, False, True])
+        (['a', 'c'], ['b'])
+
+        ```
     """
     present = []
     missing = []

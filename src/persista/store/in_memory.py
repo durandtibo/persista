@@ -51,11 +51,12 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
     Example:
         ```pycon
         >>> from persista.store import InMemoryStore
-        >>> store = InMemoryStore()
-        >>> store.set("1", {"text": "hello"})
-        >>> store.count()
+        >>> with InMemoryStore() as store:
+        ...     store.set("1", {"text": "hello"})
+        ...     store.count()
+        ...     store.get("1")
+        ...
         1
-        >>> store.get("1")
         {'text': 'hello'}
 
         ```
@@ -63,12 +64,26 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
 
     def __init__(self) -> None:
         self._data: dict[str, dict[str, Any]] = {}
-        self._closed = False
+        self._closed = True
         self._lock = threading.RLock()
 
     @property
     def data(self) -> dict[str, dict[str, Any]]:
         return self._data
+
+    def _check_open(self) -> None:
+        if self._closed:
+            msg = (
+                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
+                "context manager."
+            )
+            raise RuntimeError(msg)
+
+    def open(self) -> None:
+        if not self._closed:
+            return
+        self._data = {}
+        self._closed = False
 
     def close(self) -> None:
         # Discard all values: an in-memory store has nothing to
@@ -83,15 +98,8 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
     def closed(self) -> bool:
         return self._closed
 
-    def __enter__(self) -> Self:
-        self._closed = False
-        return self
-
-    async def __aenter__(self) -> Self:
-        self._closed = False
-        return self
-
     def get(self, key: str) -> dict[str, Any] | None:
+        self._check_open()
         with self._lock:
             value = self._data.get(key)
             return copy.deepcopy(value) if value is not None else None
@@ -106,6 +114,7 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
     ) -> None:
+        self._check_open()
         on_conflict = normalize_on_conflict(on_conflict)
 
         with self._lock:
@@ -122,6 +131,7 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
             logger.debug("Added/replaced %d key-value pair(s)", len(to_write))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        self._check_open()
         with self._lock:
             if not field_filters:
                 return [copy.deepcopy(value) for value in self._data.values()]
@@ -134,6 +144,7 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
             return [copy.deepcopy(value) for value in matches]
 
     def delete(self, key: str) -> None:
+        self._check_open()
         with self._lock:
             self._data.pop(key, None)
 
@@ -143,30 +154,36 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
                 self.delete(key)
 
     def clear(self) -> None:
+        self._check_open()
         with self._lock:
             self._data.clear()
 
     def contains(self, key: str) -> bool:
+        self._check_open()
         with self._lock:
             return key in self._data
 
     def contains_many(self, keys: list[str]) -> list[bool]:
+        self._check_open()
         with self._lock:
             return [key in self._data for key in keys]
 
     def keys(self) -> Iterator[str]:
+        self._check_open()
         with self._lock:
             snapshot = list(self._data.keys())
         yield from snapshot
 
     def iter_batches(self, batch_size: int = 32) -> Iterator[dict[str, dict[str, Any]]]:
         validate_batch_size(batch_size)
+        self._check_open()
         with self._lock:
             snapshot = list(self._data.items())
         for batch in batchify(snapshot, size=batch_size):
             yield dict(batch)
 
     def count(self) -> int:
+        self._check_open()
         with self._lock:
             return len(self._data)
 
@@ -178,4 +195,7 @@ class InMemoryStore(ThreadedAsyncStoreMixin, BaseStore, InlineDisplayMixin):
         return cls()
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
-        return {"count": self.count()}
+        kwargs: dict[str, Any] = {"closed": self._closed}
+        if not self._closed:
+            kwargs["count"] = self.count()
+        return kwargs

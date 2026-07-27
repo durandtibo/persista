@@ -25,6 +25,9 @@ class _ThreadedTestStore(ThreadedAsyncStoreMixin, BaseStore):
         self._data: dict[str, dict[str, Any]] = {}
         self._closed = False
 
+    def open(self) -> None:
+        self._closed = False
+
     def close(self) -> None:
         self._closed = True
 

@@ -24,10 +24,18 @@ jobs:
       - name: check persista.cache
         run: |
           python -c "from persista import cache"
+          python -c "from persista.cache import factory"
+
+      - name: check persista.http
+        run: |
+          python -c "from persista import http"
+          python -c "from persista.http import httpx"
+          python -c "from persista.http import requests"
 
       - name: check persista.store
         run: |
           python -c "from persista import store"
+          python -c "from persista.store import factory"
 
       - name: check persista.utils
         run: |

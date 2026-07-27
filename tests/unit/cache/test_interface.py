@@ -1,19 +1,33 @@
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from persista.cache.cache import Cache
-from persista.cache.interface import async_cached, cached, get_cache, set_cache
+from persista.cache.interface import (
+    _make_default_cache,
+    async_cached,
+    cached,
+    get_cache,
+    set_cache,
+)
+from persista.cache.utils import make_key
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _make_cache(**kwargs: Any) -> Cache:
+    cache = Cache(**kwargs)
+    cache.open()
+    return cache
 
 
 @pytest.fixture(autouse=True)
@@ -21,9 +35,23 @@ def _reset_default_cache() -> Iterator[None]:
     # Isolate tests from each other and from any cache installed by
     # a previous test via `set_cache`.
     original = get_cache()
-    set_cache(Cache(default_ttl=300))
+    set_cache(_make_cache(default_ttl=300))
     yield
     set_cache(original)
+
+
+#########################################
+#     Tests for _make_default_cache      #
+#########################################
+
+
+def test_make_default_cache_returns_open_cache() -> None:
+    cache = _make_default_cache()
+    try:
+        assert isinstance(cache, Cache)
+        assert cache.closed is False
+    finally:
+        cache.close()
 
 
 #################################
@@ -45,7 +73,7 @@ def test_get_cache_returns_same_instance() -> None:
 
 
 def test_set_cache_replaces_instance() -> None:
-    cache = Cache()
+    cache = _make_cache()
     set_cache(cache)
     assert get_cache() is cache
 
@@ -62,7 +90,7 @@ def test_set_cache_reflected_by_previously_decorated_function() -> None:
     assert calls == [1]
 
     # Swapping the shared cache should make `func` start with a clean slate.
-    set_cache(Cache())
+    set_cache(_make_cache())
     func(1)
     assert calls == [1, 1]
 
@@ -114,8 +142,8 @@ def test_cached_uses_shared_default_cache() -> None:
         return x * 2
 
     func(1)
-    key = next(iter(get_cache()._store._data))
-    assert get_cache()._store.get(key) is not None
+    key = make_key(func.__qualname__, (1,), {}, strategy="json")
+    assert get_cache().contains(key)
 
 
 def test_cached_respects_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -221,7 +249,7 @@ async def test_async_cached_reflected_by_swapping_shared_cache() -> None:
     assert calls == [1]
 
     # Swapping the shared cache should make `func` start with a clean slate.
-    set_cache(Cache(default_ttl=300))
+    set_cache(_make_cache(default_ttl=300))
     await func(1)
     assert calls == [1, 1]
 
@@ -312,8 +340,8 @@ async def test_async_cached_uses_shared_default_cache() -> None:
         return x * 2
 
     await func(1)
-    key = next(iter(get_cache()._store._data))
-    assert await get_cache()._store.aget(key) is not None
+    key = make_key(func.__qualname__, (1,), {}, strategy="json")
+    assert await get_cache().acontains(key)
 
 
 async def test_async_cached_respects_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
