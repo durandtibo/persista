@@ -248,6 +248,15 @@ def test_get_many_missing_uses_default(cache: Cache) -> None:
     assert cache.get_many(["a", "missing"], default=MISSING) == {"a": "1", "missing": MISSING}
 
 
+def test_get_many_missing_uses_custom_default(cache: Cache) -> None:
+    cache.set("a", "1")
+    assert cache.get_many(["a", "missing"], default="N/A") == {"a": "1", "missing": "N/A"}
+
+
+def test_get_many_all_missing_uses_default(cache: Cache) -> None:
+    assert cache.get_many(["a", "b"], default="N/A") == {"a": "N/A", "b": "N/A"}
+
+
 def test_get_many_expired_key_uses_default(cache: Cache, fake_time: list[float]) -> None:
     cache.set("a", "1", ttl=10)
     cache.set("b", "2", ttl=None)
@@ -1180,6 +1189,15 @@ async def test_aget_many_missing_uses_default(cache: Cache) -> None:
         "a": "1",
         "missing": MISSING,
     }
+
+
+async def test_aget_many_missing_uses_custom_default(cache: Cache) -> None:
+    await cache.aset("a", "1")
+    assert await cache.aget_many(["a", "missing"], default="N/A") == {"a": "1", "missing": "N/A"}
+
+
+async def test_aget_many_all_missing_uses_default(cache: Cache) -> None:
+    assert await cache.aget_many(["a", "b"], default="N/A") == {"a": "N/A", "b": "N/A"}
 
 
 async def test_aget_many_expired_key_uses_default(cache: Cache, fake_time: list[float]) -> None:
