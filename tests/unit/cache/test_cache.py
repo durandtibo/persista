@@ -234,20 +234,34 @@ def test_get_many_empty_keys_returns_empty_dict(cache: Cache) -> None:
 
 
 def test_get_many_all_missing(cache: Cache) -> None:
-    assert cache.get_many(["a", "b"]) == {}
+    assert cache.get_many(["a", "b"]) == {"a": None, "b": None}
 
 
 def test_get_many_mixed_hits_and_misses(cache: Cache) -> None:
     cache.set("a", "1")
     cache.set("b", "2")
-    assert cache.get_many(["a", "b", "missing"]) == {"a": "1", "b": "2"}
+    assert cache.get_many(["a", "b", "missing"]) == {"a": "1", "b": "2", "missing": None}
 
 
-def test_get_many_expired_key_omitted(cache: Cache, fake_time: list[float]) -> None:
+def test_get_many_missing_uses_default(cache: Cache) -> None:
+    cache.set("a", "1")
+    assert cache.get_many(["a", "missing"], default=MISSING) == {"a": "1", "missing": MISSING}
+
+
+def test_get_many_missing_uses_custom_default(cache: Cache) -> None:
+    cache.set("a", "1")
+    assert cache.get_many(["a", "missing"], default="N/A") == {"a": "1", "missing": "N/A"}
+
+
+def test_get_many_all_missing_uses_default(cache: Cache) -> None:
+    assert cache.get_many(["a", "b"], default="N/A") == {"a": "N/A", "b": "N/A"}
+
+
+def test_get_many_expired_key_uses_default(cache: Cache, fake_time: list[float]) -> None:
     cache.set("a", "1", ttl=10)
     cache.set("b", "2", ttl=None)
     fake_time[0] += 11
-    assert cache.get_many(["a", "b"]) == {"b": "2"}
+    assert cache.get_many(["a", "b"]) == {"a": None, "b": "2"}
 
 
 def test_get_many_expired_key_evicted_as_side_effect(cache: Cache, fake_time: list[float]) -> None:
@@ -262,12 +276,58 @@ def test_get_many_cached_none_is_hit_by_default(cache: Cache) -> None:
     assert cache.get_many(["a"]) == {"a": None}
 
 
-def test_get_many_cached_none_is_omitted_with_ignore_none() -> None:
+def test_get_many_cached_none_uses_default_with_ignore_none() -> None:
     cache = Cache(ignore_none=True)
     cache.open()
     cache.set("a", None, ttl=None)
     cache.set("b", "2")
-    assert cache.get_many(["a", "b"]) == {"b": "2"}
+    assert cache.get_many(["a", "b"]) == {"a": None, "b": "2"}
+
+
+# --- try_get_many ---
+
+
+def test_try_get_many_empty_keys_returns_empty_dict(cache: Cache) -> None:
+    assert cache.try_get_many([]) == {}
+
+
+def test_try_get_many_all_missing(cache: Cache) -> None:
+    assert cache.try_get_many(["a", "b"]) == {}
+
+
+def test_try_get_many_mixed_hits_and_misses(cache: Cache) -> None:
+    cache.set("a", "1")
+    cache.set("b", "2")
+    assert cache.try_get_many(["a", "b", "missing"]) == {"a": "1", "b": "2"}
+
+
+def test_try_get_many_expired_key_omitted(cache: Cache, fake_time: list[float]) -> None:
+    cache.set("a", "1", ttl=10)
+    cache.set("b", "2", ttl=None)
+    fake_time[0] += 11
+    assert cache.try_get_many(["a", "b"]) == {"b": "2"}
+
+
+def test_try_get_many_expired_key_evicted_as_side_effect(
+    cache: Cache, fake_time: list[float]
+) -> None:
+    cache.set("a", "1", ttl=10)
+    fake_time[0] += 11
+    cache.try_get_many(["a"])
+    assert cache.contains("a") is False
+
+
+def test_try_get_many_cached_none_is_hit_by_default(cache: Cache) -> None:
+    cache.set("a", None, ttl=None)
+    assert cache.try_get_many(["a"]) == {"a": None}
+
+
+def test_try_get_many_cached_none_is_omitted_with_ignore_none() -> None:
+    cache = Cache(ignore_none=True)
+    cache.open()
+    cache.set("a", None, ttl=None)
+    cache.set("b", "2")
+    assert cache.try_get_many(["a", "b"]) == {"b": "2"}
 
 
 # --- contains_many ---
@@ -321,7 +381,7 @@ def test_contains_many_cached_none_is_omitted_with_ignore_none() -> None:
 
 def test_set_many_empty_items_noop(cache: Cache) -> None:
     cache.set_many({})
-    assert cache.get_many(["a"]) == {}
+    assert cache.try_get_many(["a"]) == {}
 
 
 def test_set_many_then_get_many(cache: Cache) -> None:
@@ -381,7 +441,7 @@ def test_delete_many_empty_keys_noop(cache: Cache) -> None:
 def test_delete_many_existing_keys(cache: Cache) -> None:
     cache.set_many({"a": "1", "b": "2"})
     cache.delete_many(["a", "b"])
-    assert cache.get_many(["a", "b"]) == {}
+    assert cache.try_get_many(["a", "b"]) == {}
 
 
 def test_delete_many_missing_keys(cache: Cache) -> None:
@@ -1114,20 +1174,37 @@ async def test_aget_many_empty_keys_returns_empty_dict(cache: Cache) -> None:
 
 
 async def test_aget_many_all_missing(cache: Cache) -> None:
-    assert await cache.aget_many(["a", "b"]) == {}
+    assert await cache.aget_many(["a", "b"]) == {"a": None, "b": None}
 
 
 async def test_aget_many_mixed_hits_and_misses(cache: Cache) -> None:
     await cache.aset("a", "1")
     await cache.aset("b", "2")
-    assert await cache.aget_many(["a", "b", "missing"]) == {"a": "1", "b": "2"}
+    assert await cache.aget_many(["a", "b", "missing"]) == {"a": "1", "b": "2", "missing": None}
 
 
-async def test_aget_many_expired_key_omitted(cache: Cache, fake_time: list[float]) -> None:
+async def test_aget_many_missing_uses_default(cache: Cache) -> None:
+    await cache.aset("a", "1")
+    assert await cache.aget_many(["a", "missing"], default=MISSING) == {
+        "a": "1",
+        "missing": MISSING,
+    }
+
+
+async def test_aget_many_missing_uses_custom_default(cache: Cache) -> None:
+    await cache.aset("a", "1")
+    assert await cache.aget_many(["a", "missing"], default="N/A") == {"a": "1", "missing": "N/A"}
+
+
+async def test_aget_many_all_missing_uses_default(cache: Cache) -> None:
+    assert await cache.aget_many(["a", "b"], default="N/A") == {"a": "N/A", "b": "N/A"}
+
+
+async def test_aget_many_expired_key_uses_default(cache: Cache, fake_time: list[float]) -> None:
     await cache.aset("a", "1", ttl=10)
     await cache.aset("b", "2", ttl=None)
     fake_time[0] += 11
-    assert await cache.aget_many(["a", "b"]) == {"b": "2"}
+    assert await cache.aget_many(["a", "b"]) == {"a": None, "b": "2"}
 
 
 async def test_aget_many_expired_key_evicted_as_side_effect(
@@ -1144,11 +1221,56 @@ async def test_aget_many_cached_none_is_hit_by_default(cache: Cache) -> None:
     assert await cache.aget_many(["a"]) == {"a": None}
 
 
-async def test_aget_many_cached_none_is_omitted_with_ignore_none() -> None:
+async def test_aget_many_cached_none_uses_default_with_ignore_none() -> None:
     with Cache(ignore_none=True) as cache:
         await cache.aset("a", None, ttl=None)
         await cache.aset("b", "2")
-        assert await cache.aget_many(["a", "b"]) == {"b": "2"}
+        assert await cache.aget_many(["a", "b"]) == {"a": None, "b": "2"}
+
+
+# --- atry_get_many ---
+
+
+async def test_atry_get_many_empty_keys_returns_empty_dict(cache: Cache) -> None:
+    assert await cache.atry_get_many([]) == {}
+
+
+async def test_atry_get_many_all_missing(cache: Cache) -> None:
+    assert await cache.atry_get_many(["a", "b"]) == {}
+
+
+async def test_atry_get_many_mixed_hits_and_misses(cache: Cache) -> None:
+    await cache.aset("a", "1")
+    await cache.aset("b", "2")
+    assert await cache.atry_get_many(["a", "b", "missing"]) == {"a": "1", "b": "2"}
+
+
+async def test_atry_get_many_expired_key_omitted(cache: Cache, fake_time: list[float]) -> None:
+    await cache.aset("a", "1", ttl=10)
+    await cache.aset("b", "2", ttl=None)
+    fake_time[0] += 11
+    assert await cache.atry_get_many(["a", "b"]) == {"b": "2"}
+
+
+async def test_atry_get_many_expired_key_evicted_as_side_effect(
+    cache: Cache, fake_time: list[float]
+) -> None:
+    await cache.aset("a", "1", ttl=10)
+    fake_time[0] += 11
+    await cache.atry_get_many(["a"])
+    assert await cache.acontains("a") is False
+
+
+async def test_atry_get_many_cached_none_is_hit_by_default(cache: Cache) -> None:
+    await cache.aset("a", None, ttl=None)
+    assert await cache.atry_get_many(["a"]) == {"a": None}
+
+
+async def test_atry_get_many_cached_none_is_omitted_with_ignore_none() -> None:
+    with Cache(ignore_none=True) as cache:
+        await cache.aset("a", None, ttl=None)
+        await cache.aset("b", "2")
+        assert await cache.atry_get_many(["a", "b"]) == {"b": "2"}
 
 
 # --- acontains_many ---
@@ -1201,7 +1323,7 @@ async def test_acontains_many_cached_none_is_omitted_with_ignore_none() -> None:
 
 async def test_aset_many_empty_items_noop(cache: Cache) -> None:
     await cache.aset_many({})
-    assert await cache.aget_many(["a"]) == {}
+    assert await cache.atry_get_many(["a"]) == {}
 
 
 async def test_aset_many_then_aget_many(cache: Cache) -> None:
@@ -1260,7 +1382,7 @@ async def test_adelete_many_empty_keys_noop(cache: Cache) -> None:
 async def test_adelete_many_existing_keys(cache: Cache) -> None:
     await cache.aset_many({"a": "1", "b": "2"})
     await cache.adelete_many(["a", "b"])
-    assert await cache.aget_many(["a", "b"]) == {}
+    assert await cache.atry_get_many(["a", "b"]) == {}
 
 
 async def test_adelete_many_missing_keys(cache: Cache) -> None:

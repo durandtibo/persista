@@ -37,15 +37,16 @@ class Cache(MultilineDisplayMixin):
     """Cache with per-entry expiry, backed by any
     :class:`~persista.store.BaseStore`.
 
-    Most methods have both a sync form (``get``, ``set``, ``contains``,
-    ``get_many``, ``set_many``, ``contains_many``, ``delete``,
-    ``delete_many``, ``get_or_compute``, ``memoize``, ``clear``) and
-    an async counterpart prefixed with ``a`` (``aget``, ``aset``,
-    ``acontains``, ``aget_many``, ``aset_many``, ``acontains_many``,
-    ``adelete``, ``adelete_many``, ``aget_or_compute``, ``amemoize``,
-    ``aclear``), so the same cache instance can be used from sync and
-    async code, provided the backing store supports the interface
-    being used.
+    Most methods have both a sync form (``get``, ``try_get``, ``set``,
+    ``contains``, ``get_many``, ``try_get_many``, ``set_many``,
+    ``contains_many``, ``delete``, ``delete_many``, ``get_or_compute``,
+    ``memoize``, ``clear``) and an async counterpart prefixed with
+    ``a`` (``aget``, ``atry_get``, ``aset``, ``acontains``,
+    ``aget_many``, ``atry_get_many``, ``aset_many``,
+    ``acontains_many``, ``adelete``, ``adelete_many``,
+    ``aget_or_compute``, ``amemoize``, ``aclear``), so the same cache
+    instance can be used from sync and async code, provided the
+    backing store supports the interface being used.
 
     Each entry is wrapped as ``{"value": value, "expires_at":
     expires_at}`` before being written to the store, since
@@ -522,7 +523,7 @@ class Cache(MultilineDisplayMixin):
         hit, _ = await self._aget(key)
         return hit
 
-    def get_many(self, keys: list[str]) -> dict[str, Any]:
+    def get_many(self, keys: list[str], default: Any = None) -> dict[str, Any]:
         """Retrieve multiple values in a single batched store lookup.
 
         Unlike calling :meth:`get` (or :meth:`contains` followed by
@@ -530,6 +531,84 @@ class Cache(MultilineDisplayMixin):
         ``self._store.get_many`` call for the whole batch, which
         matters for stores where each lookup is a network round trip
         (e.g. Redis, Postgres).
+
+        Args:
+            keys: The keys to look up.
+            default: The value to map a key to if it is missing, its
+                entry has expired, or (when ``ignore_none`` is
+                ``True``) the cached value is itself ``None``. Pass
+                the :data:`~persista.cache.cache.MISSING` sentinel
+                here to distinguish a cache miss from a cached
+                ``None``.
+
+        Returns:
+            A dict mapping every key in ``keys`` to its cached value
+            on a hit, or to ``default`` on a miss. Expired entries are
+            evicted from the backing store as a side effect of this
+            call, as in :meth:`get`.
+
+        Example:
+            ```pycon
+            >>> from persista.cache.cache import Cache
+            >>> with Cache() as cache:
+            ...     cache.set("a", "hello")
+            ...     cache.set("b", "world")
+            ...     sorted(cache.get_many(["a", "b", "missing"]).items())
+            ...
+            [('a', 'hello'), ('b', 'world'), ('missing', None)]
+
+            ```
+        """
+        if not keys:
+            return {}
+        hits = self.try_get_many(keys)
+        return {key: hits.get(key, default) for key in keys}
+
+    async def aget_many(self, keys: list[str], default: Any = None) -> dict[str, Any]:
+        """Retrieve multiple values in a single batched store lookup.
+
+        This is the async counterpart of :meth:`get_many`, for use
+        with an async backing store.
+
+        Args:
+            keys: The keys to look up.
+            default: The value to map a key to if it is missing, its
+                entry has expired, or (when ``ignore_none`` is
+                ``True``) the cached value is itself ``None``. Pass
+                the :data:`~persista.cache.cache.MISSING` sentinel
+                here to distinguish a cache miss from a cached
+                ``None``.
+
+        Returns:
+            A dict mapping every key in ``keys`` to its cached value.
+            See :meth:`get_many` for the exact hit/miss semantics.
+
+        Example:
+            ```pycon
+            >>> import asyncio
+            >>> from persista.cache.cache import Cache
+            >>> async def main():
+            ...     async with Cache() as cache:
+            ...         await cache.aset("a", "hello")
+            ...         await cache.aset("b", "world")
+            ...         print(sorted((await cache.aget_many(["a", "b", "missing"])).items()))
+            ...
+            >>> asyncio.run(main())
+            [('a', 'hello'), ('b', 'world'), ('missing', None)]
+
+            ```
+        """
+        if not keys:
+            return {}
+        hits = await self.atry_get_many(keys)
+        return {key: hits.get(key, default) for key in keys}
+
+    def try_get_many(self, keys: list[str]) -> dict[str, Any]:
+        """Look up multiple keys in a single batched store lookup.
+
+        Unlike :meth:`get_many`, this distinguishes a cache miss from
+        a cached ``None`` without needing the :data:`MISSING`
+        sentinel, by omitting missed keys entirely.
 
         Args:
             keys: The keys to look up.
@@ -542,7 +621,7 @@ class Cache(MultilineDisplayMixin):
             entirely rather than mapped to ``None``, so a hit can
             always be distinguished from a miss with ``in``. Expired
             entries are evicted from the backing store as a side
-            effect of this call, as in :meth:`get`.
+            effect of this call, as in :meth:`try_get`.
 
         Example:
             ```pycon
@@ -550,7 +629,7 @@ class Cache(MultilineDisplayMixin):
             >>> with Cache() as cache:
             ...     cache.set("a", "hello")
             ...     cache.set("b", "world")
-            ...     sorted(cache.get_many(["a", "b", "missing"]).items())
+            ...     sorted(cache.try_get_many(["a", "b", "missing"]).items())
             ...
             [('a', 'hello'), ('b', 'world')]
 
@@ -564,18 +643,18 @@ class Cache(MultilineDisplayMixin):
             self._store.delete_many(expired_keys)
         return results
 
-    async def aget_many(self, keys: list[str]) -> dict[str, Any]:
-        """Retrieve multiple values in a single batched store lookup.
+    async def atry_get_many(self, keys: list[str]) -> dict[str, Any]:
+        """Look up multiple keys in a single batched store lookup.
 
-        This is the async counterpart of :meth:`get_many`, for use
-        with an async backing store.
+        This is the async counterpart of :meth:`try_get_many`, for
+        use with an async backing store.
 
         Args:
             keys: The keys to look up.
 
         Returns:
             A dict mapping each key that is a hit to its cached value.
-            See :meth:`get_many` for the exact hit/miss semantics.
+            See :meth:`try_get_many` for the exact hit/miss semantics.
 
         Example:
             ```pycon
@@ -585,7 +664,7 @@ class Cache(MultilineDisplayMixin):
             ...     async with Cache() as cache:
             ...         await cache.aset("a", "hello")
             ...         await cache.aset("b", "world")
-            ...         print(sorted((await cache.aget_many(["a", "b", "missing"])).items()))
+            ...         print(sorted((await cache.atry_get_many(["a", "b", "missing"])).items()))
             ...
             >>> asyncio.run(main())
             [('a', 'hello'), ('b', 'world')]
@@ -749,7 +828,7 @@ class Cache(MultilineDisplayMixin):
 
             ```
         """
-        hits = self.get_many(keys)
+        hits = self.try_get_many(keys)
         return [key in hits for key in keys]
 
     async def acontains_many(self, keys: list[str]) -> list[bool]:
@@ -785,7 +864,7 @@ class Cache(MultilineDisplayMixin):
 
             ```
         """
-        hits = await self.aget_many(keys)
+        hits = await self.atry_get_many(keys)
         return [key in hits for key in keys]
 
     def delete(self, key: str) -> None:
