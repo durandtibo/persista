@@ -475,6 +475,32 @@ def test_get_before_open_raises(unopened_store: BaseStore) -> None:
         unopened_store.get("1")
 
 
+def test_repr_works_when_open(store: BaseStore) -> None:
+    assert repr(store).startswith(f"{type(store).__name__}(")
+
+
+def test_str_works_when_open(store: BaseStore) -> None:
+    assert str(store).startswith(f"{type(store).__name__}(")
+
+
+def test_repr_works_when_closed(unopened_store: BaseStore) -> None:
+    assert repr(unopened_store).startswith(f"{type(unopened_store).__name__}(")
+
+
+def test_str_works_when_closed(unopened_store: BaseStore) -> None:
+    assert str(unopened_store).startswith(f"{type(unopened_store).__name__}(")
+
+
+def test_repr_works_after_close(store: BaseStore) -> None:
+    store.close()
+    assert repr(store).startswith(f"{type(store).__name__}(")
+
+
+def test_str_works_after_close(store: BaseStore) -> None:
+    store.close()
+    assert str(store).startswith(f"{type(store).__name__}(")
+
+
 def test_context_manager_usable_for_reads_and_writes(store: BaseStore) -> None:
     store.set_many(
         {
