@@ -47,15 +47,6 @@ def test_store_cache_factory_make_cache_forwards_default_ttl() -> None:
     assert factory.make_cache().default_ttl == 60
 
 
-def test_store_cache_factory_make_cache_forwards_ignore_none() -> None:
-    factory = StoreCacheFactory(StoreFactory(InMemoryStore()), ignore_none=True)
-    cache = factory.make_cache()
-    cache.open()
-    cache.set("key", None)
-    assert cache.get("key") is None
-    assert not cache.contains("key")
-
-
 def test_store_cache_factory_make_cache_raises_error_if_default_ttl_is_negative() -> None:
     factory = StoreCacheFactory(StoreFactory(InMemoryStore()), default_ttl=-1)
     with pytest.raises(ValueError, match="default_ttl must be non-negative"):
@@ -67,10 +58,10 @@ def test_store_cache_factory_make_cache_raises_error_if_default_ttl_is_negative(
 
 def test_store_cache_factory_get_repr_kwargs() -> None:
     store_factory = StoreFactory(InMemoryStore())
-    factory = StoreCacheFactory(store_factory, default_ttl=60, ignore_none=True)
+    factory = StoreCacheFactory(store_factory, default_ttl=60)
     assert objects_are_equal(
         factory._get_repr_kwargs(),
-        {"store_factory": store_factory, "default_ttl": 60, "ignore_none": True},
+        {"store_factory": store_factory, "default_ttl": 60},
     )
 
 

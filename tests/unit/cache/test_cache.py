@@ -154,18 +154,9 @@ def test_default_ttl_none_means_forever_by_default(cache: Cache, fake_time: list
     assert cache.get("key") == "value"
 
 
-def test_get_cached_none_is_hit_by_default(cache: Cache) -> None:
+def test_get_cached_none_is_hit(cache: Cache) -> None:
     cache.set("key", None, ttl=None)
     assert cache.get("key") is None
-
-
-def test_get_cached_none_is_miss_with_ignore_none() -> None:
-    cache = Cache(ignore_none=True)
-    cache.open()
-    cache.set("key", None, ttl=None)
-    hit, value = cache._get("key")
-    assert hit is False
-    assert value is None
 
 
 def test_get_missing_key_default(cache: Cache) -> None:
@@ -196,16 +187,9 @@ def test_try_get_hit(cache: Cache) -> None:
     assert cache.try_get("key") == (True, "value")
 
 
-def test_try_get_cached_none_is_hit_by_default(cache: Cache) -> None:
+def test_try_get_cached_none_is_hit(cache: Cache) -> None:
     cache.set("key", None, ttl=None)
     assert cache.try_get("key") == (True, None)
-
-
-def test_try_get_cached_none_is_miss_with_ignore_none() -> None:
-    cache = Cache(ignore_none=True)
-    cache.open()
-    cache.set("key", None, ttl=None)
-    assert cache.try_get("key") == (False, None)
 
 
 # --- contains ---
@@ -271,17 +255,9 @@ def test_get_many_expired_key_evicted_as_side_effect(cache: Cache, fake_time: li
     assert cache.contains("a") is False
 
 
-def test_get_many_cached_none_is_hit_by_default(cache: Cache) -> None:
+def test_get_many_cached_none_is_hit(cache: Cache) -> None:
     cache.set("a", None, ttl=None)
     assert cache.get_many(["a"]) == {"a": None}
-
-
-def test_get_many_cached_none_uses_default_with_ignore_none() -> None:
-    cache = Cache(ignore_none=True)
-    cache.open()
-    cache.set("a", None, ttl=None)
-    cache.set("b", "2")
-    assert cache.get_many(["a", "b"]) == {"a": None, "b": "2"}
 
 
 # --- try_get_many ---
@@ -317,17 +293,9 @@ def test_try_get_many_expired_key_evicted_as_side_effect(
     assert cache.contains("a") is False
 
 
-def test_try_get_many_cached_none_is_hit_by_default(cache: Cache) -> None:
+def test_try_get_many_cached_none_is_hit(cache: Cache) -> None:
     cache.set("a", None, ttl=None)
     assert cache.try_get_many(["a"]) == {"a": None}
-
-
-def test_try_get_many_cached_none_is_omitted_with_ignore_none() -> None:
-    cache = Cache(ignore_none=True)
-    cache.open()
-    cache.set("a", None, ttl=None)
-    cache.set("b", "2")
-    assert cache.try_get_many(["a", "b"]) == {"b": "2"}
 
 
 # --- contains_many ---
@@ -363,17 +331,9 @@ def test_contains_many_expired_key_evicted_as_side_effect(
     assert cache.contains("a") is False
 
 
-def test_contains_many_cached_none_is_hit_by_default(cache: Cache) -> None:
+def test_contains_many_cached_none_is_hit(cache: Cache) -> None:
     cache.set("a", None, ttl=None)
     assert cache.contains_many(["a"]) == [True]
-
-
-def test_contains_many_cached_none_is_omitted_with_ignore_none() -> None:
-    cache = Cache(ignore_none=True)
-    cache.open()
-    cache.set("a", None, ttl=None)
-    cache.set("b", "2")
-    assert cache.contains_many(["a", "b"]) == [False, True]
 
 
 # --- set_many ---
@@ -1096,13 +1056,7 @@ async def test_aset_ttl_negative(cache: Cache) -> None:
         await cache.aset("key", "value", ttl=-1)
 
 
-async def test_aget_cached_none_is_miss_with_ignore_none() -> None:
-    with Cache(ignore_none=True) as cache:
-        await cache.aset("key", None)
-        assert await cache.aget("key") is None
-
-
-async def test_aget_cached_none_is_hit_without_ignore_none(cache: Cache) -> None:
+async def test_aget_cached_none_is_hit(cache: Cache) -> None:
     await cache.aset("key", None)
     assert await cache._aget("key") == (True, None)
 
@@ -1137,15 +1091,9 @@ async def test_atry_get_hit(cache: Cache) -> None:
     assert await cache.atry_get("key") == (True, "value")
 
 
-async def test_atry_get_cached_none_is_hit_by_default(cache: Cache) -> None:
+async def test_atry_get_cached_none_is_hit(cache: Cache) -> None:
     await cache.aset("key", None)
     assert await cache.atry_get("key") == (True, None)
-
-
-async def test_atry_get_cached_none_is_miss_with_ignore_none() -> None:
-    with Cache(ignore_none=True) as cache:
-        await cache.aset("key", None)
-        assert await cache.atry_get("key") == (False, None)
 
 
 # --- contains ---
@@ -1216,16 +1164,9 @@ async def test_aget_many_expired_key_evicted_as_side_effect(
     assert await cache.acontains("a") is False
 
 
-async def test_aget_many_cached_none_is_hit_by_default(cache: Cache) -> None:
+async def test_aget_many_cached_none_is_hit(cache: Cache) -> None:
     await cache.aset("a", None, ttl=None)
     assert await cache.aget_many(["a"]) == {"a": None}
-
-
-async def test_aget_many_cached_none_uses_default_with_ignore_none() -> None:
-    with Cache(ignore_none=True) as cache:
-        await cache.aset("a", None, ttl=None)
-        await cache.aset("b", "2")
-        assert await cache.aget_many(["a", "b"]) == {"a": None, "b": "2"}
 
 
 # --- atry_get_many ---
@@ -1261,16 +1202,9 @@ async def test_atry_get_many_expired_key_evicted_as_side_effect(
     assert await cache.acontains("a") is False
 
 
-async def test_atry_get_many_cached_none_is_hit_by_default(cache: Cache) -> None:
+async def test_atry_get_many_cached_none_is_hit(cache: Cache) -> None:
     await cache.aset("a", None, ttl=None)
     assert await cache.atry_get_many(["a"]) == {"a": None}
-
-
-async def test_atry_get_many_cached_none_is_omitted_with_ignore_none() -> None:
-    with Cache(ignore_none=True) as cache:
-        await cache.aset("a", None, ttl=None)
-        await cache.aset("b", "2")
-        assert await cache.atry_get_many(["a", "b"]) == {"b": "2"}
 
 
 # --- acontains_many ---
@@ -1306,16 +1240,9 @@ async def test_acontains_many_expired_key_evicted_as_side_effect(
     assert await cache.acontains("a") is False
 
 
-async def test_acontains_many_cached_none_is_hit_by_default(cache: Cache) -> None:
+async def test_acontains_many_cached_none_is_hit(cache: Cache) -> None:
     await cache.aset("a", None, ttl=None)
     assert await cache.acontains_many(["a"]) == [True]
-
-
-async def test_acontains_many_cached_none_is_omitted_with_ignore_none() -> None:
-    with Cache(ignore_none=True) as cache:
-        await cache.aset("a", None, ttl=None)
-        await cache.aset("b", "2")
-        assert await cache.acontains_many(["a", "b"]) == [False, True]
 
 
 # --- aset_many ---

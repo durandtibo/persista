@@ -80,9 +80,6 @@ class Cache(MultilineDisplayMixin):
             :meth:`set` / :meth:`get_or_compute` / :meth:`memoize`.
             ``None`` (the default) means entries never expire unless
             an explicit ``ttl`` is given. Must be non-negative.
-        ignore_none: If ``True``, a cached value of ``None`` is
-            treated as a cache miss rather than a hit, so it gets
-            recomputed instead of being served back forever.
 
     Raises:
         ValueError: If ``default_ttl`` is negative.
@@ -103,14 +100,12 @@ class Cache(MultilineDisplayMixin):
         self,
         store: BaseStore | None = None,
         default_ttl: float | None = None,
-        ignore_none: bool = False,
     ) -> None:
         if default_ttl is not None and default_ttl < 0:
             msg = f"default_ttl must be non-negative, got {default_ttl}"
             raise ValueError(msg)
         self._store: BaseStore = store if store is not None else InMemoryStore()
         self._default_ttl = default_ttl
-        self._ignore_none = ignore_none
 
     @property
     def default_ttl(self) -> float | None:
@@ -177,12 +172,10 @@ class Cache(MultilineDisplayMixin):
 
         Args:
             key: The key to look up.
-            default: The value to return if the key is missing, its
-                entry has expired, or (when ``ignore_none`` is
-                ``True``) the cached value is itself ``None``. Pass
-                the :data:`~persista.cache.cache.MISSING` sentinel
-                here to distinguish a cache miss from a cached
-                ``None``.
+            default: The value to return if the key is missing or its
+                entry has expired. Pass the
+                :data:`~persista.cache.cache.MISSING` sentinel here
+                to distinguish a cache miss from a cached ``None``.
 
         Returns:
             The cached value, or ``default`` on a miss.
@@ -219,8 +212,7 @@ class Cache(MultilineDisplayMixin):
 
         Returns:
             A ``(hit, value)`` tuple. ``hit`` is ``True`` only when
-            ``key`` exists in the store, has not expired, and (when
-            ``ignore_none`` is ``True``) its value is not ``None``.
+            ``key`` exists in the store and has not expired.
             ``value`` is ``None`` when ``hit`` is ``False``.
 
         Example:
@@ -246,8 +238,7 @@ class Cache(MultilineDisplayMixin):
 
         Returns:
             A ``(hit, value)`` tuple. ``hit`` is ``True`` only when
-            ``key`` exists in the store, has not expired, and (when
-            ``ignore_none`` is ``True``) its value is not ``None``.
+            ``key`` exists in the store and has not expired.
         """
         entry = self._store.get(key)
         if entry is None:
@@ -257,9 +248,6 @@ class Cache(MultilineDisplayMixin):
             self._store.delete(key)  # expired, evict
             return False, None
         value = entry["value"]
-        if self._ignore_none and value is None:
-            logger.debug("Ignoring cached None: %s", key)
-            return False, None
         logger.debug("Cache hit: %s", key)
         return True, value
 
@@ -333,12 +321,10 @@ class Cache(MultilineDisplayMixin):
 
         Args:
             key: The key to look up.
-            default: The value to return if the key is missing, its
-                entry has expired, or (when ``ignore_none`` is
-                ``True``) the cached value is itself ``None``. Pass
-                the :data:`~persista.cache.cache.MISSING` sentinel
-                here to distinguish a cache miss from a cached
-                ``None``.
+            default: The value to return if the key is missing or its
+                entry has expired. Pass the
+                :data:`~persista.cache.cache.MISSING` sentinel here
+                to distinguish a cache miss from a cached ``None``.
 
         Returns:
             The cached value, or ``default`` on a miss.
@@ -370,8 +356,7 @@ class Cache(MultilineDisplayMixin):
 
         Returns:
             A ``(hit, value)`` tuple. ``hit`` is ``True`` only when
-            ``key`` exists in the store, has not expired, and (when
-            ``ignore_none`` is ``True``) its value is not ``None``.
+            ``key`` exists in the store and has not expired.
             ``value`` is ``None`` when ``hit`` is ``False``.
 
         Example:
@@ -402,8 +387,7 @@ class Cache(MultilineDisplayMixin):
 
         Returns:
             A ``(hit, value)`` tuple. ``hit`` is ``True`` only when
-            ``key`` exists in the store, has not expired, and (when
-            ``ignore_none`` is ``True``) its value is not ``None``.
+            ``key`` exists in the store and has not expired.
         """
         entry = await self._store.aget(key)
         if entry is None:
@@ -413,9 +397,6 @@ class Cache(MultilineDisplayMixin):
             await self._store.adelete(key)  # expired, evict
             return False, None
         value = entry["value"]
-        if self._ignore_none and value is None:
-            logger.debug("Ignoring cached None: %s", key)
-            return False, None
         logger.debug("Cache hit: %s", key)
         return True, value
 
@@ -534,12 +515,10 @@ class Cache(MultilineDisplayMixin):
 
         Args:
             keys: The keys to look up.
-            default: The value to map a key to if it is missing, its
-                entry has expired, or (when ``ignore_none`` is
-                ``True``) the cached value is itself ``None``. Pass
-                the :data:`~persista.cache.cache.MISSING` sentinel
-                here to distinguish a cache miss from a cached
-                ``None``.
+            default: The value to map a key to if it is missing or its
+                entry has expired. Pass the
+                :data:`~persista.cache.cache.MISSING` sentinel here
+                to distinguish a cache miss from a cached ``None``.
 
         Returns:
             A dict mapping every key in ``keys`` to its cached value
@@ -572,12 +551,10 @@ class Cache(MultilineDisplayMixin):
 
         Args:
             keys: The keys to look up.
-            default: The value to map a key to if it is missing, its
-                entry has expired, or (when ``ignore_none`` is
-                ``True``) the cached value is itself ``None``. Pass
-                the :data:`~persista.cache.cache.MISSING` sentinel
-                here to distinguish a cache miss from a cached
-                ``None``.
+            default: The value to map a key to if it is missing or its
+                entry has expired. Pass the
+                :data:`~persista.cache.cache.MISSING` sentinel here
+                to distinguish a cache miss from a cached ``None``.
 
         Returns:
             A dict mapping every key in ``keys`` to its cached value.
@@ -614,14 +591,13 @@ class Cache(MultilineDisplayMixin):
             keys: The keys to look up.
 
         Returns:
-            A dict mapping each key that is a hit -- present,
-            unexpired, and (when ``ignore_none`` is ``True``) not a
-            cached ``None`` -- to its cached value. Keys that are
-            missing, expired, or an ignored ``None`` are omitted
-            entirely rather than mapped to ``None``, so a hit can
-            always be distinguished from a miss with ``in``. Expired
-            entries are evicted from the backing store as a side
-            effect of this call, as in :meth:`try_get`.
+            A dict mapping each key that is a hit -- present and
+            unexpired -- to its cached value. Keys that are missing
+            or expired are omitted entirely rather than mapped to
+            ``None``, so a hit can always be distinguished from a
+            miss with ``in``. Expired entries are evicted from the
+            backing store as a side effect of this call, as in
+            :meth:`try_get`.
 
         Example:
             ```pycon
@@ -705,11 +681,7 @@ class Cache(MultilineDisplayMixin):
             if expires_at is not None and now > expires_at:
                 expired_keys.append(key)
                 continue
-            value = entry["value"]
-            if self._ignore_none and value is None:
-                logger.debug("Ignoring cached None: %s", key)
-                continue
-            hits[key] = value
+            hits[key] = entry["value"]
         return hits, expired_keys
 
     def set_many(self, items: dict[str, Any], ttl: float | None = _UNSET) -> None:
@@ -811,11 +783,9 @@ class Cache(MultilineDisplayMixin):
         Returns:
             A list of booleans, in the same order as ``keys``, where
             each entry is ``True`` if the corresponding key is a hit
-            -- present, unexpired, and (when ``ignore_none`` is
-            ``True``) not a cached ``None`` -- and ``False``
-            otherwise. Expired entries are evicted from the backing
-            store as a side effect of this call, as in
-            :meth:`get_many`.
+            -- present and unexpired -- and ``False`` otherwise.
+            Expired entries are evicted from the backing store as a
+            side effect of this call, as in :meth:`get_many`.
 
         Example:
             ```pycon
@@ -844,11 +814,9 @@ class Cache(MultilineDisplayMixin):
         Returns:
             A list of booleans, in the same order as ``keys``, where
             each entry is ``True`` if the corresponding key is a hit
-            -- present, unexpired, and (when ``ignore_none`` is
-            ``True``) not a cached ``None`` -- and ``False``
-            otherwise. Expired entries are evicted from the backing
-            store as a side effect of this call, as in
-            :meth:`aget_many`.
+            -- present and unexpired -- and ``False`` otherwise.
+            Expired entries are evicted from the backing store as a
+            side effect of this call, as in :meth:`aget_many`.
 
         Example:
             ```pycon
@@ -1298,5 +1266,4 @@ class Cache(MultilineDisplayMixin):
         return {
             "store": self._store,
             "default_ttl": self._default_ttl,
-            "ignore_none": self._ignore_none,
         }

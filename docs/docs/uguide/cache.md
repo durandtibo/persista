@@ -107,20 +107,6 @@ from persista.store import RedisStore
 cache = Cache(store=RedisStore("redis://localhost:6379/0"), default_ttl=300)
 ```
 
-Pass `ignore_none=True` to treat a cached value of `None` as a cache miss rather than a hit, so
-it's recomputed instead of being served back forever — useful when the cached function can
-legitimately return `None` for a value that isn't ready yet:
-
-```pycon
->>> from persista.cache import Cache
->>> with Cache(ignore_none=True) as cache:
-...     cache.set("key", None)
-...     cache.get("key") is None  # treated as a miss, not a cached None
-...
-True
-
-```
-
 ## Distinguishing a Cache Miss from a Cached `None`
 
 `get`/`aget` return `None` both when a key is missing and when the cached value is itself `None`,
@@ -151,9 +137,7 @@ True
 
 ```
 
-`aget` supports the same `default` parameter. If the cached function can never legitimately
-return `None`, `ignore_none=True` (see above) is usually simpler than checking against `MISSING`
-on every call.
+`aget` supports the same `default` parameter.
 
 `try_get` returns the same `(hit, value)` pair `get` computes internally, without needing a
 sentinel:
