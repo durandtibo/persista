@@ -26,6 +26,7 @@ Create a `Cache` and use `set`/`get` like a dictionary, optionally with expirati
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache(default_ttl=60)
+>>> cache.open()
 >>> cache.set("greeting", "hello")
 >>> cache.get("greeting")
 'hello'
@@ -41,6 +42,7 @@ override it for a single entry; `ttl=0` evicts the entry instead of storing it:
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> cache.set("greeting", "hello")
 >>> cache.set("short-lived", "value", ttl=30)
 
@@ -52,6 +54,7 @@ removes a single entry (unlike `set` with `ttl=0`, it doesn't require a value to
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> cache.set("greeting", "hello")
 >>> cache.contains("greeting")
 True
@@ -69,6 +72,7 @@ every item passed to `set_many`:
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> cache.set_many({"a": "hello", "b": "world"}, ttl=60)
 >>> sorted(cache.get_many(["a", "b", "missing"]).items())
 [('a', 'hello'), ('b', 'world')]
@@ -85,6 +89,7 @@ every item passed to `set_many`:
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> cache.set("greeting", "hello")
 >>> cache.clear()
 >>> cache.get("greeting") is None
@@ -109,6 +114,7 @@ legitimately return `None` for a value that isn't ready yet:
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache(ignore_none=True)
+>>> cache.open()
 >>> cache.set("key", None)
 >>> cache.get("key") is None  # treated as a miss, not a cached None
 True
@@ -124,6 +130,7 @@ so `cache.get("key") is None` alone can't tell the two apart. Pass a `default` (
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> cache.get("missing", "fallback")
 'fallback'
 
@@ -135,6 +142,7 @@ compare the result against it with `is`:
 ```pycon
 >>> from persista.cache import Cache, MISSING
 >>> cache = Cache()
+>>> cache.open()
 >>> cache.set("key", None)
 >>> cache.get("key", MISSING) is MISSING
 False
@@ -153,6 +161,7 @@ sentinel:
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> cache.set("key", None)
 >>> cache.try_get("key")
 (True, None)
@@ -170,6 +179,7 @@ sentinel:
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> calls = []
 >>> def compute(x):
 ...     calls.append(x)
@@ -191,6 +201,7 @@ store is still accessed synchronously; only the function is awaited:
 >>> import asyncio
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> calls = []
 >>> async def compute(x):
 ...     calls.append(x)
@@ -216,6 +227,7 @@ and its arguments. It works on both sync and `async def` functions:
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> calls = []
 >>> @cache.memoize(ttl=60)
 ... def square(x):
@@ -247,6 +259,7 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
 ```pycon
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> calls = []
 >>> @cache.memoize(ttl=60, strategy="json", ignore_non_serializable=True)
 ... def greet(name, client=None):
@@ -275,6 +288,7 @@ async (`a`-prefixed) methods:
 >>> from persista.cache import Cache
 >>> async def main():
 ...     cache = Cache(default_ttl=60)
+...     await cache.aopen()
 ...     await cache.aset("greeting", "hello")
 ...     print(await cache.aget("greeting"))
 ...     await cache.aclear()
@@ -294,6 +308,7 @@ if the result is awaitable. The backing store is always accessed with `await`, v
 >>> import asyncio
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> calls = []
 >>> def compute(x):  # a plain sync function works too
 ...     calls.append(x)
@@ -317,6 +332,7 @@ if the result is awaitable. The backing store is always accessed with `await`, v
 >>> import asyncio
 >>> from persista.cache import Cache
 >>> cache = Cache()
+>>> cache.open()
 >>> calls = []
 >>> @cache.amemoize(ttl=60)
 ... async def cube(x):
@@ -407,9 +423,13 @@ affects both:
 ```pycon
 >>> from persista.cache import Cache
 >>> from persista.cache import get_cache, set_cache
->>> set_cache(Cache(default_ttl=60))
+>>> previous = get_cache()
+>>> new_cache = Cache(default_ttl=60)
+>>> new_cache.open()
+>>> set_cache(new_cache)
 >>> get_cache().default_ttl
 60
+>>> set_cache(previous)  # restore the previous default cache
 
 ```
 

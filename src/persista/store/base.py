@@ -54,6 +54,17 @@ class BaseStore(ABC):
     every other method (including :meth:`close`) raises until the
     store has been opened, either explicitly or via the context
     manager.
+
+    Example:
+        ```pycon
+        >>> from persista.store import InMemoryStore
+        >>> with InMemoryStore() as store:  # calls open()/close() automatically
+        ...     store.set("user:1", {"name": "Ann"})
+        ...     store.get("user:1")
+        ...
+        {'name': 'Ann'}
+
+        ```
     """
 
     @abstractmethod

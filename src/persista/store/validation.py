@@ -44,6 +44,14 @@ def normalize_on_conflict(on_conflict: str) -> OnConflict:
     Raises:
         ValueError: If the normalized value is not one of
             :data:`ON_CONFLICT_VALUES`.
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import normalize_on_conflict
+        >>> normalize_on_conflict(" Overwrite ")
+        'overwrite'
+
+        ```
     """
     normalized = on_conflict.lower().strip()
     validate_on_conflict(normalized)
@@ -59,6 +67,13 @@ def validate_on_conflict(on_conflict: str) -> None:
     Raises:
         ValueError: If ``on_conflict`` is not one of
             :data:`ON_CONFLICT_VALUES`.
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import validate_on_conflict
+        >>> validate_on_conflict("overwrite")
+
+        ```
     """
     if on_conflict not in ON_CONFLICT_VALUES:
         msg = f"Invalid on_conflict value: {on_conflict!r}. Valid values are: {ON_CONFLICT_VALUES}"
@@ -81,6 +96,17 @@ def validate_field_name(name: str) -> None:
     Raises:
         ValueError: If ``name`` is not a valid identifier (letters,
             digits, underscores, not starting with a digit).
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import validate_field_name
+        >>> validate_field_name("user_id")
+        >>> validate_field_name("bad name")
+        Traceback (most recent call last):
+            ...
+        ValueError: Invalid filter field name: 'bad name'. Field names must match '^[A-Za-z_][A-Za-z0-9_]*$'
+
+        ```
     """
     if not _FIELD_NAME_PATTERN.match(name):
         msg = f"Invalid filter field name: {name!r}. Field names must match {_FIELD_NAME_PATTERN.pattern!r}"
@@ -98,6 +124,13 @@ def validate_column_type(dtype: str) -> None:
     Raises:
         ValueError: If ``dtype`` contains characters outside letters,
             digits, underscores, spaces, and parentheses.
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import validate_column_type
+        >>> validate_column_type("VARCHAR(255)")
+
+        ```
     """
     if not _COLUMN_TYPE_PATTERN.match(dtype):
         msg = f"Invalid column type: {dtype!r}. Column types must match {_COLUMN_TYPE_PATTERN.pattern!r}"
@@ -115,6 +148,13 @@ def validate_value_schema(value_schema: Mapping[str, str]) -> None:
     Raises:
         ValueError: If any key is not a valid field/column identifier,
             or any value is not a valid column type declaration.
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import validate_value_schema
+        >>> validate_value_schema({"age": "INTEGER", "name": "VARCHAR(255)"})
+
+        ```
     """
     for name, dtype in value_schema.items():
         validate_field_name(name)
@@ -131,6 +171,13 @@ def validate_table_name(name: str) -> None:
     Raises:
         ValueError: If ``name`` is not a valid identifier (letters,
             digits, underscores, not starting with a digit).
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import validate_table_name
+        >>> validate_table_name("my_table")
+
+        ```
     """
     if not _FIELD_NAME_PATTERN.match(name):
         msg = (
@@ -173,6 +220,20 @@ def resolve_conflicts(
     Raises:
         KeyError: If ``on_conflict`` is ``"raise"`` and any key in
             ``items`` already exists.
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import resolve_conflicts
+        >>> existing = {"a": {"x": 1}}
+        >>> resolve_conflicts(
+        ...     items={"a": {"y": 2}, "b": {"y": 3}},
+        ...     on_conflict="merge",
+        ...     contains_many=lambda keys: [k in existing for k in keys],
+        ...     get=lambda key: existing.get(key),
+        ... )
+        {'a': {'x': 1, 'y': 2}, 'b': {'y': 3}}
+
+        ```
     """
     keys = list(items)
     found = contains_many(keys)
@@ -225,6 +286,13 @@ def validate_batch_size(batch_size: int) -> None:
 
     Raises:
         ValueError: If ``batch_size`` is invalid.
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import validate_batch_size
+        >>> validate_batch_size(32)
+
+        ```
     """
     if batch_size < 1:
         msg = f"batch_size must be a positive integer, got {batch_size}"

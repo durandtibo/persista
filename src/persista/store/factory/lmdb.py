@@ -28,9 +28,12 @@ class LmdbStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
 
     Example:
         ```pycon
+        >>> import tempfile
         >>> from persista.store.factory import LmdbStoreFactory
-        >>> factory = LmdbStoreFactory("/tmp/lmdb_store")  # doctest: +SKIP
-        >>> store = factory.make_store()  # doctest: +SKIP
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     factory = LmdbStoreFactory(tmpdir)
+        ...     store = factory.make_store()
+        ...
 
         ```
     """
@@ -63,9 +66,12 @@ class PickleLmdbStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
 
     Example:
         ```pycon
+        >>> import tempfile
         >>> from persista.store.factory import PickleLmdbStoreFactory
-        >>> factory = PickleLmdbStoreFactory("/tmp/lmdb_store")  # doctest: +SKIP
-        >>> store = factory.make_store()  # doctest: +SKIP
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     factory = PickleLmdbStoreFactory(tmpdir)
+        ...     store = factory.make_store()
+        ...
 
         ```
     """

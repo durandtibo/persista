@@ -27,9 +27,12 @@ class JsonFileStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
 
     Example:
         ```pycon
+        >>> import tempfile
         >>> from persista.store.factory import JsonFileStoreFactory
-        >>> factory = JsonFileStoreFactory("/tmp/file_store")  # doctest: +SKIP
-        >>> store = factory.make_store()  # doctest: +SKIP
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     factory = JsonFileStoreFactory(tmpdir)
+        ...     store = factory.make_store()
+        ...
 
         ```
     """
@@ -57,9 +60,12 @@ class PickleFileStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
 
     Example:
         ```pycon
+        >>> import tempfile
         >>> from persista.store.factory import PickleFileStoreFactory
-        >>> factory = PickleFileStoreFactory("/tmp/file_store")  # doctest: +SKIP
-        >>> store = factory.make_store()  # doctest: +SKIP
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     factory = PickleFileStoreFactory(tmpdir)
+        ...     store = factory.make_store()
+        ...
 
         ```
     """

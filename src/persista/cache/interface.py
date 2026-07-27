@@ -68,9 +68,13 @@ def set_cache(cache: Cache) -> None:
         ```pycon
         >>> from persista.cache import Cache
         >>> from persista.cache import get_cache, set_cache
-        >>> set_cache(Cache(default_ttl=60))
+        >>> previous = get_cache()
+        >>> new_cache = Cache(default_ttl=60)
+        >>> new_cache.open()
+        >>> set_cache(new_cache)
         >>> get_cache().default_ttl
         60
+        >>> set_cache(previous)  # restore the previous default cache
 
         ```
     """
