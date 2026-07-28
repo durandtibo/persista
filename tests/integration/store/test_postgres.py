@@ -2,13 +2,14 @@ r"""Postgres-specific tests for
 :class:`PostgresStore`/:class:`TypedPostgresStore`.
 
 The generic :class:`~persista.store.BaseStore` contract (get/set/filter/
-delete/keys/... and their async twins) is already exercised exhaustively,
-identically across every backend including these two, by
-``tests/integration/store/test_consistency.py``. Do not re-add tests here
-for behavior that test file already covers -- only add a test here if it
-depends on something specific to Postgres: connection/table lifecycle, SQL
-injection guarding, URI round-tripping, or the typed-schema (``value_schema``)
-feature that only :class:`TypedPostgresStore` has.
+delete/keys/... and their async twins) is already exercised
+exhaustively, identically across every backend including these two, by
+``tests/integration/store/test_consistency.py``. Do not re-add tests
+here for behavior that test file already covers -- only add a test here
+if it depends on something specific to Postgres: connection/table
+lifecycle, SQL injection guarding, URI round-tripping, or the typed-
+schema (``value_schema``) feature that only :class:`TypedPostgresStore`
+has.
 """
 
 from __future__ import annotations

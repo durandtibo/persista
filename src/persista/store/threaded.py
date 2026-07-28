@@ -19,19 +19,19 @@ class ThreadedAsyncStoreMixin:
     r"""Provide every ``a``-prefixed async method as an
     ``asyncio.to_thread`` wrapper around the corresponding sync method.
 
-    Mix this into a :class:`~persista.store.BaseStore` subclass
-    whose backend has no native async driver (in-memory, file, LMDB,
-    DuckDB): the subclass only needs to implement the sync side, and
-    this mixin supplies a fully-conformant async side for free by
-    running each sync call in a worker thread. ``akeys``/
-    ``aiter_batches`` additionally bridge the sync generators returned
-    by ``keys``/``iter_batches`` across the thread boundary, pulling
-    one key/batch at a time via ``asyncio.to_thread`` rather than
-    materializing the whole store in memory.
+    Mix this into a :class:`~persista.store.BaseStore` subclass whose
+    backend has no native async driver (in-memory, file, LMDB, DuckDB):
+    the subclass only needs to implement the sync side, and this mixin
+    supplies a fully-conformant async side for free by running each sync
+    call in a worker thread. ``akeys``/ ``aiter_batches`` additionally
+    bridge the sync generators returned by ``keys``/``iter_batches``
+    across the thread boundary, pulling one key/batch at a time via
+    ``asyncio.to_thread`` rather than materializing the whole store in
+    memory.
 
-    Must be listed before ``BaseStore`` in the MRO (e.g.
-    ``class Foo(ThreadedAsyncStoreMixin, BaseStore)``) so its concrete
-    methods satisfy ``BaseStore``'s abstract async methods.
+    Must be listed before ``BaseStore`` in the MRO (e.g. ``class
+    Foo(ThreadedAsyncStoreMixin, BaseStore)``) so its concrete methods
+    satisfy ``BaseStore``'s abstract async methods.
     """
 
     async def aget(self, key: str) -> dict[str, Any] | None:

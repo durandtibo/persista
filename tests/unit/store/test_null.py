@@ -245,8 +245,8 @@ def test_context_manager_closes_on_exception() -> None:
 
 
 def test_context_manager_reopen_resets_closed() -> None:
-    """Regression test: reopening via `with` must reset `closed` to False,
-    matching every other store backend."""
+    """Regression test: reopening via `with` must reset `closed` to
+    False, matching every other store backend."""
     store = NullStore()
     store.close()
     assert store.closed

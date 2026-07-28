@@ -811,8 +811,9 @@ async def test_async_context_manager_reopens_after_close(
 async def test_async_context_manager_reentry_on_open_store_does_not_reset(
     store_cls: type[BaseDuckDBStore],
 ) -> None:
-    """``__aenter__`` on a store that isn't closed must be a no-op --
-    it should not reopen the connection or reset its contents."""
+    """``__aenter__`` on a store that isn't closed must be a no-op -- it
+    should not reopen the connection or reset its contents."""
+
     async with store_cls(":memory:") as store:
         await store.aset("1", {"text": "hello"})
         async with store as reentered:
@@ -1053,9 +1054,9 @@ async def test_duckdb_store_concurrent_async_access_does_not_corrupt(
     store: BaseDuckDBStore,
 ) -> None:
     """Regression test: async calls run via ThreadedAsyncStoreMixin on
-    worker threads, but DuckDB connections aren't safe for concurrent use
-    from multiple threads; concurrent async calls must not corrupt the
-    store's query state or crash the underlying driver."""
+    worker threads, but DuckDB connections aren't safe for concurrent
+    use from multiple threads; concurrent async calls must not corrupt
+    the store's query state or crash the underlying driver."""
 
     async def _writer(i: int) -> None:
         await store.aset(str(i), {"a": i})
