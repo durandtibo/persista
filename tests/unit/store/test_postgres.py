@@ -414,8 +414,8 @@ def test_to_uri_returns_conninfo_unchanged(store: BasePostgresStore) -> None:
 
 
 def test_to_uri_converts_keyword_dsn_to_uri(store_cls: type[BasePostgresStore]) -> None:
-    """Regression test: a store constructed from a keyword/value DSN (not a
-    postgresql:// URI) must still produce a URI from to_uri(), so
+    """Regression test: a store constructed from a keyword/value DSN
+    (not a postgresql:// URI) must still produce a URI from to_uri(), so
     registry.store_from_uri can dispatch on its scheme."""
     store = _connect(store_cls, conninfo="dbname=foo host=bar user=baz password=qux port=5433")
 
@@ -427,8 +427,9 @@ def test_to_uri_converts_keyword_dsn_to_uri(store_cls: type[BasePostgresStore]) 
 def test_to_uri_converts_keyword_dsn_without_user_to_uri(
     store_cls: type[BasePostgresStore],
 ) -> None:
-    """Regression test: a keyword/value DSN with no user (e.g. relying on
-    peer/trust auth) must not raise or otherwise fail to build a URI."""
+    """Regression test: a keyword/value DSN with no user (e.g. relying
+    on peer/trust auth) must not raise or otherwise fail to build a
+    URI."""
     store = _connect(store_cls, conninfo="dbname=foo host=bar")
 
     uri = store.to_uri()

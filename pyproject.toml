@@ -47,7 +47,7 @@ classifiers = [
 
 requires-python = ">=3.10"
 dependencies = [
-    "coola >=1.1.10a0,<2.0",
+    "coola >=1.1.10,<2.0",
     "iden >= 0.4.1,<1.0",
 ]
 

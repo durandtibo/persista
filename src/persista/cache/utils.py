@@ -8,6 +8,8 @@ __all__ = [
     "make_json_key",
     "make_key",
     "make_pickle_key",
+    "split_get_many",
+    "split_try_get_many",
 ]
 
 import json
@@ -316,3 +318,67 @@ def make_key(
         )
     msg = f"Unknown strategy: {strategy!r}. Expected 'json' or 'pickle'."
     raise ValueError(msg)
+
+
+def split_get_many(
+    keys: list[str], values: dict[str, Any], default: Any
+) -> tuple[list[str], list[str]]:
+    """Split keys into present and missing lists based on the output of
+    :meth:`~persista.cache.cache.Cache.get_many`.
+
+    Args:
+        keys: The keys to split.
+        values: The dict returned by ``Cache.get_many``, mapping every
+            key in ``keys`` to its cached value or to ``default``.
+        default: The same ``default`` value that was passed to
+            ``Cache.get_many``, used to detect misses. Pass the
+            :data:`~persista.cache.cache.MISSING` sentinel here if
+            that is what was passed to ``get_many``, so that a cached
+            ``None`` is not mistaken for a miss.
+
+    Returns:
+        A ``(present, missing)`` tuple, each a list of keys in the
+        same relative order as ``keys``.
+
+    Example:
+        ```pycon
+        >>> from persista.cache.utils import split_get_many
+        >>> split_get_many(["a", "b", "c"], {"a": 1, "b": None, "c": 3}, None)
+        (['a', 'c'], ['b'])
+
+        ```
+    """
+    present = []
+    missing = []
+    for key in keys:
+        (missing if values[key] is default else present).append(key)
+    return present, missing
+
+
+def split_try_get_many(keys: list[str], values: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Split keys into present and missing lists based on the output of
+    :meth:`~persista.cache.cache.Cache.try_get_many`.
+
+    Args:
+        keys: The keys to split.
+        values: The dict returned by ``Cache.try_get_many``, mapping
+            each hit key to its cached value and omitting missed
+            keys entirely.
+
+    Returns:
+        A ``(present, missing)`` tuple, each a list of keys in the
+        same relative order as ``keys``.
+
+    Example:
+        ```pycon
+        >>> from persista.cache.utils import split_try_get_many
+        >>> split_try_get_many(["a", "b", "c"], {"a": 1, "c": 3})
+        (['a', 'c'], ['b'])
+
+        ```
+    """
+    present = []
+    missing = []
+    for key in keys:
+        (present if key in values else missing).append(key)
+    return present, missing

@@ -2,13 +2,14 @@ r"""Redis-specific tests for
 :class:`RedisStore`/:class:`PickleRedisStore`.
 
 The generic :class:`~persista.store.BaseStore` contract (get/set/filter/
-delete/keys/... and their async twins) is already exercised exhaustively,
-identically across every backend including these two, by
-``tests/integration/store/test_consistency.py``. Do not re-add tests here
-for behavior that test file already covers -- only add a test here if it
-depends on something specific to Redis: connection lifecycle/reconnection,
-URI round-tripping, or the JSON-vs-pickle serialization difference between
-:class:`RedisStore` and :class:`PickleRedisStore`.
+delete/keys/... and their async twins) is already exercised
+exhaustively, identically across every backend including these two, by
+``tests/integration/store/test_consistency.py``. Do not re-add tests
+here for behavior that test file already covers -- only add a test here
+if it depends on something specific to Redis: connection
+lifecycle/reconnection, URI round-tripping, or the JSON-vs-pickle
+serialization difference between :class:`RedisStore` and
+:class:`PickleRedisStore`.
 """
 
 from __future__ import annotations
