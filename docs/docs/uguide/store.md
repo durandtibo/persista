@@ -483,8 +483,6 @@ class from that URI:
 >>> with SQLiteStore("tmp/data.sqlite") as store:
 ...     uri = store.to_uri()
 ...
->>> uri
-'sqlite:tmp/data.sqlite'
 >>> with SQLiteStore.from_uri(uri) as reloaded:
 ...     pass
 ...
