@@ -1000,9 +1000,9 @@ async def test_aget_expired_evicts_entry(fake_time: list[float]) -> None:
 
 async def test_cache_async_full_round_trip_through_real_store() -> None:
     """Regression test: exercises Cache against a real InMemoryStore,
-    which would raise TypeError if any call site used the sync (unprefixed)
-    store methods instead of the async (a-prefixed) ones.
-    """
+    which would raise TypeError if any call site used the sync
+    (unprefixed) store methods instead of the async (a-prefixed)
+    ones."""
     with Cache(store=InMemoryStore()) as cache:
         await cache.aset("key", "value")
         assert await cache.aget("key") == "value"

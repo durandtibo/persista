@@ -1501,9 +1501,10 @@ async def test_sqlite_store_async_context_manager_reopens_after_close(
 async def test_sqlite_store_async_op_after_reopen_recreates_schema(
     store_cls: type[BaseSQLiteStore],
 ) -> None:
-    """Regression test: reopening a closed `:memory:` store must reset the
-    async schema-ready flag, otherwise the first async op after reopening
-    sees a stale flag and skips creating the table on the new connection."""
+    """Regression test: reopening a closed `:memory:` store must reset
+    the async schema-ready flag, otherwise the first async op after
+    reopening sees a stale flag and skips creating the table on the new
+    connection."""
     store = store_cls(":memory:")
     await store.aopen()
     await store.aset("1", {"a": 1})
@@ -1515,8 +1516,9 @@ async def test_sqlite_store_async_op_after_reopen_recreates_schema(
 
 
 def test_sqlite_store_aget_after_close_raises(store_cls: type[BaseSQLiteStore]) -> None:
-    """Regression test: async methods must respect a bare close() the same
-    way sync methods do, instead of silently reopening a new connection."""
+    """Regression test: async methods must respect a bare close() the
+    same way sync methods do, instead of silently reopening a new
+    connection."""
     store = store_cls(":memory:")
     store.open()
     store.close()
