@@ -871,7 +871,7 @@ class Cache(MultilineDisplayMixin):
             >>> with Cache() as cache:
             ...     cache.set_many({"a": "hello", "b": "world"})
             ...     cache.delete_many(["a", "b"])
-            ...     cache.get_many(["a", "b"])
+            ...     cache.try_get_many(["a", "b"])
             ...
             {}
 
@@ -897,7 +897,7 @@ class Cache(MultilineDisplayMixin):
             ...     async with Cache() as cache:
             ...         await cache.aset_many({"a": "hello", "b": "world"})
             ...         await cache.adelete_many(["a", "b"])
-            ...         print(await cache.aget_many(["a", "b"]))
+            ...         print(await cache.atry_get_many(["a", "b"]))
             ...
             >>> asyncio.run(main())
             {}

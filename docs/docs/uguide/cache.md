@@ -77,9 +77,11 @@ every item passed to `set_many`:
 ...     cache.contains_many(["a", "missing"])
 ...     cache.delete_many(["a", "b"])
 ...     cache.get_many(["a", "b"])
+...     cache.try_get_many(["a", "b"])
 ...
-[('a', 'hello'), ('b', 'world')]
+[('a', 'hello'), ('b', 'world'), ('missing', None)]
 [True, False]
+{'a': None, 'b': None}
 {}
 
 ```
