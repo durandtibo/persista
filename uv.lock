@@ -237,11 +237,11 @@ wheels = [
 
 [[package]]
 name = "coola"
-version = "1.1.10a0"
+version = "1.1.10a3"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/18/f5/44ddf8b48ca240189d969d3345936b7cd45c1d6b83b376f782be4f857727/coola-1.1.10a0.tar.gz", hash = "sha256:728461d739777730d1de8c7a8062f62f8cc5f97610099492b0eb5582e19261dc", size = 115345, upload-time = "2026-07-25T22:01:19.634Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/ff/7286c05c89cff8f871ef5979f4966a1bbbc42f153d6f014fdce76eb540db/coola-1.1.10a3.tar.gz", hash = "sha256:cace67c3bff40afc935939dcdc034b4188189d1a4242027d0e3de5eaa0445448", size = 119307, upload-time = "2026-07-28T01:56:37.609Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/61/8b/1faff58dc16d06b7bd9dfac4b0ecfcf66485c86e9f68a164219e8cb79227/coola-1.1.10a0-py3-none-any.whl", hash = "sha256:af0198e6d203453a28fae13a5fcae9f3488fda61cca1a9ef2dababc3bb7ea34b", size = 203880, upload-time = "2026-07-25T22:01:18.425Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/50/ae504cd8f7fc2db4193555fe0cdd8a0c678175c9c5fcc9c339929d42daf3/coola-1.1.10a3-py3-none-any.whl", hash = "sha256:25677cfaeb61728b8448b3e35b9e4aec4f3f3c2eb129c5fe6fd65bfa14da147a", size = 209734, upload-time = "2026-07-28T01:56:36.002Z" },
 ]
 
 [[package]]
@@ -434,7 +434,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1102,7 +1102,7 @@ wheels = [
 
 [[package]]
 name = "persista"
-version = "0.0.3a4"
+version = "0.0.3a8"
 source = { editable = "." }
 dependencies = [
     { name = "coola" },
