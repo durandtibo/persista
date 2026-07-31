@@ -115,6 +115,8 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     _scheme: str = "sqlite"
 
     def __init__(self, database: Path | str, **kwargs: Any) -> None:
+        if database != ":memory:" and not str(database).startswith("file:"):
+            database = prepare_store_path(database)
         self._database = database
         # Plain path/":memory:" identifier used by to_uri(). Overridden by
         # from_path() when database is instead the wrapped `file:...` URI
