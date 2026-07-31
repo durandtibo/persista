@@ -45,7 +45,7 @@ repos:
     rev: 26.5.1
     hooks:
       - id: black
-        language_version: python3.13
+        language_version: python3.14
   - repo: https://github.com/adamchainz/blacken-docs
     rev: "1.20.0"
     hooks:
@@ -53,7 +53,7 @@ repos:
         additional_dependencies:
           - black>=26.5
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.0
+    rev: v0.16.1
     hooks:
       - id: ruff-check
         types_or: [ python, pyi, jupyter ]
