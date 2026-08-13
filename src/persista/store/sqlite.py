@@ -58,6 +58,14 @@ def _chunk(items: list[Any], size: int) -> Iterator[list[Any]]:
         yield items[start : start + size]
 
 
+def _is_readonly_error(exc: sqlite3.OperationalError) -> bool:
+    """Return ``True`` if ``exc`` looks like a "connection is read-only"
+    failure (e.g. opened via a ``mode=ro`` URI) rather than some other
+    ``OperationalError`` (locked database, disk I/O error, malformed
+    SQL, ...) that shouldn't be silently swallowed."""
+    return "readonly" in str(exc).lower() or "read-only" in str(exc).lower()
+
+
 def _next_or_stop(iterator: Iterator[Any]) -> Any:
     """Advance ``iterator``, returning a sentinel instead of raising
     ``StopIteration``.
@@ -176,8 +184,9 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
                 try:
                     await self._aconn.execute(self._create_table_sql())
                     await self._aconn.commit()
-                except sqlite3.OperationalError:
-                    pass
+                except sqlite3.OperationalError as exc:
+                    if not _is_readonly_error(exc):
+                        raise
                 self._aschema_ready = True
         return self._aconn
 
@@ -212,10 +221,14 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             with self._lock:
                 self._conn.execute(self._create_table_sql())
                 self._conn.commit()
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
+            if not _is_readonly_error(exc):
+                # Some other failure (locked database, disk I/O error,
+                # malformed CREATE TABLE from a bad value_schema, ...);
+                # don't mask it as if the table already existed.
+                raise
             # Connection is read-only (e.g. opened via a `mode=ro` URI);
             # assume the table already exists.
-            pass
 
     @abstractmethod
     def _create_table_sql(self) -> str:
