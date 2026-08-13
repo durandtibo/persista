@@ -158,6 +158,37 @@ def test_init_read_only_connection_without_existing_table_swallows_operational_e
     store.close()
 
 
+def test_ensure_schema_non_readonly_operational_error_propagates(
+    store_cls: type[BaseSQLiteStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CREATE TABLE failure that is NOT due to a read-only connection
+    (e.g. malformed SQL from a bad schema) must propagate instead of
+    being silently swallowed as if the table already existed."""
+    monkeypatch.setattr(store_cls, "_create_table_sql", lambda _self: "NOT VALID SQL")
+
+    with pytest.raises(sqlite3.OperationalError, match=r"syntax error"), store_cls(":memory:"):
+        pass
+
+
+@aiosqlite_available
+async def test_ensure_aconn_non_readonly_operational_error_propagates(
+    store_cls: type[BaseSQLiteStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same as the sync case, but for the lazily-opened aiosqlite
+    connection used by :meth:`_ensure_aconn`."""
+    store = store_cls(":memory:")
+    await store.aopen()
+    try:
+        # Patch after opening so the (already-succeeded) sync schema creation
+        # is unaffected; only the async connection's schema creation sees
+        # the malformed SQL.
+        monkeypatch.setattr(store, "_create_table_sql", lambda: "NOT VALID SQL")
+        with pytest.raises(sqlite3.OperationalError, match=r"syntax error"):
+            await store._ensure_aconn()
+    finally:
+        await store.aclose()
+
+
 # --- repr/str ---
 
 
