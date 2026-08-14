@@ -1018,6 +1018,37 @@ def test_send_request_raises_when_httpx_not_available(monkeypatch: pytest.Monkey
         send_request("GET", "https://example.com")
 
 
+def test_send_request_with_client_does_not_override_client_timeout() -> None:
+    """When a caller-supplied client is used, its own timeout config must
+    be respected: `timeout` must not be forwarded to `.request()`."""
+    handler, calls = _counting_handler([200], json={"ok": True})
+    client = _client(handler)
+    spy = Mock(wraps=client.request)
+    client.request = spy
+
+    send_request("GET", "https://example.com", client=client, timeout=5)
+
+    assert calls.call_count == 1
+    assert "timeout" not in spy.call_args.kwargs
+
+
+def test_send_request_without_client_forwards_timeout_to_own_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When no client is supplied, the created client's request must use
+    the given timeout."""
+    handler, calls = _counting_handler([200], json={"ok": True})
+    real_client = _client(handler)
+    spy = Mock(wraps=real_client.request)
+    real_client.request = spy
+    monkeypatch.setattr(f"{MODULE}.httpx.Client", Mock(return_value=real_client))
+
+    send_request("GET", "https://example.com", timeout=7)
+
+    assert calls.call_count == 1
+    assert spy.call_args.kwargs["timeout"] == 7
+
+
 ############################
 #    get_response_async   #
 ############################
@@ -2110,6 +2141,37 @@ async def test_send_request_async_raises_when_httpx_not_available(
 
     with pytest.raises(RuntimeError, match=r"'httpx' package is required but not installed."):
         await send_request_async("GET", "https://example.com")
+
+
+async def test_send_request_async_with_client_does_not_override_client_timeout() -> None:
+    """When a caller-supplied client is used, its own timeout config must
+    be respected: `timeout` must not be forwarded to `.request()`."""
+    handler, calls = _counting_handler([200], json={"ok": True})
+    client = _async_client(handler)
+    spy = Mock(wraps=client.request)
+    client.request = spy
+
+    await send_request_async("GET", "https://example.com", client=client, timeout=5)
+
+    assert calls.call_count == 1
+    assert "timeout" not in spy.call_args.kwargs
+
+
+async def test_send_request_async_without_client_forwards_timeout_to_own_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When no client is supplied, the created client's request must use
+    the given timeout."""
+    handler, calls = _counting_handler([200], json={"ok": True})
+    real_client = _async_client(handler)
+    spy = Mock(wraps=real_client.request)
+    real_client.request = spy
+    monkeypatch.setattr(f"{MODULE}.httpx.AsyncClient", Mock(return_value=real_client))
+
+    await send_request_async("GET", "https://example.com", timeout=7)
+
+    assert calls.call_count == 1
+    assert spy.call_args.kwargs["timeout"] == 7
 
 
 ############################

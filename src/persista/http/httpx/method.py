@@ -410,7 +410,9 @@ def send_request(
         while True:
             try:
                 start = time.perf_counter()
-                response = active_client.request(method, url, timeout=timeout, **kwargs)
+                if own_client:
+                    kwargs.setdefault("timeout", timeout)
+                response = active_client.request(method, url, **kwargs)
                 elapsed = time.perf_counter() - start
                 logger.debug(
                     "Response received: HTTP %d (%d bytes) in %.2fs",
@@ -861,7 +863,9 @@ async def send_request_async(
         while True:
             try:
                 start = time.perf_counter()
-                response = await active_client.request(method, url, timeout=timeout, **kwargs)
+                if own_client:
+                    kwargs.setdefault("timeout", timeout)
+                response = await active_client.request(method, url, **kwargs)
                 elapsed = time.perf_counter() - start
                 logger.debug(
                     "Response received: HTTP %d (%d bytes) in %.2fs",
