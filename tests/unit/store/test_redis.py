@@ -322,6 +322,32 @@ async def test_aset_many_helper_empty_items_is_a_no_op(store: BaseRedisStore) ->
     assert await store.acount() == 0
 
 
+def test_set_many_retries_on_watch_error(
+    store: BaseRedisStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deterministically force a WatchError on the first attempt (by
+    mutating a watched key out from under the pipeline mid-resolve) and
+    assert set_many retries the whole resolve+write cycle instead of
+    corrupting state or propagating the error."""
+    store.set("1", {"text": "original"})
+    original_resolve_conflicts = redis_module.resolve_conflicts
+    call_count = 0
+
+    def flaky_resolve_conflicts(*args: Any, **kwargs: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            store._client.set("1", store._encode({"text": "external"}))
+        return original_resolve_conflicts(*args, **kwargs)
+
+    monkeypatch.setattr(f"{MODULE}.resolve_conflicts", flaky_resolve_conflicts)
+
+    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
+
+    assert call_count == 2
+    assert store.get("2") == {"text": "new"}
+
+
 async def test_aset_many_retries_on_watch_error(
     store: BaseRedisStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
