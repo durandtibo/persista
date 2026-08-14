@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Generator, Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -160,6 +161,37 @@ def test_set_on_conflict_new_key_is_unaffected(store: BaseFileStore) -> None:
 def test_set_on_conflict_invalid_raises(store: BaseFileStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
         store.set("1", {"text": "hello"}, on_conflict="bogus")
+
+
+def test_concurrent_set_on_conflict_raise_never_corrupts_value(store: BaseFileStore) -> None:
+    """Many threads race to create the same key with
+    on_conflict="raise".
+
+    Exactly one write must win; the stored value must be a single
+    writer's value, not lost or interleaved with another writer's.
+    """
+    n_threads = 16
+    barrier = threading.Barrier(n_threads)
+    successes: list[int] = []
+    lock = threading.Lock()
+
+    def create_one(i: int) -> None:
+        barrier.wait()
+        try:
+            store.set("k", {"writer": i}, on_conflict="raise")
+        except KeyError:
+            return
+        with lock:
+            successes.append(i)
+
+    threads = [threading.Thread(target=create_one, args=(i,)) for i in range(n_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(successes) == 1
+    assert store.get("k") == {"writer": successes[0]}
 
 
 def test_set_key_with_special_characters(store: BaseFileStore) -> None:
