@@ -6,6 +6,7 @@ from __future__ import annotations
 __all__ = ["BaseFileStore", "JsonFileStore", "PickleFileStore"]
 
 import logging
+import threading
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote
@@ -72,6 +73,7 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             raise NotADirectoryError(msg)
         self._kwargs = kwargs
         self._closed = True
+        self._lock = threading.RLock()
 
     @property
     def path(self) -> Path:
@@ -144,8 +146,12 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             self._set_many(items)
             return
 
-        to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
-        self._set_many(to_write)
+        # Hold the lock across the check-then-act sequence so that concurrent
+        # writers can't both pass the `contains_many`/`get` check before either
+        # write lands, which would silently violate the "raise"/"skip" contract.
+        with self._lock:
+            to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
+            self._set_many(to_write)
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         for key, value in items.items():
