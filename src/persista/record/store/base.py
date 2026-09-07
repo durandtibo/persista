@@ -211,7 +211,8 @@ class BaseRecordStore(ABC):
 
     async def avalues(self, batch_size: int = 32) -> AsyncIterator[Record]:
         """Async equivalent of :meth:`values`."""
-        async for batch in self.aiter_batches(batch_size=batch_size):
+        batches = self.aiter_batches(batch_size=batch_size)
+        async for batch in batches:
             for record in batch:
                 yield record
 
