@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from types import MappingProxyType
 
 import pytest
 
@@ -52,6 +53,40 @@ def test_record_different_metadata_not_equal() -> None:
     record_a = Record(id="abc", metadata={"source": "cats.txt"})
     record_b = Record(id="abc", metadata={"source": "dogs.txt"})
     assert record_a != record_b
+
+
+# --- Immutability ---
+
+
+def test_record_metadata_is_mapping_proxy() -> None:
+    record = Record(id="abc", metadata={"source": "cats.txt"})
+    assert isinstance(record.metadata, MappingProxyType)
+
+
+def test_record_metadata_assignment_raises_type_error() -> None:
+    record = Record(id="abc", metadata={"source": "cats.txt"})
+    with pytest.raises(TypeError):
+        record.metadata["source"] = "dogs.txt"
+
+
+def test_record_metadata_mutating_original_dict_does_not_affect_record() -> None:
+    metadata = {"source": "cats.txt"}
+    record = Record(id="abc", metadata=metadata)
+    metadata["source"] = "dogs.txt"
+    assert record.metadata == {"source": "cats.txt"}
+
+
+# --- repr ---
+
+
+def test_record_repr_renders_metadata_as_plain_dict() -> None:
+    record = Record(id="abc", metadata={"source": "cats.txt"})
+    assert repr(record) == "Record(id='abc', metadata={'source': 'cats.txt'})"
+
+
+def test_record_repr_default_metadata() -> None:
+    record = Record(id="abc")
+    assert repr(record) == "Record(id='abc', metadata={})"
 
 
 # --- from_metadata ---
