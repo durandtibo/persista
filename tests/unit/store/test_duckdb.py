@@ -862,6 +862,19 @@ def test_init_schema_rejects_malicious_column_type() -> None:
         TypedDuckDBStore(":memory:", value_schema={"author": "VARCHAR); DROP TABLE store;--"})
 
 
+def test_schema_field_named_after_sql_reserved_word_round_trips() -> None:
+    """A value_schema field name that happens to be a SQL reserved word
+    (e.g. "order") must still produce valid CREATE TABLE/INSERT/filter
+    SQL, since it is a valid identifier and only rejected by
+    validate_field_name() for shape, not for being a keyword."""
+    with TypedDuckDBStore(
+        ":memory:", value_schema={"order": "INTEGER", "group": "VARCHAR"}
+    ) as store:
+        store.set("1", {"order": 5, "group": "a", "title": "Intro to Python"})
+        assert store.get("1") == {"order": 5, "group": "a", "title": "Intro to Python"}
+        assert store.filter(order=5) == [{"order": 5, "group": "a", "title": "Intro to Python"}]
+
+
 def test_value_field_named_key_does_not_collide_with_primary_key() -> None:
     """A value field literally named 'key' must not collide with the
     store's primary key column, and should be stored/retrieved via the

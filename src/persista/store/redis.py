@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
+from persista.store._async_close import close_async_connection_from_sync
 from persista.store.base import BaseStore
 from persista.store.validation import (
     aresolve_conflicts,
@@ -129,28 +130,10 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
 
     def close(self) -> None:
         if self._aclient is not None:
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                try:
-                    asyncio.run(self._aclient.aclose())
-                except RuntimeError:
-                    # The event loop that owned the async connection (e.g. a
-                    # per-test loop managed by pytest-asyncio) is already
-                    # closed, so the underlying transport is already gone;
-                    # there is nothing more to clean up.
-                    logger.debug(
-                        "Async Redis connection at %s could not be closed cleanly "
-                        "because its event loop is already closed",
-                        self._url,
-                    )
-                self._aclient = None
-            else:
-                msg = (
-                    "An async Redis connection is open and close() was called from "
-                    "inside a running event loop; use `await store.aclose()` instead."
-                )
-                raise RuntimeError(msg)
+            close_async_connection_from_sync(
+                self._aclient, resource_label="Redis", close_method="aclose"
+            )
+            self._aclient = None
         if self._closed:
             return
         logger.info("Closing Redis connection at %s", self._url)
@@ -179,10 +162,12 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
 
     def get(self, key: str) -> dict[str, Any] | None:
         self._check_open()
+        self._check_no_reserved_key(key)
         value = self._client.get(key)
         return self._decode(value) if value is not None else None
 
     async def aget(self, key: str) -> dict[str, Any] | None:
+        self._check_no_reserved_key(key)
         client = await self._ensure_aclient()
         value = await client.get(key)
         return self._decode(value) if value is not None else None
@@ -191,12 +176,14 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         self._check_open()
         if not keys:
             return []
+        self._check_no_reserved_keys(keys)
         values = self._client.mget(keys)
         return [self._decode(value) if value is not None else None for value in values]
 
     async def aget_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
         if not keys:
             return []
+        self._check_no_reserved_keys(keys)
         client = await self._ensure_aclient()
         values = await client.mget(keys)
         return [self._decode(value) if value is not None else None for value in values]
@@ -210,13 +197,18 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         await self.aset_many({key: value}, on_conflict=on_conflict)
 
     @staticmethod
-    def _check_no_reserved_keys(items: Mapping[str, dict[str, Any]]) -> None:
-        if _KEYS_SET in items:
+    def _check_no_reserved_key(key: str) -> None:
+        if key == _KEYS_SET:
             msg = (
                 f"key {_KEYS_SET!r} is reserved for this store's internal keys-tracking "
                 f"set and cannot be used as a data key"
             )
             raise ValueError(msg)
+
+    @classmethod
+    def _check_no_reserved_keys(cls, items: Mapping[str, dict[str, Any]] | list[str]) -> None:
+        if _KEYS_SET in items:
+            cls._check_no_reserved_key(_KEYS_SET)
 
     def set_many(
         self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
@@ -321,12 +313,14 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
 
     def delete(self, key: str) -> None:
         self._check_open()
+        self._check_no_reserved_key(key)
         pipe = self._client.pipeline()
         pipe.delete(key)
         pipe.srem(_KEYS_SET, key)
         pipe.execute()
 
     async def adelete(self, key: str) -> None:
+        self._check_no_reserved_key(key)
         client = await self._ensure_aclient()
         pipe = client.pipeline()
         pipe.delete(key)
@@ -337,6 +331,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         self._check_open()
         if not keys:
             return
+        self._check_no_reserved_keys(keys)
         pipe = self._client.pipeline()
         pipe.delete(*keys)
         pipe.srem(_KEYS_SET, *keys)
@@ -345,6 +340,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
     async def adelete_many(self, keys: list[str]) -> None:
         if not keys:
             return
+        self._check_no_reserved_keys(keys)
         client = await self._ensure_aclient()
         pipe = client.pipeline()
         pipe.delete(*keys)
@@ -359,9 +355,11 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
 
     def contains(self, key: str) -> bool:
         self._check_open()
+        self._check_no_reserved_key(key)
         return bool(self._client.sismember(_KEYS_SET, key))
 
     async def acontains(self, key: str) -> bool:
+        self._check_no_reserved_key(key)
         client = await self._ensure_aclient()
         return bool(await client.sismember(_KEYS_SET, key))
 
@@ -369,12 +367,14 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         self._check_open()
         if not keys:
             return []
+        self._check_no_reserved_keys(keys)
         flags = self._client.smismember(_KEYS_SET, keys)
         return [bool(flag) for flag in flags]
 
     async def acontains_many(self, keys: list[str]) -> list[bool]:
         if not keys:
             return []
+        self._check_no_reserved_keys(keys)
         client = await self._ensure_aclient()
         flags = await client.smismember(_KEYS_SET, keys)
         return [bool(flag) for flag in flags]
