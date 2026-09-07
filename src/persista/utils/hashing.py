@@ -6,7 +6,7 @@ __all__ = ["Key", "canonicalize_dict", "hash_dict_uuid"]
 
 import json
 import uuid
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -79,14 +79,6 @@ def _normalize(obj: Any) -> Any:
     return obj
 
 
-@overload
-def canonicalize_dict(
-    data: dict[str, Any], *, default: Callable[[Any], Any] | None = None
-) -> str: ...
-@overload
-def canonicalize_dict(
-    data: dict[Key, Any], *, default: Callable[[Any], Any] | None = None
-) -> str: ...
 def canonicalize_dict(data: dict[Any, Any], *, default: Callable[[Any], Any] | None = None) -> str:
     """Serialise a dictionary into a single canonical JSON string.
 
@@ -128,10 +120,6 @@ def canonicalize_dict(data: dict[Any, Any], *, default: Callable[[Any], Any] | N
     return json.dumps(_normalize(data), sort_keys=True, separators=(",", ":"), default=default)
 
 
-@overload
-def hash_dict_uuid(data: dict[str, Any], *, default: Callable[[Any], Any] | None = None) -> str: ...
-@overload
-def hash_dict_uuid(data: dict[Key, Any], *, default: Callable[[Any], Any] | None = None) -> str: ...
 def hash_dict_uuid(data: dict[Any, Any], *, default: Callable[[Any], Any] | None = None) -> str:
     """Compute a stable, reproducible UUID for a Python dictionary.
 
