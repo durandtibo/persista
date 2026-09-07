@@ -151,6 +151,33 @@ Helpers to fetch HTTP responses with automatic retries, built on top of `request
 - `HttpClient`/`AsyncHttpClient`: class-based wrappers around `httpx.Client`/`httpx.AsyncClient`
   with the same retries, plus optional response caching via a `Cache`
 
+### 🧾 **Records**
+
+A `Record` container (a stable UUID `id` plus a `metadata` dict) with helpers to filter, sort,
+persist, and analyze collections of records:
+
+- `filter_by_metadata`/`filter_by_metadata_range`/`filter_by_metadata_values`,
+  `sort_by_metadata`: filter and sort records by metadata
+- `RecordStore` and ready-to-use backends (`InMemoryRecordStore`, `SQLiteRecordStore`,
+  `DuckDBRecordStore`, typed variants, ...) built on top of `persista.store`
+- `persista.record.analysis`: exact/near-duplicate detection, id-collision detection, diffing two
+  snapshots, orphan-reference checks, schema-shape clustering, value frequency/cardinality, and
+  metadata stats/reporting
+- `generate_fake_records` for synthetic test data (requires the `faker` extra)
+
+```pycon
+>>> from persista.record import Record
+>>> from persista.record.analysis import find_duplicate_record_ids
+>>> records = [
+...     Record(id="a", metadata={"source": "a.pdf"}),
+...     Record(id="b", metadata={"source": "a.pdf"}),
+...     Record(id="c", metadata={"source": "b.pdf"}),
+... ]
+>>> find_duplicate_record_ids(records)
+[['a', 'b']]
+
+```
+
 ## Installation
 
 We highly recommend installing `persista` in
