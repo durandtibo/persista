@@ -83,8 +83,8 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     @property
     @abstractmethod
     def extension(self) -> str:
-        """File extension (including the leading dot) used for value
-        files."""
+        """File extension (including the dot) used for value files."""
+        ...
 
     #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
     scheme: str
