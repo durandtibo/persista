@@ -17,6 +17,7 @@ from persista.record.store.factory import (
     TypedDuckDBRecordStoreFactory,
     TypedSQLiteRecordStoreFactory,
 )
+from persista.testing.fixtures import duckdb_available
 
 ###############################################
 #     Tests for DuckDBRecordStoreFactory     #
@@ -27,11 +28,13 @@ def test_duckdb_record_store_factory_is_base_record_store_factory() -> None:
     assert isinstance(DuckDBRecordStoreFactory(), BaseRecordStoreFactory)
 
 
+@duckdb_available
 def test_duckdb_record_store_factory_make_record_store_returns_duckdb_record_store() -> None:
     factory = DuckDBRecordStoreFactory()
     assert isinstance(factory.make_record_store(), DuckDBRecordStore)
 
 
+@duckdb_available
 def test_duckdb_record_store_factory_make_record_store_returns_new_instance_each_call() -> None:
     factory = DuckDBRecordStoreFactory()
     assert factory.make_record_store() is not factory.make_record_store()
@@ -58,6 +61,7 @@ def test_typed_duckdb_record_store_factory_is_base_record_store_factory() -> Non
     )
 
 
+@duckdb_available
 def test_typed_duckdb_record_store_factory_make_record_store_returns_typed_duckdb_record_store() -> (
     None
 ):
