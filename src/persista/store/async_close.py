@@ -25,6 +25,15 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class SupportsAsyncClose(Protocol):
+    """Structural type for an async connection exposing an async close
+    method.
+
+    Matches objects like ``redis.asyncio.Redis`` or ``aiosqlite.Connection``
+    -- anything with a ``close``/``aclose``-style method that returns an
+    awaitable -- so :func:`close_async_connection_from_sync` can accept
+    them without depending on any specific driver's connection class.
+    """
+
     def close(self) -> Coroutine[Any, Any, Any]: ...  # pragma: no cover
 
 
