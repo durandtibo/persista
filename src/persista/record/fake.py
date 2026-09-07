@@ -25,20 +25,13 @@ def generate_fake_records(
     Each record gets a unique ``id`` (``"rec-{i}"``) and metadata
     containing a fake author name and a single-word topic.
 
-    Warning:
-        ``Faker.seed()`` seeds Faker's shared, process-wide random
-        generator, not just the local ``fake`` instance created here.
-        Passing ``seed`` therefore affects the reproducibility of *any*
-        other ``Faker()`` instance used elsewhere in the same process
-        after this function runs, not only calls made through this
-        function.
-
     Args:
         n: Number of records to generate. Must be non-negative;
             ``n=0`` returns an empty list.
-        seed: Optional seed for reproducible output. If ``None``,
-            content differs on every call (see the Warning above about
-            seeding's process-wide scope).
+        seed: Optional seed for reproducible output, scoped to the
+            ``Faker`` instance used internally by this call and not to
+            Faker's shared, process-wide generator. If ``None``,
+            content differs on every call.
 
     Returns:
         A list of ``n`` Record objects, each with a distinct ``id``
@@ -66,9 +59,9 @@ def generate_fake_records(
         msg = f"'n' must be non-negative, got {n}."
         raise ValueError(msg)
 
-    if seed is not None:
-        faker.Faker.seed(seed)
     fake = faker.Faker()
+    if seed is not None:
+        fake.seed_instance(seed)
 
     return [
         Record(

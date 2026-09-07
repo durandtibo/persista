@@ -123,7 +123,10 @@ def test_generate_fake_records_no_seed_calls_do_not_raise() -> None:
 
 
 @faker_available
-def test_generate_fake_records_seed_is_forwarded_to_faker_seed() -> None:
+def test_generate_fake_records_seed_is_forwarded_to_faker_seed_instance() -> None:
+    """``seed`` must be scoped to the local ``Faker`` instance (via
+    ``seed_instance``), not to the shared, process-wide generator (via
+    the ``Faker.seed`` classmethod)."""
     with patch(f"{MODULE}.faker.Faker") as mock_faker_cls:
         mock_fake = mock_faker_cls.return_value
         mock_fake.name.return_value = "name"
@@ -131,7 +134,8 @@ def test_generate_fake_records_seed_is_forwarded_to_faker_seed() -> None:
 
         generate_fake_records(n=1, seed=123)
 
-        mock_faker_cls.seed.assert_called_once_with(123)
+        mock_fake.seed_instance.assert_called_once_with(123)
+        mock_faker_cls.seed.assert_not_called()
 
 
 @faker_available
@@ -143,6 +147,7 @@ def test_generate_fake_records_no_seed_does_not_call_faker_seed() -> None:
 
         generate_fake_records(n=1, seed=None)
 
+        mock_fake.seed_instance.assert_not_called()
         mock_faker_cls.seed.assert_not_called()
 
 

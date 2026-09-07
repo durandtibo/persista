@@ -23,13 +23,13 @@ def find_orphan_references(records: Iterable[Record], reference_key: str) -> lis
     not match any ``id`` present in ``records``.
 
     This requires two passes over ``records`` (once to collect all
-    ids, once to check references), so ``records`` must be
-    re-iterable (a list, tuple, or anything supporting multiple
-    passes) - a single-use generator or iterator will not work, since
-    it would be exhausted by the first pass.
+    ids, once to check references). ``records`` is materialized into a
+    list up front if it is not already one, so a single-use generator
+    or iterator works too, at the cost of holding all records in
+    memory at once.
 
     Args:
-        records: A list, tuple, or other re-iterable collection of
+        records: A list, tuple, generator, or other iterable of
             ``persista.record.Record`` objects.
         reference_key: The metadata key holding the referenced record
             id. Records missing this key, or whose value is ``None``,
@@ -55,6 +55,7 @@ def find_orphan_references(records: Iterable[Record], reference_key: str) -> lis
 
         ```
     """
+    records = list(records)
     ids = {record.id for record in records}
     orphans = []
     for record in records:

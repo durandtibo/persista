@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = ["Record"]
 
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from persista.utils.hashing import hash_dict_uuid
@@ -19,22 +20,38 @@ class Record:
     automatically derive a stable UUID from the metadata dict.
 
     Note:
-        Although the dataclass is declared ``frozen=True``, instances
-        are not hashable: the default ``metadata`` dict is mutable and
-        unhashable, so ``eq=True`` (the dataclass default) disables
-        the auto-generated ``__hash__``.  Use ``record.id`` as the
-        hashable identifier instead.
+        ``metadata`` is copied into a read-only
+        :class:`~types.MappingProxyType` view during construction, so
+        ``record.metadata["x"] = 1`` raises ``TypeError`` instead of
+        silently mutating the record - the dict passed in to
+        ``metadata`` is not itself frozen, so mutating it directly
+        after construction still does not affect the record.
+        Instances remain unhashable, since a ``MappingProxyType`` is
+        itself unhashable and ``eq=True`` (the dataclass default)
+        disables the auto-generated ``__hash__``.  Use ``record.id``
+        as the hashable identifier instead.
 
     Args:
         id: Unique identifier for the record, typically a UUID derived
             from the metadata via
             :func:`~persista.utils.hashing.hash_dict_uuid`.
         metadata: Arbitrary key-value metadata associated with the
-            record.  Defaults to an empty dict.
+            record.  Defaults to an empty dict.  Copied into a
+            read-only view; the original dict is left untouched.
     """
 
     id: str
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+
+    def __repr__(self) -> str:
+        # Defined explicitly (rather than relying on the dataclass-
+        # generated __repr__) so ``metadata`` renders as a plain dict
+        # (e.g. ``{'a': 1}``) instead of the ``MappingProxyType`` repr
+        # (``mappingproxy({'a': 1})``).
+        return f"{type(self).__name__}(id={self.id!r}, metadata={dict(self.metadata)!r})"
 
     @classmethod
     def from_metadata(cls, metadata: dict[str, Any]) -> Record:
@@ -60,7 +77,7 @@ class Record:
             >>> record = Record.from_metadata({"source": "cats.txt", "page": 1})
             >>> record.id  # doctest: +ELLIPSIS
             '...'
-            >>> record.metadata
+            >>> dict(record.metadata)
             {'source': 'cats.txt', 'page': 1}
 
             ```

@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from persista.record.record import Record
 
+# Sentinel used to distinguish "metadata key absent" from "metadata key
+# present with a value of None" when looking up metadata values below.
+_MISSING = object()
+
 
 def filter_by_metadata(
     records: list[Record],
@@ -19,13 +23,8 @@ def filter_by_metadata(
 
     Returns a new list containing only records whose metadata contains
     ``metadata_key`` with a value equal to ``value``.  Records missing
-    ``metadata_key`` are excluded.
-
-    Warning:
-        Because the lookup uses ``dict.get`` with a default of
-        ``None``, calling this with ``value=None`` also matches
-        records that do not have ``metadata_key`` at all, not only
-        records whose ``metadata_key`` is explicitly set to ``None``.
+    ``metadata_key`` are excluded, even when ``value=None``: a record
+    missing ``metadata_key`` never matches, regardless of ``value``.
 
     Args:
         records: The list of :class:`~persista.record.Record` instances to
@@ -52,7 +51,7 @@ def filter_by_metadata(
 
         ```
     """
-    return [r for r in records if r.metadata.get(metadata_key) == value]
+    return [r for r in records if r.metadata.get(metadata_key, _MISSING) == value]
 
 
 def filter_by_metadata_range(
@@ -110,8 +109,8 @@ def filter_by_metadata_range(
     """
 
     def in_range(record: Record) -> bool:
-        value = record.metadata.get(metadata_key)
-        if value is None and metadata_key not in record.metadata:
+        value = record.metadata.get(metadata_key, _MISSING)
+        if value is _MISSING:
             return False
         if lower is not None and value < lower:
             return False
@@ -130,13 +129,9 @@ def filter_by_metadata_values(
 
     Returns a new list containing only records whose metadata contains
     ``metadata_key`` with a value that is a member of ``values``.
-    Records missing ``metadata_key`` are excluded.
-
-    Warning:
-        Because the lookup uses ``dict.get`` with a default of
-        ``None``, including ``None`` in ``values`` also matches
-        records that do not have ``metadata_key`` at all, not only
-        records whose ``metadata_key`` is explicitly set to ``None``.
+    Records missing ``metadata_key`` are excluded, even when ``None``
+    is included in ``values``: a record missing ``metadata_key`` never
+    matches.
 
     Args:
         records: The list of :class:`~persista.record.Record` instances to
@@ -165,4 +160,4 @@ def filter_by_metadata_values(
 
         ```
     """
-    return [r for r in records if r.metadata.get(metadata_key) in values]
+    return [r for r in records if r.metadata.get(metadata_key, _MISSING) in values]

@@ -4,32 +4,14 @@ from __future__ import annotations
 
 __all__ = ["find_duplicate_record_ids"]
 
-import hashlib
-import json
 from typing import TYPE_CHECKING, Any
+
+from persista.record.hashing import hash_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from persista.record import Record
-
-
-def _hash_metadata(metadata: dict[str, Any]) -> bytes:
-    """Compute a stable content hash for a record's metadata.
-
-    Serialises ``metadata`` via ``json.dumps`` with ``sort_keys=True``
-    so the hash is independent of key insertion order, then hashes the
-    resulting bytes with SHA-256. Values that are not JSON-serialisable
-    are stringified via ``default=str`` so hashing never raises.
-
-    Args:
-        metadata: The metadata mapping to hash.
-
-    Returns:
-        The 32-byte SHA-256 digest of the canonical serialization.
-    """
-    canonical = json.dumps(metadata, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(canonical).digest()
 
 
 def find_duplicate_record_ids(records: Iterable[Record]) -> list[list[Any]]:
@@ -76,6 +58,6 @@ def find_duplicate_record_ids(records: Iterable[Record]) -> list[list[Any]]:
     """
     groups: dict[bytes, list[Any]] = {}
     for record in records:
-        metadata_hash = _hash_metadata(record.metadata or {})
+        metadata_hash = hash_metadata(record.metadata or {})
         groups.setdefault(metadata_hash, []).append(record.id)
     return [group for group in groups.values() if len(group) > 1]

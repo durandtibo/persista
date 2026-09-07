@@ -42,6 +42,15 @@ class _HyperLogLog:
             value: The value to add. Hashed via ``str(value)`` and
                 SHA-256, so any value is accepted regardless of
                 hashability.
+
+        Warning:
+            Because hashing goes through ``str(value)``, distinct
+            values that stringify the same way (e.g. the int ``1``
+            and the str ``"1"``) are treated as one value for
+            cardinality estimation purposes, unlike the ``top_values``
+            counters in ``compute_value_frequency``, which key
+            unhashable values by their ``str()`` form but otherwise
+            key hashable values by their real ``(type, value)`` pair.
         """
         digest = hashlib.sha256(str(value).encode()).digest()
         h = int.from_bytes(digest[:8], "big")

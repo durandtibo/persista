@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = ["MetadataStats", "compute_metadata_stats"]
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -68,8 +69,8 @@ class MetadataStats:
     min_keys: int | None = None
     max_keys: int | None = None
 
-    _key_counts: dict[str, int] = field(default_factory=dict)
-    _key_none_counts: dict[str, int] = field(default_factory=dict)
+    _key_counts: Counter[str] = field(default_factory=Counter)
+    _key_none_counts: Counter[str] = field(default_factory=Counter)
     _key_types: dict[str, set[str]] = field(default_factory=dict)
     _key_values: dict[str, set[Any]] = field(default_factory=dict)
     _key_values_truncated: dict[str, bool] = field(default_factory=dict)
@@ -103,11 +104,11 @@ class MetadataStats:
             self.max_keys = n_keys
 
         for key, value in metadata.items():
-            self._key_counts[key] = self._key_counts.get(key, 0) + 1
+            self._key_counts[key] += 1
             self._key_types.setdefault(key, set()).add(type(value).__name__)
 
             if value is None or value == "":
-                self._key_none_counts[key] = self._key_none_counts.get(key, 0) + 1
+                self._key_none_counts[key] += 1
 
             if self._key_values_truncated.get(key, False):
                 # Sample already capped for this key - do not add more values,
