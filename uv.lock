@@ -1205,7 +1205,7 @@ wheels = [
 
 [[package]]
 name = "persista"
-version = "0.0.3"
+version = "0.0.4a0"
 source = { editable = "." }
 dependencies = [
     { name = "coola" },

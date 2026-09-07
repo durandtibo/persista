@@ -1,4 +1,5 @@
-r"""Define records."""
+r"""Define the ``Record`` container and helpers to filter and sort
+collections of records by their metadata."""
 
 from __future__ import annotations
 
