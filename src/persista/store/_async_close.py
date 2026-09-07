@@ -25,7 +25,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 
 class _SupportsAsyncClose(Protocol):
-    def close(self) -> Coroutine[Any, Any, Any]: ...
+    def close(self) -> Coroutine[Any, Any, Any]: ...  # pragma: no cover
 
 
 def close_async_connection_from_sync(
