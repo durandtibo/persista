@@ -15,7 +15,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
-from persista.store._async_close import close_async_connection_from_sync
+from persista.store.async_close import close_async_connection_from_sync
 from persista.store.base import BaseStore
 from persista.store.validation import (
     aresolve_conflicts,

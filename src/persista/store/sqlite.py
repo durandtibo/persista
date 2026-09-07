@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from coola.display import MultilineDisplayMixin
 from coola.utils.path import sanitize_path
 
-from persista.store._async_close import close_async_connection_from_sync
+from persista.store.async_close import close_async_connection_from_sync
 from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
@@ -161,7 +161,15 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         if not self._closed:
             return
         self._conn = self._connect()
-        self._ensure_schema()
+        try:
+            self._ensure_schema()
+        except BaseException:
+            # Don't leak the connection just opened above: __enter__ never
+            # calls __exit__/close() when it raises, so this is the only
+            # chance to close it before it's garbage-collected.
+            self._conn.close()
+            self._conn = None
+            raise
         self._aschema_ready = False
         self._closed = False
 

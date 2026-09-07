@@ -12,7 +12,7 @@ potentially left to drift) in each backend.
 
 from __future__ import annotations
 
-__all__ = ["close_async_connection_from_sync"]
+__all__ = ["SupportsAsyncClose", "close_async_connection_from_sync"]
 
 import asyncio
 import logging
@@ -24,12 +24,12 @@ if TYPE_CHECKING:
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class _SupportsAsyncClose(Protocol):
-    def close(self) -> Coroutine[Any, Any, Any]: ...
+class SupportsAsyncClose(Protocol):
+    def close(self) -> Coroutine[Any, Any, Any]: ...  # pragma: no cover
 
 
 def close_async_connection_from_sync(
-    aconn: _SupportsAsyncClose | None,
+    aconn: SupportsAsyncClose | None,
     *,
     resource_label: str,
     close_method: str = "close",
