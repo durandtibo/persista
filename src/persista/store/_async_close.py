@@ -1,13 +1,13 @@
-r"""Provide a shared helper for closing a lazily-created async
-connection from a store's synchronous ``close()`` method.
+r"""Provide a shared helper for closing a lazily-created async connection
+from a store's synchronous ``close()`` method.
 
 Several backends (SQLite, Redis, Postgres) eagerly open a sync
 connection but only create their async connection lazily, on first
-``a``-prefixed call. Closing such a store synchronously therefore has
-to also tear down that async connection, which is only safe to do
-with ``asyncio.run`` when no event loop is currently running; this
-module centralizes that check-and-close logic so it isn't
-re-implemented (and potentially left to drift) in each backend.
+``a``-prefixed call. Closing such a store synchronously therefore has to
+also tear down that async connection, which is only safe to do with
+``asyncio.run`` when no event loop is currently running; this module
+centralizes that check-and-close logic so it isn't re-implemented (and
+potentially left to drift) in each backend.
 """
 
 from __future__ import annotations
