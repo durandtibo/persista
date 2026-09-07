@@ -11,7 +11,6 @@ repos:
         entry: python -Im docformatter
         additional_dependencies:
           - docformatter >= 1.7.5
-          - tomli >= 2.0.0
         args: [ "--in-place", "--config", "./pyproject.toml" ]
         language: python
         types:
