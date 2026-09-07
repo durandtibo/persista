@@ -61,7 +61,7 @@ def find_id_collisions(records: Iterable[Record]) -> dict[Any, list[dict[str, An
     """
     variants: dict[Any, list[dict[str, Any]]] = {}
     for record in records:
-        metadata = dict(record.metadata or {})
+        metadata = dict(record.metadata)
         seen = variants.setdefault(record.id, [])
         if metadata not in seen:
             seen.append(metadata)

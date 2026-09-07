@@ -58,6 +58,6 @@ def find_duplicate_record_ids(records: Iterable[Record]) -> list[list[Any]]:
     """
     groups: dict[bytes, list[Any]] = {}
     for record in records:
-        metadata_hash = hash_metadata(record.metadata or {})
+        metadata_hash = hash_metadata(record.metadata)
         groups.setdefault(metadata_hash, []).append(record.id)
     return [group for group in groups.values() if len(group) > 1]

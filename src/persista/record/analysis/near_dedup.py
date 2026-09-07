@@ -117,7 +117,7 @@ def find_near_duplicate_record_ids(
     signatures: list[tuple[int, ...]] = []
     for record in records:
         ids.append(record.id)
-        signatures.append(_minhash_signature(record.metadata or {}, num_hashes))
+        signatures.append(_minhash_signature(record.metadata, num_hashes))
 
     n = len(ids)
     parent = list(range(n))
@@ -140,6 +140,9 @@ def find_near_duplicate_record_ids(
         for i, signature in enumerate(signatures):
             if signature[start] == -1:
                 # Sentinel signature (empty metadata) - never bucket together.
+                # Checking only position `start` is sufficient because
+                # _minhash_signature applies the -1 sentinel uniformly to every
+                # position when metadata is empty, so no partial band can be -1.
                 continue
             band_key = signature[start:end]
             if band_key in buckets:

@@ -142,7 +142,7 @@ def compute_value_frequency(
     estimators: dict[str, _HyperLogLog] = {}
 
     for record in records:
-        for key, value in (record.metadata or {}).items():
+        for key, value in record.metadata.items():
             try:
                 counters.setdefault(key, Counter())[value] += 1
             except TypeError:

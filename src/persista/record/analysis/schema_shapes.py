@@ -57,6 +57,6 @@ def compute_schema_shapes(records: Iterable[Record]) -> dict[tuple[str, ...], li
     """
     shapes: dict[tuple[str, ...], list[Any]] = {}
     for record in records:
-        shape = tuple(sorted((record.metadata or {}).keys()))
+        shape = tuple(sorted(record.metadata.keys()))
         shapes.setdefault(shape, []).append(record.id)
     return shapes

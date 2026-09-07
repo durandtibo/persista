@@ -65,8 +65,8 @@ def diff_records(before: Iterable[Record], after: Iterable[Record]) -> dict[str,
 
         ```
     """
-    before_by_id = {record.id: record.metadata or {} for record in before}
-    after_by_id = {record.id: record.metadata or {} for record in after}
+    before_by_id = {record.id: record.metadata for record in before}
+    after_by_id = {record.id: record.metadata for record in after}
 
     added = [rid for rid in after_by_id if rid not in before_by_id]
     removed = [rid for rid in before_by_id if rid not in after_by_id]

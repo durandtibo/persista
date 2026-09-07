@@ -20,7 +20,12 @@ def hash_metadata(metadata: dict[str, Any]) -> bytes:
     Serialises ``metadata`` via ``json.dumps`` with ``sort_keys=True``
     so the hash is independent of key insertion order, then hashes the
     resulting bytes with SHA-256. Values that are not JSON-serialisable
-    are stringified via ``default=str`` so hashing never raises.
+    are replaced by a ``"<type name>:<str(value)>"`` tag (via
+    ``default``) so hashing never raises, and so that two distinct
+    non-serialisable objects of different types whose ``str()``
+    happens to coincide do not falsely hash the same (they still
+    collide if both the type name and ``str()`` match, e.g. two
+    distinct instances of the same class with the same ``__str__``).
     ``metadata`` is coerced to a plain ``dict`` first, so non-``dict``
     mappings (e.g. a ``MappingProxyType``, as used by
     ``persista.record.Record.metadata``) hash the same as an equivalent
@@ -32,5 +37,7 @@ def hash_metadata(metadata: dict[str, Any]) -> bytes:
     Returns:
         The 32-byte SHA-256 digest of the canonical serialization.
     """
-    canonical = json.dumps(dict(metadata), sort_keys=True, default=str).encode("utf-8")
+    canonical = json.dumps(
+        dict(metadata), sort_keys=True, default=lambda v: f"{type(v).__name__}:{v!s}"
+    ).encode("utf-8")
     return hashlib.sha256(canonical).digest()
