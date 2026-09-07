@@ -59,10 +59,9 @@ def find_orphan_references(records: Iterable[Record], reference_key: str) -> lis
     ids = {record.id for record in records}
     orphans = []
     for record in records:
-        metadata = record.metadata or {}
-        if reference_key not in metadata:
+        if reference_key not in record.metadata:
             continue
-        referenced_id = metadata[reference_key]
+        referenced_id = record.metadata[reference_key]
         if referenced_id is None:
             continue
         if referenced_id not in ids:

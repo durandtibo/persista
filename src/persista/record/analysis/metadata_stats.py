@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = ["MetadataStats", "compute_metadata_stats"]
 
 from collections import Counter
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -89,7 +90,7 @@ class MetadataStats:
                 counted via ``missing_metadata_count`` and contributes
                 zero keys.
         """
-        metadata = record.metadata or {}
+        metadata = record.metadata
 
         if not metadata:
             self.missing_metadata_count += 1
@@ -116,21 +117,18 @@ class MetadataStats:
                 continue
 
             values = self._key_values.setdefault(key, set())
-            try:
-                if isinstance(value, (list, dict, set)):
-                    # Unhashable/complex value -> stop sampling this key.
-                    self._key_values_truncated[key] = True
-                elif (
-                    self.n_sample_values is not None
-                    and len(values) >= self.n_sample_values
-                    and value not in values
-                ):
-                    # Sample is full and this is a new value -> cap it here.
-                    self._key_values_truncated[key] = True
-                else:
-                    values.add(value)
-            except TypeError:
+            if not isinstance(value, Hashable):
+                # Unhashable value (e.g. a list or dict) -> stop sampling this key.
                 self._key_values_truncated[key] = True
+            elif (
+                self.n_sample_values is not None
+                and len(values) >= self.n_sample_values
+                and value not in values
+            ):
+                # Sample is full and this is a new value -> cap it here.
+                self._key_values_truncated[key] = True
+            else:
+                values.add(value)
 
     def to_dict(self) -> dict[str, Any]:
         """Compute the final statistics report from the accumulated

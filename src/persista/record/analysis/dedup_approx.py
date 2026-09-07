@@ -77,7 +77,7 @@ def count_approx_duplicate_records(
     bloom = BloomFilter(expected_items=expected_record_count, fp_rate=fp_rate)
     duplicate_count = 0
     for record in records:
-        metadata_hash = hash_metadata(record.metadata or {})
+        metadata_hash = hash_metadata(record.metadata)
         if bloom.add_and_check(metadata_hash):
             duplicate_count += 1
     return duplicate_count

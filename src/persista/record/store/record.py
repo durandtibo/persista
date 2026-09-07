@@ -58,6 +58,10 @@ class RecordStore(BaseRecordStore, MultilineDisplayMixin):
     def _from_value(record_id: str, value: dict[str, Any]) -> Record:
         return Record(id=record_id, metadata=dict(value))
 
+    @staticmethod
+    def _matches(record: Record, metadata_filters: dict[str, Any]) -> bool:
+        return all(record.metadata.get(key) == val for key, val in metadata_filters.items())
+
     def set_many(self, records: list[Record]) -> None:
         self._store.set_many(
             {record.id: self._to_value(record) for record in records}, on_conflict="overwrite"
@@ -107,18 +111,22 @@ class RecordStore(BaseRecordStore, MultilineDisplayMixin):
         for batch in self._store.iter_batches():
             for record_id, value in batch.items():
                 record = self._from_value(record_id, value)
-                if all(record.metadata.get(key) == val for key, val in metadata_filters.items()):
+                if self._matches(record, metadata_filters):
                     records.append(record)
         return records
 
     async def afilter(self, **metadata_filters: Any) -> list[Record]:
-        """Async equivalent of :meth:`filter`; see its Note about the
-        full-scan performance characteristics."""
+        """Async equivalent of :meth:`filter`.
+
+        Note:
+            Same full-scan performance characteristics as :meth:`filter`;
+            see its Note.
+        """
         records = []
         async for batch in self._store.aiter_batches():
             for record_id, value in batch.items():
                 record = self._from_value(record_id, value)
-                if all(record.metadata.get(key) == val for key, val in metadata_filters.items()):
+                if self._matches(record, metadata_filters):
                     records.append(record)
         return records
 
