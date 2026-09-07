@@ -278,6 +278,29 @@ def test_filter_by_metadata_range_exact_match() -> None:
     ) == [Record(id="a", metadata={"page": 5})]
 
 
+# --- Non-comparable / explicit None values ---
+
+
+def test_filter_by_metadata_range_incomparable_types_raises() -> None:
+    records = [Record(id="a", metadata={"page": "not-a-number"})]
+    with pytest.raises(TypeError):
+        filter_by_metadata_range(records, "page", lower=1)
+
+
+def test_filter_by_metadata_range_explicit_none_value_raises() -> None:
+    """A record explicitly storing ``None`` for the key (as opposed to
+    missing the key entirely) is not treated as "missing" and is
+    compared against the bounds like any other value."""
+    records = [Record(id="a", metadata={"page": None})]
+    with pytest.raises(TypeError):
+        filter_by_metadata_range(records, "page", lower=1)
+
+
+def test_filter_by_metadata_range_explicit_none_value_no_bounds_included() -> None:
+    records = [Record(id="a", metadata={"page": None})]
+    assert filter_by_metadata_range(records, "page") == records
+
+
 ###################################################
 #     Tests for filter_by_metadata_values         #
 ###################################################

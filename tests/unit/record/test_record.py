@@ -104,3 +104,7 @@ def test_record_from_metadata_nested_dict_order_independent() -> None:
     record_a = Record.from_metadata({"info": {"year": 2024, "topic": "cats"}})
     record_b = Record.from_metadata({"info": {"topic": "cats", "year": 2024}})
     assert record_a.id == record_b.id
+
+
+def test_record_not_equal_to_non_record() -> None:
+    assert Record(id="abc") != "abc"
