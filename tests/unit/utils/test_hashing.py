@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+import uuid
 
 import pytest
 
-from persista.utils.hashing import canonicalize_dict, hash_dict_uuid
+from persista.utils.hashing import _NAMESPACE, canonicalize_dict, hash_dict_uuid
 
 UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
@@ -120,9 +121,5 @@ def test_hash_dict_uuid_matches_uuid5_of_canonicalize_dict() -> None:
     # hash_dict_uuid is defined as uuid5 of canonicalize_dict's output under a
     # fixed namespace - this pins that relationship so the two helpers cannot
     # silently drift apart from each other.
-    import uuid
-
-    from persista.utils.hashing import _NAMESPACE
-
     data = {"source": "cats.txt", "page": 1}
     assert hash_dict_uuid(data) == str(uuid.uuid5(_NAMESPACE, canonicalize_dict(data)))
