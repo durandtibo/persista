@@ -11,7 +11,7 @@ __all__ = [
     "TypedSQLiteRecordStore",
 ]
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from persista.record.store.record import RecordStore
 from persista.store import InMemoryStore, TypedDuckDBStore, TypedSQLiteStore
@@ -20,7 +20,73 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-class DuckDBRecordStore(RecordStore):
+class _UntypedRecordStore(RecordStore):
+    r"""Base class for a :class:`~persista.record.store.RecordStore`
+    backed by a SQL database, with record metadata stored as JSON.
+
+    Subclasses only need to set ``_store_cls`` to the underlying typed
+    SQL store class (e.g. :class:`persista.store.TypedDuckDBStore`);
+    every metadata field is stored in that store's JSON overflow
+    column, with no fixed schema. Use the corresponding ``Typed*``
+    record store instead when metadata fields should be stored as
+    their own SQL columns.
+
+    Args:
+        database: The path to the database file, or ``":memory:"``
+            for an in-memory database.
+        **kwargs: Additional keyword arguments passed to
+            ``_store_cls``.
+    """
+
+    # Typed as `Any` rather than `type[BaseStore]`: subclasses of
+    # BaseStore have varying constructor signatures (e.g. an optional
+    # `value_schema` keyword), so a precise callable type here would
+    # not usefully constrain subclasses anyway.
+    _store_cls: ClassVar[Any]
+
+    def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
+        super().__init__(self._store_cls(database, **kwargs))
+
+
+class _TypedRecordStore(RecordStore):
+    r"""Base class for a :class:`~persista.record.store.RecordStore`
+    backed by a SQL database, with each record metadata field stored
+    as its own typed SQL column.
+
+    Subclasses only need to set ``_store_cls`` to the underlying typed
+    SQL store class (e.g. :class:`persista.store.TypedDuckDBStore`).
+    Use this store when record metadata follows a known, fixed schema
+    and individual metadata fields should be queryable as SQL columns.
+    Use the corresponding untyped record store instead when records
+    may have arbitrary or varying metadata.
+
+    Args:
+        database: The path to the database file, or ``":memory:"``
+            for an in-memory database.
+        metadata_schema: A mapping from metadata field name to its SQL
+            column type declaration (e.g. ``{"author": "TEXT"}``).
+            ``None`` is equivalent to an empty mapping, i.e. no
+            metadata columns beyond the JSON overflow column.
+        **kwargs: Additional keyword arguments passed to
+            ``_store_cls``.
+    """
+
+    # Typed as `Any` rather than `type[BaseStore]`: subclasses of
+    # BaseStore have varying constructor signatures (e.g. an optional
+    # `value_schema` keyword), so a precise callable type here would
+    # not usefully constrain subclasses anyway.
+    _store_cls: ClassVar[Any]
+
+    def __init__(
+        self,
+        database: Path | str = ":memory:",
+        metadata_schema: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(self._store_cls(database, value_schema=metadata_schema, **kwargs))
+
+
+class DuckDBRecordStore(_UntypedRecordStore):
     r"""Implement a :class:`~persista.record.store.RecordStore` backed by
     a DuckDB database, with record metadata stored as JSON.
 
@@ -49,12 +115,10 @@ class DuckDBRecordStore(RecordStore):
         ```
     """
 
-    def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
-        store = TypedDuckDBStore(database, **kwargs)
-        super().__init__(store)
+    _store_cls = TypedDuckDBStore
 
 
-class TypedDuckDBRecordStore(RecordStore):
+class TypedDuckDBRecordStore(_TypedRecordStore):
     r"""Implement a :class:`~persista.record.store.RecordStore` backed by
     a DuckDB database, with each record metadata field stored as its own
     typed SQL column.
@@ -91,14 +155,7 @@ class TypedDuckDBRecordStore(RecordStore):
         ```
     """
 
-    def __init__(
-        self,
-        database: Path | str = ":memory:",
-        metadata_schema: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        store = TypedDuckDBStore(database, value_schema=metadata_schema, **kwargs)
-        super().__init__(store)
+    _store_cls = TypedDuckDBStore
 
 
 class InMemoryRecordStore(RecordStore):
@@ -127,7 +184,7 @@ class InMemoryRecordStore(RecordStore):
         super().__init__(InMemoryStore())
 
 
-class SQLiteRecordStore(RecordStore):
+class SQLiteRecordStore(_UntypedRecordStore):
     r"""Implement a :class:`~persista.record.store.RecordStore` backed by
     a SQLite database, with record metadata stored as JSON.
 
@@ -156,12 +213,10 @@ class SQLiteRecordStore(RecordStore):
         ```
     """
 
-    def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
-        store = TypedSQLiteStore(database, **kwargs)
-        super().__init__(store)
+    _store_cls = TypedSQLiteStore
 
 
-class TypedSQLiteRecordStore(RecordStore):
+class TypedSQLiteRecordStore(_TypedRecordStore):
     r"""Implement a :class:`~persista.record.store.RecordStore` backed by
     a SQLite database, with each record metadata field stored as its own
     typed SQL column.
@@ -198,11 +253,4 @@ class TypedSQLiteRecordStore(RecordStore):
         ```
     """
 
-    def __init__(
-        self,
-        database: Path | str = ":memory:",
-        metadata_schema: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        store = TypedSQLiteStore(database, value_schema=metadata_schema, **kwargs)
-        super().__init__(store)
+    _store_cls = TypedSQLiteStore

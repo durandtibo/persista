@@ -11,7 +11,7 @@ __all__ = [
     "TypedSQLiteRecordStoreFactory",
 ]
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from coola.display import MultilineDisplayMixin
 
@@ -28,7 +28,84 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-class DuckDBRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
+class _UntypedRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
+    r"""Base class for a record store factory building an untyped
+    (JSON-metadata) SQL-backed record store on each call.
+
+    Subclasses only need to set ``_record_store_cls`` to the record
+    store class to build (e.g. :class:`DuckDBRecordStore`).
+
+    Args:
+        database: The path to the database file, or ``":memory:"``
+            for an in-memory database.
+        **kwargs: Additional keyword arguments passed to
+            ``_record_store_cls``.
+    """
+
+    _record_store_cls: ClassVar[Any]
+
+    def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
+        self._database = database
+        self._kwargs = kwargs
+
+    def make_record_store(self) -> Any:
+        return self._record_store_cls(self._database, **self._kwargs)
+
+    def _get_repr_kwargs(self) -> dict[str, Any]:
+        # `database` is listed last so it always reflects the actual
+        # value passed to the underlying store, even if `self._kwargs`
+        # happens to contain a `database` key of its own.
+        return {**self._kwargs, "database": self._database}
+
+
+class _TypedRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
+    r"""Base class for a record store factory building a typed
+    (per-field SQL column) SQL-backed record store on each call.
+
+    Subclasses only need to set ``_record_store_cls`` to the record
+    store class to build (e.g. :class:`TypedDuckDBRecordStore`).
+
+    Args:
+        database: The path to the database file, or ``":memory:"``
+            for an in-memory database.
+        metadata_schema: A mapping from metadata field name to its SQL
+            column type declaration (e.g. ``{"author": "TEXT"}``).
+            ``None`` is equivalent to an empty mapping, i.e. no
+            metadata columns beyond the JSON overflow column.
+        **kwargs: Additional keyword arguments passed to
+            ``_record_store_cls``.
+    """
+
+    _record_store_cls: ClassVar[Any]
+
+    def __init__(
+        self,
+        database: Path | str = ":memory:",
+        metadata_schema: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self._database = database
+        self._metadata_schema = metadata_schema
+        self._kwargs = kwargs
+
+    def make_record_store(self) -> Any:
+        return self._record_store_cls(
+            self._database, metadata_schema=self._metadata_schema, **self._kwargs
+        )
+
+    def _get_repr_kwargs(self) -> dict[str, Any]:
+        # `database`/`metadata_schema` are listed last so they always
+        # reflect the actual values passed to the underlying store,
+        # even if `self._kwargs` happens to contain keys of its own
+        # with those names.
+        return {
+            **self._kwargs,
+            "database": self._database,
+            "metadata_schema": self._metadata_schema,
+        }
+
+
+class DuckDBRecordStoreFactory(_UntypedRecordStoreFactory):
     r"""Implement a record store factory that builds a new
     :class:`~persista.record.store.DuckDBRecordStore` on each call.
 
@@ -47,18 +124,13 @@ class DuckDBRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
         ```
     """
 
-    def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
-        self._database = database
-        self._kwargs = kwargs
+    _record_store_cls = DuckDBRecordStore
 
     def make_record_store(self) -> DuckDBRecordStore:
-        return DuckDBRecordStore(self._database, **self._kwargs)
-
-    def _get_repr_kwargs(self) -> dict[str, Any]:
-        return {"database": self._database} | self._kwargs
+        return super().make_record_store()
 
 
-class TypedDuckDBRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
+class TypedDuckDBRecordStoreFactory(_TypedRecordStoreFactory):
     r"""Implement a record store factory that builds a new
     :class:`~persista.record.store.TypedDuckDBRecordStore` on each
     call.
@@ -82,26 +154,10 @@ class TypedDuckDBRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixi
         ```
     """
 
-    def __init__(
-        self,
-        database: Path | str = ":memory:",
-        metadata_schema: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        self._database = database
-        self._metadata_schema = metadata_schema
-        self._kwargs = kwargs
+    _record_store_cls = TypedDuckDBRecordStore
 
     def make_record_store(self) -> TypedDuckDBRecordStore:
-        return TypedDuckDBRecordStore(
-            self._database, metadata_schema=self._metadata_schema, **self._kwargs
-        )
-
-    def _get_repr_kwargs(self) -> dict[str, Any]:
-        return {
-            "database": self._database,
-            "metadata_schema": self._metadata_schema,
-        } | self._kwargs
+        return super().make_record_store()
 
 
 class InMemoryRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
@@ -124,7 +180,7 @@ class InMemoryRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
         return {}
 
 
-class SQLiteRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
+class SQLiteRecordStoreFactory(_UntypedRecordStoreFactory):
     r"""Implement a record store factory that builds a new
     :class:`~persista.record.store.SQLiteRecordStore` on each call.
 
@@ -143,18 +199,13 @@ class SQLiteRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
         ```
     """
 
-    def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
-        self._database = database
-        self._kwargs = kwargs
+    _record_store_cls = SQLiteRecordStore
 
     def make_record_store(self) -> SQLiteRecordStore:
-        return SQLiteRecordStore(self._database, **self._kwargs)
-
-    def _get_repr_kwargs(self) -> dict[str, Any]:
-        return {"database": self._database} | self._kwargs
+        return super().make_record_store()
 
 
-class TypedSQLiteRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
+class TypedSQLiteRecordStoreFactory(_TypedRecordStoreFactory):
     r"""Implement a record store factory that builds a new
     :class:`~persista.record.store.TypedSQLiteRecordStore` on each
     call.
@@ -178,23 +229,7 @@ class TypedSQLiteRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixi
         ```
     """
 
-    def __init__(
-        self,
-        database: Path | str = ":memory:",
-        metadata_schema: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        self._database = database
-        self._metadata_schema = metadata_schema
-        self._kwargs = kwargs
+    _record_store_cls = TypedSQLiteRecordStore
 
     def make_record_store(self) -> TypedSQLiteRecordStore:
-        return TypedSQLiteRecordStore(
-            self._database, metadata_schema=self._metadata_schema, **self._kwargs
-        )
-
-    def _get_repr_kwargs(self) -> dict[str, Any]:
-        return {
-            "database": self._database,
-            "metadata_schema": self._metadata_schema,
-        } | self._kwargs
+        return super().make_record_store()

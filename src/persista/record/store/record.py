@@ -91,6 +91,18 @@ class RecordStore(BaseRecordStore, MultilineDisplayMixin):
         ]
 
     def filter(self, **metadata_filters: Any) -> list[Record]:
+        """See :meth:`BaseRecordStore.filter`.
+
+        Note:
+            This always performs a full scan of the underlying store
+            (via :meth:`~persista.store.BaseStore.iter_batches`) and
+            filters records in Python, regardless of the underlying
+            store's own query capabilities. In particular, for
+            ``Typed*RecordStore`` variants whose metadata fields are
+            stored as their own SQL columns, this does not push
+            ``metadata_filters`` down to a SQL ``WHERE`` clause, so a
+            filtered call is no cheaper than fetching every record.
+        """
         records = []
         for batch in self._store.iter_batches():
             for record_id, value in batch.items():
@@ -100,6 +112,8 @@ class RecordStore(BaseRecordStore, MultilineDisplayMixin):
         return records
 
     async def afilter(self, **metadata_filters: Any) -> list[Record]:
+        """Async equivalent of :meth:`filter`; see its Note about the
+        full-scan performance characteristics."""
         records = []
         async for batch in self._store.aiter_batches():
             for record_id, value in batch.items():

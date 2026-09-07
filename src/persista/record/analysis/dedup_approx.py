@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from coola.utils.bloom_filter import BloomFilter
 
-from persista.record.analysis._hashing import hash_metadata
+from persista.record.hashing import hash_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

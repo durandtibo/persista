@@ -6,7 +6,7 @@ __all__ = ["find_duplicate_record_ids"]
 
 from typing import TYPE_CHECKING, Any
 
-from persista.record.analysis._hashing import hash_metadata
+from persista.record.hashing import hash_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
