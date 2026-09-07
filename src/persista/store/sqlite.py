@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from coola.display import MultilineDisplayMixin
 from coola.utils.path import sanitize_path
 
-from persista.store._async_close import close_async_connection_from_sync
+from persista.store.async_close import close_async_connection_from_sync
 from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (

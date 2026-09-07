@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from persista.store._async_close import close_async_connection_from_sync
+from persista.store.async_close import close_async_connection_from_sync
 
 
 class _FakeAsyncConn:
