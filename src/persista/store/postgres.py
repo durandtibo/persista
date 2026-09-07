@@ -569,11 +569,7 @@ class PostgresStore(BasePostgresStore):
     """
 
     def _create_table_sql(self) -> sql.Composed:
-        query = """CREATE TABLE IF NOT EXISTS {table} ( key TEXT
-                       PRIMARY KEY,
-
-                       value JSONB NOT NULL )
-                       """
+        query = "CREATE TABLE IF NOT EXISTS {table} ( key TEXT PRIMARY KEY, value JSONB NOT NULL )"
         return sql.SQL(query).format(table=self._table_ident)
 
     def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
