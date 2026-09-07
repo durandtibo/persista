@@ -15,6 +15,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
+from persista.store._async_close import close_async_connection_from_sync
 from persista.store.base import BaseStore
 from persista.store.validation import (
     aresolve_conflicts,
@@ -160,28 +161,8 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
 
     def close(self) -> None:
         if self._aconn is not None:
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                try:
-                    asyncio.run(self._aconn.close())
-                except RuntimeError:
-                    # The event loop that owned the async connection (e.g. a
-                    # per-test loop managed by pytest-asyncio) is already
-                    # closed, so the underlying transport is already gone;
-                    # there is nothing more to clean up.
-                    logger.debug(
-                        "Async Postgres connection for table %s could not be closed "
-                        "cleanly because its event loop is already closed",
-                        self._table,
-                    )
-                self._aconn = None
-            else:
-                msg = (
-                    "An async Postgres connection is open and close() was called from "
-                    "inside a running event loop; use `await store.aclose()` instead."
-                )
-                raise RuntimeError(msg)
+            close_async_connection_from_sync(self._aconn, resource_label="Postgres")
+            self._aconn = None
         if self._closed:
             return
         logger.info("Closing Postgres connection for table %s", self._table)
@@ -318,17 +299,29 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
 
     @staticmethod
     def _lock_keys(conn: psycopg.Connection, items: Mapping[str, dict[str, Any]]) -> None:
+        # Lock keys in a canonical (sorted) order and in a single round
+        # trip: acquiring one advisory lock per key in a loop would mean
+        # one network round trip per key, and if two concurrent
+        # set_many() calls touch overlapping keys in different orders,
+        # Postgres's deadlock detector would have to step in and abort
+        # one of them.
         with conn.cursor() as cur:
-            for key in items:
-                cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(k, 0)) "
+                "FROM unnest(%s::text[]) AS k ORDER BY k",
+                (sorted(items),),
+            )
 
     @staticmethod
     async def _alock_keys(
         conn: psycopg.AsyncConnection, items: Mapping[str, dict[str, Any]]
     ) -> None:
         async with conn.cursor() as cur:
-            for key in items:
-                await cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
+            await cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(k, 0)) "
+                "FROM unnest(%s::text[]) AS k ORDER BY k",
+                (sorted(items),),
+            )
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         self._check_open()

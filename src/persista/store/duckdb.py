@@ -107,11 +107,42 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         """Write key-value pairs to the store, overwriting any existing
         values for the same keys."""
 
+    @abstractmethod
+    def _filter_expr(self, field: str) -> str:
+        """Build the SQL expression that reads ``field`` from a stored
+        value, for use in a :meth:`filter` ``WHERE`` clause.
+
+        Must validate ``field`` (e.g. via :func:`validate_field_name`)
+        before interpolating it into SQL, unless ``field`` is a known,
+        already-validated schema column name.
+        """
+
     def _select_sql(self, where: str = "") -> str:
-        sql = f"SELECT {', '.join(self._select_columns())} FROM store"  # noqa: S608
+        columns = ", ".join(f'"{name}"' for name in self._select_columns())
+        sql = f"SELECT {columns} FROM store"  # noqa: S608
         if where:
             sql += f" WHERE {where}"
         return sql
+
+    def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        self._check_open()
+        if not field_filters:
+            with self._lock:
+                rows = self._conn.execute(self._select_sql()).fetchall()
+            return [self._row_to_kv(row)[1] for row in rows]
+
+        conditions, values = [], []
+        for field, expected in field_filters.items():
+            expr = self._filter_expr(field)
+            if expected is None:
+                conditions.append(f"{expr} IS NULL")
+            else:
+                conditions.append(f"{expr} = ?")
+                values.append(expected)
+        where = " AND ".join(conditions)
+        with self._lock:
+            rows = self._conn.execute(self._select_sql(where), values).fetchall()
+        return [self._row_to_kv(row)[1] for row in rows]
 
     def _check_open(self) -> None:
         if self._closed:
@@ -381,30 +412,9 @@ class DuckDBStore(BaseDuckDBStore):
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
-    def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
-        self._check_open()
-        if not field_filters:
-            with self._lock:
-                rows = self._conn.execute("SELECT value FROM store").fetchall()
-            return [json.loads(value) for (value,) in rows]
-
-        for key in field_filters:
-            validate_field_name(key)
-        conditions, values = [], []
-        for key, expected in field_filters.items():
-            expr = f"json_extract_string(value, '$.{key}')"
-            if expected is None:
-                conditions.append(f"{expr} IS NULL")
-            else:
-                conditions.append(f"{expr} = ?")
-                values.append(expected)
-        where = " AND ".join(conditions)
-        with self._lock:
-            rows = self._conn.execute(
-                f"SELECT value FROM store WHERE {where}",  # noqa: S608
-                values,
-            ).fetchall()
-        return [json.loads(value) for (value,) in rows]
+    def _filter_expr(self, field: str) -> str:
+        validate_field_name(field)
+        return f"json_extract_string(value, '$.{field}')"
 
 
 _KEY_COLUMN = "_KEY_"
@@ -511,32 +521,16 @@ class TypedDuckDBStore(BaseDuckDBStore):
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
-    def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
-        self._check_open()
-        if not field_filters:
-            with self._lock:
-                rows = self._conn.execute("SELECT * FROM store").fetchall()
-            return [self._row_to_value(row) for row in rows]
-
-        conditions, values = [], []
-        for key, expected in field_filters.items():
-            expr = key if key in self._schema else None
-            if expr is None:
-                validate_field_name(key)
-                expr = f"json_extract_string(extra, '$.{key}')"
-            if expected is None:
-                conditions.append(f"{expr} IS NULL")
-            else:
-                conditions.append(f"{expr} = ?")
-                values.append(expected)
-
-        where = " AND ".join(conditions)
-        with self._lock:
-            rows = self._conn.execute(
-                f"SELECT * FROM store WHERE {where}",  # noqa: S608
-                values,
-            ).fetchall()
-        return [self._row_to_value(row) for row in rows]
+    def _filter_expr(self, field: str) -> str:
+        if field in self._schema:
+            # A schema column name, already validated (as a valid,
+            # non-reserved identifier) by validate_value_schema() in
+            # __init__; quoted defensively so a value_schema field that
+            # happens to collide with a DuckDB reserved word (e.g.
+            # "order") still produces valid SQL.
+            return f'"{field}"'
+        validate_field_name(field)
+        return f"json_extract_string(extra, '$.{field}')"
 
     # ---------------------------------------------------------------------------
     # Private helpers
@@ -544,7 +538,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
 
     def _build_create_table(self) -> str:
         """Build the CREATE TABLE statement from the schema."""
-        typed_cols = "".join(f", {name} {dtype}" for name, dtype in self._schema.items())
+        typed_cols = "".join(f', "{name}" {dtype}' for name, dtype in self._schema.items())
         return (
             f"CREATE TABLE IF NOT EXISTS store "
             f"({_KEY_COLUMN} VARCHAR PRIMARY KEY{typed_cols}, extra JSON)"
@@ -553,8 +547,9 @@ class TypedDuckDBStore(BaseDuckDBStore):
     def _build_insert(self) -> str:
         """Build the INSERT OR REPLACE statement from the schema."""
         col_names = [_KEY_COLUMN, *self._schema.keys(), "extra"]
+        quoted = ", ".join(f'"{name}"' for name in col_names)
         placeholders = ", ".join("?" * len(col_names))
-        return f"INSERT OR REPLACE INTO store ({', '.join(col_names)}) VALUES ({placeholders})"  # noqa: S608
+        return f"INSERT OR REPLACE INTO store ({quoted}) VALUES ({placeholders})"  # noqa: S608
 
     def _value_to_row(self, key: str, value: dict[str, Any]) -> tuple:
         """Convert a key-value pair to an INSERT row tuple."""

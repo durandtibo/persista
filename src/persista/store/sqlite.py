@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from coola.display import MultilineDisplayMixin
 from coola.utils.path import sanitize_path
 
+from persista.store._async_close import close_async_connection_from_sync
 from persista.store.base import BaseStore
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
@@ -324,18 +325,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
 
         Must only be called when no event loop is currently running.
         """
-        try:
-            asyncio.run(self._aconn.close())
-        except RuntimeError:
-            # The event loop that owned the async connection (e.g. a
-            # per-test loop managed by pytest-asyncio) is already
-            # closed, so the underlying connection is already gone;
-            # there is nothing more to clean up.
-            logger.debug(
-                "Async SQLite connection for %s could not be closed "
-                "cleanly because its event loop is already closed",
-                self._database,
-            )
+        close_async_connection_from_sync(self._aconn, resource_label="SQLite")
         self._aconn = None
 
     def close(self) -> None:

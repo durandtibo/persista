@@ -242,6 +242,67 @@ async def test_aset_many_reserved_key_raises(store: BaseRedisStore) -> None:
         await store.aset_many({"1": {"x": 1}, "__keys__": {"x": 2}})
 
 
+def test_get_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.get("__keys__")
+
+
+def test_get_many_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.get_many(["1", "__keys__"])
+
+
+def test_contains_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.contains("__keys__")
+
+
+def test_contains_many_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.contains_many(["1", "__keys__"])
+
+
+def test_delete_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.delete("__keys__")
+
+
+def test_delete_many_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.delete_many(["1", "__keys__"])
+
+
+def test_delete_reserved_key_does_not_corrupt_store(store: BaseRedisStore) -> None:
+    """Before the guard, delete("__keys__") would silently wipe the
+    internal keys-tracking set, breaking keys()/count()/contains_many()
+    for the whole store."""
+    store.set("a", {"x": 1})
+    with pytest.raises(ValueError, match=r"__keys__"):
+        store.delete("__keys__")
+    assert store.count() == 1
+    assert list(store.keys()) == ["a"]
+
+
+async def test_adelete_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        await store.adelete("__keys__")
+
+
+async def test_adelete_many_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        await store.adelete_many(["1", "__keys__"])
+
+
+async def test_aget_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        await store.aget("__keys__")
+
+
+async def test_acontains_reserved_key_raises(store: BaseRedisStore) -> None:
+    with pytest.raises(ValueError, match=r"__keys__"):
+        await store.acontains("__keys__")
+
+
 # --- concurrency ---
 
 

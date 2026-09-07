@@ -63,7 +63,10 @@ _COL_ALL_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)"$')
 _STAR_RE = re.compile(r'^SELECT \* FROM "(\w+)"(?: WHERE (.+))?$')
 _TEXT_COND_RE = re.compile(r"^(?:value|extra)->>'([^']+)' = %s::text$")
 _COL_COND_RE = re.compile(r'^"([^"]+)" = %s$')
-_ADVISORY_LOCK_RE = re.compile(r"^SELECT pg_advisory_xact_lock\(hashtextextended\(%s, 0\)\)$")
+_ADVISORY_LOCK_RE = re.compile(
+    r"^SELECT pg_advisory_xact_lock\(hashtextextended\(k, 0\)\) "
+    r"FROM unnest\(%s::text\[\]\) AS k ORDER BY k$"
+)
 
 
 class FakeCursor:
@@ -155,9 +158,11 @@ class FakeConnection:
         if _ADVISORY_LOCK_RE.match(text):
             # No real locking needed against this single-threaded fake;
             # just acknowledge the call the same way a real server would
-            # return a row, and record which key was locked.
-            self.advisory_locked_keys.append(params[0])
-            return [(None,)]
+            # return one row per locked key, and record which keys were
+            # locked (params[0] is the sorted array of keys).
+            keys = list(params[0])
+            self.advisory_locked_keys.extend(keys)
+            return [(None,)] * len(keys)
         if m := _COUNT_RE.match(text):
             return [(len(self.tables.get(m.group(1), {})),)]
         if m := _EXISTS_RE.match(text):
@@ -584,6 +589,36 @@ def test_set_many_on_conflict_takes_advisory_lock_per_key(store: BasePostgresSto
     conn.advisory_locked_keys.clear()
     store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
     assert set(conn.advisory_locked_keys) == {"1", "2"}
+
+
+def test_set_many_on_conflict_locks_keys_in_sorted_order(store: BasePostgresStore) -> None:
+    """Keys must be advisory-locked in a canonical (sorted) order,
+    regardless of the input dict's iteration order, so two concurrent
+    set_many() calls touching overlapping keys can't lock them in
+    reversed orders and trigger Postgres's deadlock detector."""
+    conn = store._conn
+    conn.advisory_locked_keys.clear()
+    store.set_many({"3": {"x": 1}, "1": {"x": 2}, "2": {"x": 3}}, on_conflict="skip")
+    assert conn.advisory_locked_keys == ["1", "2", "3"]
+
+
+def test_set_many_on_conflict_takes_advisory_lock_in_single_round_trip(
+    store: BasePostgresStore,
+) -> None:
+    """Locking must be a single batched query, not one round trip per
+    key, to avoid an N+1 pattern for large set_many() calls."""
+    conn = store._conn
+    calls = []
+    original_dispatch_read = conn.dispatch_read
+
+    def counting_dispatch_read(text: str, params: tuple) -> list[tuple]:
+        if _ADVISORY_LOCK_RE.match(text):
+            calls.append(text)
+        return original_dispatch_read(text, params)
+
+    conn.dispatch_read = counting_dispatch_read
+    store.set_many({"1": {"x": 1}, "2": {"x": 2}, "3": {"x": 3}}, on_conflict="skip")
+    assert len(calls) == 1
 
 
 def test_set_many_on_conflict_overwrite_does_not_take_advisory_lock(

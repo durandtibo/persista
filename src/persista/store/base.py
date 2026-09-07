@@ -55,6 +55,15 @@ class BaseStore(ABC):
     store has been opened, either explicitly or via the context
     manager.
 
+    No implementation supports a per-key time-to-live (TTL): a value
+    written with :meth:`set`/:meth:`set_many` persists until it is
+    explicitly deleted or the store is cleared, even on a backend that
+    natively supports expiry (e.g. Redis's ``EX``/``PX``). This is
+    intentional -- persista is meant for durable storage, not caching
+    -- so build TTL/expiry on top of a store (e.g. an ``expires_at``
+    value field checked by the caller) rather than assuming the store
+    enforces it.
+
     Example:
         ```pycon
         >>> from persista.store import InMemoryStore
