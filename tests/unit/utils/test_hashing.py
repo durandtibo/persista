@@ -1,12 +1,55 @@
 from __future__ import annotations
 
 import re
+import uuid
 
 import pytest
 
-from persista.utils.hashing import hash_dict_uuid
+from persista.utils.hashing import _NAMESPACE, canonicalize_dict, hash_dict_uuid
 
 UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+####################################
+#     Tests for canonicalize_dict   #
+####################################
+
+
+def test_canonicalize_dict_returns_str() -> None:
+    assert isinstance(canonicalize_dict({"key": "value"}), str)
+
+
+def test_canonicalize_dict_sorts_keys() -> None:
+    assert canonicalize_dict({"b": 1, "a": 2}) == canonicalize_dict({"a": 2, "b": 1})
+
+
+def test_canonicalize_dict_uses_compact_separators() -> None:
+    assert canonicalize_dict({"a": 1, "b": 2}) == '{"a":1,"b":2}'
+
+
+def test_canonicalize_dict_empty_dict() -> None:
+    assert canonicalize_dict({}) == "{}"
+
+
+def test_canonicalize_dict_different_dicts_different_output() -> None:
+    assert canonicalize_dict({"a": 1}) != canonicalize_dict({"a": 2})
+
+
+def test_canonicalize_dict_non_serializable_raises_without_default() -> None:
+    with pytest.raises(TypeError, match=r"Object of type object is not JSON serializable"):
+        canonicalize_dict({"obj": object()})
+
+
+def test_canonicalize_dict_non_serializable_uses_default() -> None:
+    assert canonicalize_dict({"obj": object()}, default=str) is not None
+
+
+def test_canonicalize_dict_default_is_applied() -> None:
+    class Foo:
+        def __str__(self) -> str:
+            return "foo!"
+
+    assert canonicalize_dict({"x": Foo()}, default=str) == '{"x":"foo!"}'
 
 
 ###################################
@@ -72,3 +115,11 @@ def test_hash_dict_uuid_boolean_values() -> None:
 def test_hash_dict_uuid_non_serialisable_raises() -> None:
     with pytest.raises(TypeError, match=r"Object of type object is not JSON serializable"):
         hash_dict_uuid({"obj": object()})
+
+
+def test_hash_dict_uuid_matches_uuid5_of_canonicalize_dict() -> None:
+    # hash_dict_uuid is defined as uuid5 of canonicalize_dict's output under a
+    # fixed namespace - this pins that relationship so the two helpers cannot
+    # silently drift apart from each other.
+    data = {"source": "cats.txt", "page": 1}
+    assert hash_dict_uuid(data) == str(uuid.uuid5(_NAMESPACE, canonicalize_dict(data)))

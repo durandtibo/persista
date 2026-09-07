@@ -6,7 +6,7 @@ __all__ = ["find_duplicate_record_ids"]
 
 from typing import TYPE_CHECKING, Any
 
-from persista.record.hashing import hash_metadata
+from coola.hashing import hash_object
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -21,7 +21,11 @@ def find_duplicate_record_ids(records: Iterable[Record]) -> list[list[Any]]:
     or other iterables whose full contents cannot fit in memory. Only a
     hash of each record's metadata is retained (rather than the full
     metadata itself), making this more memory-efficient for large
-    corpora.
+    corpora. The hash is computed via
+    :func:`coola.hashing.hash_object` with ``ignore_unhashable=True``,
+    so metadata containing values with no registered hasher is
+    tolerated (grouped by a deterministic placeholder) rather than
+    raising.
 
     Args:
         records: A list, generator, or other iterable of
@@ -56,8 +60,8 @@ def find_duplicate_record_ids(records: Iterable[Record]) -> list[list[Any]]:
         suited to corpora too large for the exact hash groups above to
         fit in memory.
     """
-    groups: dict[bytes, list[Any]] = {}
+    groups: dict[str, list[Any]] = {}
     for record in records:
-        metadata_hash = hash_metadata(record.metadata)
+        metadata_hash = hash_object(dict(record.metadata), ignore_unhashable=True)
         groups.setdefault(metadata_hash, []).append(record.id)
     return [group for group in groups.values() if len(group) > 1]

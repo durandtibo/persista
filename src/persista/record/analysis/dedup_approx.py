@@ -7,9 +7,8 @@ __all__ = ["count_approx_duplicate_records"]
 
 from typing import TYPE_CHECKING
 
+from coola.hashing import hash_object
 from coola.utils.bloom_filter import BloomFilter
-
-from persista.record.hashing import hash_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -32,7 +31,10 @@ def count_approx_duplicate_records(
     from ``expected_record_count`` and does not grow with the number of
     records processed, at the cost of a tunable false-positive rate: a
     record may occasionally be counted as a duplicate when it is not,
-    but a true duplicate is never missed.
+    but a true duplicate is never missed. The hash fed to the Bloom
+    filter is computed via :func:`coola.hashing.hash_object` with
+    ``ignore_unhashable=True``, so metadata containing values with no
+    registered hasher is tolerated rather than raising.
 
     Args:
         records: A list, generator, or other iterable of
@@ -77,7 +79,7 @@ def count_approx_duplicate_records(
     bloom = BloomFilter(expected_items=expected_record_count, fp_rate=fp_rate)
     duplicate_count = 0
     for record in records:
-        metadata_hash = hash_metadata(record.metadata)
-        if bloom.add_and_check(metadata_hash):
+        metadata_hash = hash_object(dict(record.metadata), ignore_unhashable=True)
+        if bloom.add_and_check(metadata_hash.encode("ascii")):
             duplicate_count += 1
     return duplicate_count
