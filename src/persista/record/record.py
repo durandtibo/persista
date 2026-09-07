@@ -46,6 +46,13 @@ class Record:
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
+    def __repr__(self) -> str:
+        # Defined explicitly (rather than relying on the dataclass-
+        # generated __repr__) so ``metadata`` renders as a plain dict
+        # (e.g. ``{'a': 1}``) instead of the ``MappingProxyType`` repr
+        # (``mappingproxy({'a': 1})``).
+        return f"{type(self).__name__}(id={self.id!r}, metadata={dict(self.metadata)!r})"
+
     @classmethod
     def from_metadata(cls, metadata: dict[str, Any]) -> Record:
         """Construct a :class:`Record` from a metadata dict.
@@ -70,7 +77,7 @@ class Record:
             >>> record = Record.from_metadata({"source": "cats.txt", "page": 1})
             >>> record.id  # doctest: +ELLIPSIS
             '...'
-            >>> record.metadata
+            >>> dict(record.metadata)
             {'source': 'cats.txt', 'page': 1}
 
             ```

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from persista.record import Record
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 from persista.record.analysis import find_orphan_references
 
 ########################################
@@ -58,7 +63,7 @@ def test_find_orphan_references_accepts_single_use_generator() -> None:
     """A single-use generator must work, not just a re-iterable list -
     the two-pass implementation materializes it internally."""
 
-    def gen():
+    def gen() -> Iterator[Record]:
         yield Record(id="doc1", metadata={})
         yield Record(id="chunk1", metadata={"parent_id": "missing"})
 

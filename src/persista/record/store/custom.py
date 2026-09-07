@@ -50,8 +50,8 @@ class _UntypedRecordStore(RecordStore):
 
 class _TypedRecordStore(RecordStore):
     r"""Base class for a :class:`~persista.record.store.RecordStore`
-    backed by a SQL database, with each record metadata field stored
-    as its own typed SQL column.
+    backed by a SQL database, with each record metadata field stored as
+    its own typed SQL column.
 
     Subclasses only need to set ``_store_cls`` to the underlying typed
     SQL store class (e.g. :class:`persista.store.TypedDuckDBStore`).

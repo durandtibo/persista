@@ -29,8 +29,8 @@ if TYPE_CHECKING:
 
 
 class _UntypedRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
-    r"""Base class for a record store factory building an untyped
-    (JSON-metadata) SQL-backed record store on each call.
+    r"""Base class for a record store factory building an untyped (JSON-
+    metadata) SQL-backed record store on each call.
 
     Subclasses only need to set ``_record_store_cls`` to the record
     store class to build (e.g. :class:`DuckDBRecordStore`).
@@ -59,8 +59,8 @@ class _UntypedRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
 
 
 class _TypedRecordStoreFactory(BaseRecordStoreFactory, MultilineDisplayMixin):
-    r"""Base class for a record store factory building a typed
-    (per-field SQL column) SQL-backed record store on each call.
+    r"""Base class for a record store factory building a typed (per-field
+    SQL column) SQL-backed record store on each call.
 
     Subclasses only need to set ``_record_store_cls`` to the record
     store class to build (e.g. :class:`TypedDuckDBRecordStore`).
