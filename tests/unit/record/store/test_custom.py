@@ -13,6 +13,7 @@ from persista.record.store import (
     TypedDuckDBRecordStore,
     TypedSQLiteRecordStore,
 )
+from persista.testing.fixtures import duckdb_available
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -48,15 +49,18 @@ def duckdb_store() -> Generator[DuckDBRecordStore, None, None]:
         yield store
 
 
+@duckdb_available
 def test_duckdb_record_store_is_record_store(duckdb_store: DuckDBRecordStore) -> None:
     assert isinstance(duckdb_store, RecordStore)
 
 
+@duckdb_available
 def test_duckdb_record_store_round_trip(duckdb_store: DuckDBRecordStore) -> None:
     duckdb_store.set_many([Record(id="1", metadata={"author": "Alice"})])
     assert duckdb_store.get("1") == Record(id="1", metadata={"author": "Alice"})
 
 
+@duckdb_available
 def test_duckdb_record_store_filter(duckdb_store: DuckDBRecordStore) -> None:
     duckdb_store.set_many(
         [
@@ -73,17 +77,20 @@ def test_duckdb_record_store_filter(duckdb_store: DuckDBRecordStore) -> None:
 ########################################
 
 
+@duckdb_available
 def test_typed_duckdb_record_store_is_record_store() -> None:
     with TypedDuckDBRecordStore(metadata_schema={"author": "TEXT"}) as store:
         assert isinstance(store, RecordStore)
 
 
+@duckdb_available
 def test_typed_duckdb_record_store_round_trip() -> None:
     with TypedDuckDBRecordStore(metadata_schema={"author": "TEXT"}) as store:
         store.set_many([Record(id="1", metadata={"author": "Alice"})])
         assert store.get("1") == Record(id="1", metadata={"author": "Alice"})
 
 
+@duckdb_available
 def test_typed_duckdb_record_store_filter_on_typed_column() -> None:
     with TypedDuckDBRecordStore(metadata_schema={"author": "TEXT"}) as store:
         store.set_many(
@@ -96,6 +103,7 @@ def test_typed_duckdb_record_store_filter_on_typed_column() -> None:
         assert result == [Record(id="1", metadata={"author": "Alice"})]
 
 
+@duckdb_available
 def test_typed_duckdb_record_store_default_schema_is_empty() -> None:
     with TypedDuckDBRecordStore() as store:
         store.set_many([Record(id="1", metadata={"author": "Alice"})])
