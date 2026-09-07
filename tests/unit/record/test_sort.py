@@ -144,3 +144,24 @@ def test_sort_by_metadata_reverse_missing_still_last() -> None:
     ]
     result = sort_by_metadata(records, "source", reverse=True)
     assert result[-1].id == "x"
+
+
+def test_sort_by_metadata_multiple_missing_preserve_relative_order() -> None:
+    """Records missing the key are not re-sorted among themselves; they
+    keep their original relative order at the end of the result."""
+    records = [
+        Record(id="x2"),
+        Record(id="a", metadata={"source": "a.txt"}),
+        Record(id="x1"),
+    ]
+    result = sort_by_metadata(records, "source")
+    assert [r.id for r in result] == ["a", "x2", "x1"]
+
+
+def test_sort_by_metadata_incomparable_types_raises() -> None:
+    records = [
+        Record(id="a", metadata={"page": 1}),
+        Record(id="b", metadata={"page": "not-a-number"}),
+    ]
+    with pytest.raises(TypeError):
+        sort_by_metadata(records, "page")
