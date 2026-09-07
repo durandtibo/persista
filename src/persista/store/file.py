@@ -60,6 +60,9 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             underlying ``iden.io`` save function.
     """
 
+    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
+    scheme: str
+
     def __init__(self, path: str | PathLike[str], **kwargs: Any) -> None:
         if not self.extension:
             msg = (
@@ -84,10 +87,6 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     @abstractmethod
     def extension(self) -> str:
         """File extension (including the dot) used for value files."""
-        ...
-
-    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
-    scheme: str
 
     @abstractmethod
     def _save(self, path: Path, value: dict[str, Any]) -> None:
