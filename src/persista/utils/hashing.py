@@ -17,6 +17,62 @@ if TYPE_CHECKING:
 _NAMESPACE = uuid.UUID("21e6c43e-bc36-4f09-8e20-98201adab5df")
 
 
+def _stringify_key(key: Any) -> str:
+    """Render a mapping key the way :func:`json.dumps` would.
+
+    ``json.dumps`` happily coerces non-string keys (``None``, ``bool``,
+    ``int``, ``float``) to their JSON string form, but ``sort_keys=True``
+    sorts the *original* keys before that coercion happens - so a dict
+    mixing key types (e.g. ``{"a": 1, 2: "b"}``) raises a raw
+    ``TypeError: '<' not supported between instances of ...`` instead of
+    producing a canonical form. Normalising keys to strings ourselves
+    first, before sorting, avoids that crash for any dict whose keys
+    ``json.dumps`` would otherwise accept.
+
+    Args:
+        key: The mapping key to render.
+
+    Returns:
+        The JSON string form of ``key``.
+
+    Raises:
+        TypeError: If ``key`` is of a type ``json.dumps`` would also
+            reject as a mapping key.
+    """
+    if isinstance(key, str):
+        return key
+    if key is None or isinstance(key, (bool, int, float)):
+        # ``bool`` is an ``int`` subclass, so this also covers True/False,
+        # matching how ``json.dumps`` stringifies them ("true"/"false").
+        return json.dumps(key)
+    msg = f"keys must be str, int, float, bool or None, not {type(key).__name__}"
+    raise TypeError(msg)
+
+
+def _normalize(obj: Any) -> Any:
+    """Recursively coerce mapping keys to strings ahead of
+    serialisation.
+
+    Walks ``dict`` and ``list``/``tuple`` containers so every nested
+    mapping - not just the top-level one - has string keys before
+    ``json.dumps(..., sort_keys=True)`` runs, avoiding the mixed-key-type
+    crash described in :func:`_stringify_key`. Leaf values are passed
+    through unchanged; unserialisable leaves are still reported by
+    ``json.dumps`` itself (optionally via its ``default`` callback).
+
+    Args:
+        obj: The value to normalize.
+
+    Returns:
+        An equivalent structure with all mapping keys as strings.
+    """
+    if isinstance(obj, dict):
+        return {_stringify_key(k): _normalize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_normalize(v) for v in obj]
+    return obj
+
+
 def canonicalize_dict(data: dict[str, Any], *, default: Callable[[Any], Any] | None = None) -> str:
     """Serialise a dictionary into a single canonical JSON string.
 
@@ -31,6 +87,12 @@ def canonicalize_dict(data: dict[str, Any], *, default: Callable[[Any], Any] | N
     calling :func:`json.dumps` directly, so all such derivations stay
     consistent with each other for the same input.
 
+    Keys are normalised to their JSON string form (recursively, for
+    nested dicts) before sorting, so dicts whose keys are ``None``,
+    ``bool``, ``int`` or ``float`` - or a mix of those with ``str`` -
+    canonicalize the same way :func:`json.dumps` would render them,
+    instead of raising a ``TypeError`` from comparing mixed key types.
+
     Args:
         data: The dictionary to canonicalize.
         default: Optional :func:`json.dumps`-style ``default``
@@ -43,9 +105,11 @@ def canonicalize_dict(data: dict[str, Any], *, default: Callable[[Any], Any] | N
 
     Raises:
         TypeError: If any value in ``data`` is not JSON-serialisable
-            and no ``default`` is given (or ``default`` itself raises).
+            and no ``default`` is given (or ``default`` itself raises),
+            or if a mapping key is of a type ``json.dumps`` would also
+            reject.
     """
-    return json.dumps(data, sort_keys=True, separators=(",", ":"), default=default)
+    return json.dumps(_normalize(data), sort_keys=True, separators=(",", ":"), default=default)
 
 
 def hash_dict_uuid(data: dict[str, Any]) -> str:
