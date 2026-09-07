@@ -18,6 +18,13 @@ class Record:
     Use :meth:`from_metadata` as the preferred constructor to
     automatically derive a stable UUID from the metadata dict.
 
+    Note:
+        Although the dataclass is declared ``frozen=True``, instances
+        are not hashable: the default ``metadata`` dict is mutable and
+        unhashable, so ``eq=True`` (the dataclass default) disables
+        the auto-generated ``__hash__``.  Use ``record.id`` as the
+        hashable identifier instead.
+
     Args:
         id: Unique identifier for the record, typically a UUID derived
             from the metadata via

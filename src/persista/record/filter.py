@@ -21,6 +21,12 @@ def filter_by_metadata(
     ``metadata_key`` with a value equal to ``value``.  Records missing
     ``metadata_key`` are excluded.
 
+    Warning:
+        Because the lookup uses ``dict.get`` with a default of
+        ``None``, calling this with ``value=None`` also matches
+        records that do not have ``metadata_key`` at all, not only
+        records whose ``metadata_key`` is explicitly set to ``None``.
+
     Args:
         records: The list of :class:`~persista.record.Record` instances to
             filter.
@@ -125,6 +131,12 @@ def filter_by_metadata_values(
     Returns a new list containing only records whose metadata contains
     ``metadata_key`` with a value that is a member of ``values``.
     Records missing ``metadata_key`` are excluded.
+
+    Warning:
+        Because the lookup uses ``dict.get`` with a default of
+        ``None``, including ``None`` in ``values`` also matches
+        records that do not have ``metadata_key`` at all, not only
+        records whose ``metadata_key`` is explicitly set to ``None``.
 
     Args:
         records: The list of :class:`~persista.record.Record` instances to

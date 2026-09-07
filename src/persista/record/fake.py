@@ -22,7 +22,7 @@ def generate_fake_records(
 ) -> list[Record]:
     """Generate synthetic Records with Faker-generated metadata.
 
-    Each record gets a unique ``id`` (``"doc-{i}"``) and metadata
+    Each record gets a unique ``id`` (``"rec-{i}"``) and metadata
     containing a fake author name and a single-word topic.
 
     Warning:
@@ -52,11 +52,11 @@ def generate_fake_records(
     Example:
         ```pycon
         >>> from persista.record.fake import generate_fake_records
-        >>> docs = generate_fake_records(n=3, seed=42)
-        >>> len(docs)
+        >>> records = generate_fake_records(n=3, seed=42)
+        >>> len(records)
         3
-        >>> [doc.id for doc in docs]
-        ['doc-0', 'doc-1', 'doc-2']
+        >>> [record.id for record in records]
+        ['rec-0', 'rec-1', 'rec-2']
 
         ```
     """
@@ -72,7 +72,7 @@ def generate_fake_records(
 
     return [
         Record(
-            id=f"doc-{i}",
+            id=f"rec-{i}",
             metadata={"author": fake.name(), "topic": fake.word()},
         )
         for i in range(n)
