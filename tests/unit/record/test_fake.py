@@ -53,7 +53,7 @@ def test_generate_fake_records_returns_record_instances() -> None:
 @faker_available
 def test_generate_fake_records_ids_are_sequential() -> None:
     records = generate_fake_records(n=3)
-    assert [r.id for r in records] == ["doc-0", "doc-1", "doc-2"]
+    assert [r.id for r in records] == ["rec-0", "rec-1", "rec-2"]
 
 
 @faker_available
