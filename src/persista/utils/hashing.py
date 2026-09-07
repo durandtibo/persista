@@ -2,11 +2,11 @@ r"""Provide UUID hashing utilities for Python dictionaries."""
 
 from __future__ import annotations
 
-__all__ = ["canonicalize_dict", "hash_dict_uuid"]
+__all__ = ["Key", "canonicalize_dict", "hash_dict_uuid"]
 
 import json
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -15,6 +15,12 @@ if TYPE_CHECKING:
 # Generated once with uuid.uuid4() and fixed here so hashes are
 # stable across runs and reproducible across environments.
 _NAMESPACE = uuid.UUID("21e6c43e-bc36-4f09-8e20-98201adab5df")
+
+# The mapping key types this module accepts - the same ones ``json.dumps``
+# accepts and coerces to strings. Public so callers can annotate dicts
+# with non-``str`` or mixed-type keys destined for :func:`canonicalize_dict`
+# or :func:`hash_dict_uuid`.
+Key = str | int | float | bool | None
 
 
 def _stringify_key(key: Any) -> str:
@@ -73,7 +79,15 @@ def _normalize(obj: Any) -> Any:
     return obj
 
 
-def canonicalize_dict(data: dict[str, Any], *, default: Callable[[Any], Any] | None = None) -> str:
+@overload
+def canonicalize_dict(
+    data: dict[str, Any], *, default: Callable[[Any], Any] | None = None
+) -> str: ...
+@overload
+def canonicalize_dict(
+    data: dict[Key, Any], *, default: Callable[[Any], Any] | None = None
+) -> str: ...
+def canonicalize_dict(data: dict[Any, Any], *, default: Callable[[Any], Any] | None = None) -> str:
     """Serialise a dictionary into a single canonical JSON string.
 
     This is the one place that defines what "the same dict" means
@@ -94,7 +108,9 @@ def canonicalize_dict(data: dict[str, Any], *, default: Callable[[Any], Any] | N
     instead of raising a ``TypeError`` from comparing mixed key types.
 
     Args:
-        data: The dictionary to canonicalize.
+        data: The dictionary to canonicalize. Keys may be ``str`` or any
+            mix of :data:`Key` types (``str``, ``int``, ``float``,
+            ``bool``, ``None``).
         default: Optional :func:`json.dumps`-style ``default``
             callback for values that are not natively JSON-serialisable.
             Left as ``None`` (the ``json.dumps`` default), a
@@ -112,7 +128,11 @@ def canonicalize_dict(data: dict[str, Any], *, default: Callable[[Any], Any] | N
     return json.dumps(_normalize(data), sort_keys=True, separators=(",", ":"), default=default)
 
 
-def hash_dict_uuid(data: dict[str, Any]) -> str:
+@overload
+def hash_dict_uuid(data: dict[str, Any], *, default: Callable[[Any], Any] | None = None) -> str: ...
+@overload
+def hash_dict_uuid(data: dict[Key, Any], *, default: Callable[[Any], Any] | None = None) -> str: ...
+def hash_dict_uuid(data: dict[Any, Any], *, default: Callable[[Any], Any] | None = None) -> str:
     """Compute a stable, reproducible UUID for a Python dictionary.
 
     Canonicalizes ``data`` via :func:`canonicalize_dict` to guarantee a
@@ -121,15 +141,23 @@ def hash_dict_uuid(data: dict[str, Any]) -> str:
     project-specific namespace.
 
     Args:
-        data: The dictionary to hash.  All values must be
-            JSON-serialisable.
+        data: The dictionary to hash. Keys may be ``str`` or any mix of
+            :data:`Key` types (``str``, ``int``, ``float``, ``bool``,
+            ``None``); values must be JSON-serialisable, unless
+            ``default`` is given.
+        default: Optional :func:`json.dumps`-style ``default`` callback
+            for values that are not natively JSON-serialisable, forwarded
+            to :func:`canonicalize_dict`. Left as ``None``, such a value
+            raises ``TypeError``.
 
     Returns:
         A lowercase UUID string of the form
         ``'xxxxxxxx-xxxx-5xxx-xxxx-xxxxxxxxxxxx'``.
 
     Raises:
-        TypeError: If any value in ``data`` is not JSON-serialisable.
+        TypeError: If any value in ``data`` is not JSON-serialisable and
+            no ``default`` is given (or ``default`` itself raises), or
+            if a mapping key is of an unsupported type.
 
     Example:
         ```pycon
@@ -143,4 +171,4 @@ def hash_dict_uuid(data: dict[str, Any]) -> str:
 
         ```
     """
-    return str(uuid.uuid5(_NAMESPACE, canonicalize_dict(data)))
+    return str(uuid.uuid5(_NAMESPACE, canonicalize_dict(data, default=default)))
