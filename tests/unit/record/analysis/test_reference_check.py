@@ -52,3 +52,14 @@ def test_find_orphan_references_empty_input() -> None:
 def test_find_orphan_references_self_reference_not_orphan() -> None:
     records = [Record(id="a", metadata={"parent_id": "a"})]
     assert find_orphan_references(records, reference_key="parent_id") == []
+
+
+def test_find_orphan_references_accepts_single_use_generator() -> None:
+    """A single-use generator must work, not just a re-iterable list -
+    the two-pass implementation materializes it internally."""
+
+    def gen():
+        yield Record(id="doc1", metadata={})
+        yield Record(id="chunk1", metadata={"parent_id": "missing"})
+
+    assert find_orphan_references(gen(), reference_key="parent_id") == ["chunk1"]

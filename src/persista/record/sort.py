@@ -64,16 +64,10 @@ def sort_by_metadata(
 
         ```
     """
-    _missing = object()
-
-    def sort_key(record: Record) -> tuple:
-        value = record.metadata.get(metadata_key, _missing)
-        return (value is _missing, value if value is not _missing else None)
-
-    if not keep_missing:
-        records = [r for r in records if metadata_key in r.metadata]
-        return sorted(records, key=sort_key, reverse=reverse)
-
     present = [r for r in records if metadata_key in r.metadata]
+    present.sort(key=lambda r: r.metadata[metadata_key], reverse=reverse)
+    if not keep_missing:
+        return present
+
     missing = [r for r in records if metadata_key not in r.metadata]
-    return sorted(present, key=sort_key, reverse=reverse) + missing
+    return present + missing

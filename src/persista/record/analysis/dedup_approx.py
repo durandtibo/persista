@@ -5,11 +5,11 @@ from __future__ import annotations
 
 __all__ = ["count_approx_duplicate_records"]
 
-import hashlib
-import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from coola.utils.bloom_filter import BloomFilter
+
+from persista.record.analysis._hashing import hash_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -77,9 +77,7 @@ def count_approx_duplicate_records(
     bloom = BloomFilter(expected_items=expected_record_count, fp_rate=fp_rate)
     duplicate_count = 0
     for record in records:
-        metadata: dict[str, Any] = record.metadata or {}
-        canonical = json.dumps(metadata, sort_keys=True, default=str).encode("utf-8")
-        metadata_hash = hashlib.sha256(canonical).digest()
+        metadata_hash = hash_metadata(record.metadata or {})
         if bloom.add_and_check(metadata_hash):
             duplicate_count += 1
     return duplicate_count
