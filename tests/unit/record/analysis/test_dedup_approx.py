@@ -71,3 +71,17 @@ def test_count_approx_duplicate_records_generator_consumed_only_once() -> None:
 def test_count_approx_duplicate_records_default_args_do_not_raise() -> None:
     records = [Record(id="a", metadata={"source": "x"})]
     assert count_approx_duplicate_records(records) == 0
+
+
+def test_count_approx_duplicate_records_unhashable_value_does_not_raise() -> None:
+    # coola.hashing.hash_object(..., ignore_unhashable=True) tolerates values
+    # with no registered hasher instead of raising.
+    class Tag:
+        def __str__(self) -> str:
+            return "custom-tag"
+
+    records = [
+        Record(id="a", metadata={"tag": Tag()}),
+        Record(id="b", metadata={"tag": Tag()}),
+    ]
+    assert count_approx_duplicate_records(records, expected_record_count=100) == 1

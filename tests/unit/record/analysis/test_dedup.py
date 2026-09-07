@@ -85,7 +85,9 @@ def test_find_duplicate_record_ids_generator_consumed_only_once() -> None:
     assert list(g) == []
 
 
-def test_find_duplicate_record_ids_non_json_serializable_value_stringified() -> None:
+def test_find_duplicate_record_ids_unhashable_value_does_not_raise() -> None:
+    # coola.hashing.hash_object(..., ignore_unhashable=True) tolerates values
+    # with no registered hasher instead of raising.
     class Tag:
         def __str__(self) -> str:
             return "custom-tag"
@@ -95,3 +97,21 @@ def test_find_duplicate_record_ids_non_json_serializable_value_stringified() -> 
         Record(id="b", metadata={"tag": Tag()}),
     ]
     assert find_duplicate_record_ids(records) == [["a", "b"]]
+
+
+def test_find_duplicate_record_ids_unhashable_values_of_different_types_not_grouped() -> None:
+    # Two distinct types with no registered hasher must not collide just
+    # because they happen to stringify the same way.
+    class Foo:
+        def __str__(self) -> str:
+            return "x"
+
+    class Bar:
+        def __str__(self) -> str:
+            return "x"
+
+    records = [
+        Record(id="a", metadata={"tag": Foo()}),
+        Record(id="b", metadata={"tag": Bar()}),
+    ]
+    assert find_duplicate_record_ids(records) == []

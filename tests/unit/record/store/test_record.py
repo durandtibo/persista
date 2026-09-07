@@ -116,6 +116,67 @@ def test_filter_no_match_returns_empty(store: RecordStore, records: list[Record]
     assert store.filter(author="Charlie") == []
 
 
+# --- afilter ---
+
+
+async def test_afilter_no_args_returns_all(store: RecordStore, records: list[Record]) -> None:
+    store.set_many(records)
+    assert len(await store.afilter()) == len(records)
+
+
+async def test_afilter_single_field(store: RecordStore, records: list[Record]) -> None:
+    store.set_many(records)
+    result = await store.afilter(author="Alice")
+    assert {r.id for r in result} == {"1", "2"}
+
+
+async def test_afilter_multiple_fields(store: RecordStore, records: list[Record]) -> None:
+    store.set_many(records)
+    result = await store.afilter(author="Bob", title="Cooking 101")
+    assert {r.id for r in result} == {"4"}
+
+
+async def test_afilter_no_match_returns_empty(store: RecordStore, records: list[Record]) -> None:
+    store.set_many(records)
+    assert await store.afilter(author="Charlie") == []
+
+
+async def test_filter_and_afilter_agree(store: RecordStore, records: list[Record]) -> None:
+    store.set_many(records)
+    sync_result = {r.id for r in store.filter(author="Bob")}
+    async_result = {r.id for r in await store.afilter(author="Bob")}
+    assert sync_result == async_result
+
+
+# --- _matches ---
+
+
+def test_matches_no_filters_always_true() -> None:
+    record = Record(id="1", metadata={"author": "Alice"})
+    assert RecordStore._matches(record, {}) is True
+
+
+def test_matches_single_field_match() -> None:
+    record = Record(id="1", metadata={"author": "Alice"})
+    assert RecordStore._matches(record, {"author": "Alice"}) is True
+
+
+def test_matches_single_field_mismatch() -> None:
+    record = Record(id="1", metadata={"author": "Alice"})
+    assert RecordStore._matches(record, {"author": "Bob"}) is False
+
+
+def test_matches_missing_key_is_mismatch() -> None:
+    record = Record(id="1", metadata={"author": "Alice"})
+    assert RecordStore._matches(record, {"title": "Intro"}) is False
+
+
+def test_matches_all_fields_must_match() -> None:
+    record = Record(id="1", metadata={"author": "Alice", "title": "Intro"})
+    assert RecordStore._matches(record, {"author": "Alice", "title": "Intro"}) is True
+    assert RecordStore._matches(record, {"author": "Alice", "title": "Other"}) is False
+
+
 # --- delete / delete_many ---
 
 
