@@ -60,6 +60,16 @@ def test_compute_value_frequency_unhashable_value() -> None:
     assert result["tags"]["top_values"] == [("['x', 'y']", 2)]
 
 
+def test_compute_value_frequency_cardinality_estimate_beyond_small_range_correction() -> None:
+    # Enough distinct values relative to a small hll_precision (m=16) that
+    # every register gets touched, so the HyperLogLog "raw" estimate is
+    # used directly instead of falling back to the linear-counting
+    # small-range correction.
+    records = [Record(id=str(i), metadata={"uid": i}) for i in range(2000)]
+    result = compute_value_frequency(records, hll_precision=4)
+    assert result["uid"]["distinct_count_estimate"] > 0
+
+
 def test_compute_value_frequency_generator_input() -> None:
     def gen() -> object:
         yield Record(id="a", metadata={"lang": "en"})
