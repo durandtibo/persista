@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
-from persista.utils.hashing import hash_dict_uuid
+from coola.identifier import generate_stable_uuid5
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class Record:
     Args:
         id: Unique identifier for the record, typically a UUID derived
             from the metadata via
-            :func:`~persista.utils.hashing.hash_dict_uuid`.
+            :func:`~coola.identifier.generate_stable_uuid5`.
         metadata: Arbitrary key-value metadata associated with the
             record.  Defaults to an empty dict.  Copied into a
             read-only view; the original dict is left untouched.
@@ -58,7 +58,7 @@ class Record:
         """Construct a :class:`Record` from a metadata dict.
 
         Computes a stable UUID from ``metadata`` via
-        :func:`~persista.utils.hashing.hash_dict_uuid` and uses it as
+        :func:`~coola.identifier.generate_stable_uuid5` and uses it as
         the record's ``id``.  Two calls with the same ``metadata``
         contents (regardless of key insertion order) will produce the
         same ``id``.
@@ -82,4 +82,4 @@ class Record:
 
             ```
         """
-        return cls(id=hash_dict_uuid(metadata), metadata=metadata)
+        return cls(id=generate_stable_uuid5(metadata), metadata=metadata)
