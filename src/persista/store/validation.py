@@ -6,6 +6,8 @@ from __future__ import annotations
 __all__ = [
     "ON_CONFLICT_VALUES",
     "aresolve_conflicts",
+    "check_is_closed",
+    "check_is_open",
     "normalize_on_conflict",
     "resolve_conflicts",
     "validate_batch_size",
@@ -23,6 +25,8 @@ from persista.store.types import OnConflict
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
+
+    from persista.store.base import BaseStore
 
 ON_CONFLICT_VALUES = sorted(get_args(OnConflict))
 
@@ -297,3 +301,54 @@ def validate_batch_size(batch_size: int) -> None:
     if batch_size < 1:
         msg = f"batch_size must be a positive integer, got {batch_size}"
         raise ValueError(msg)
+
+
+def check_is_open(store: BaseStore) -> None:
+    """Check that a store is open, raising if it is not.
+
+    Args:
+        store: The :class:`~persista.store.base.BaseStore` to check.
+
+    Raises:
+        RuntimeError: If ``store`` is closed.
+
+    Example:
+        ```pycon
+        >>> from persista.store import InMemoryStore
+        >>> from persista.store.validation import check_is_open
+        >>> store = InMemoryStore()
+        >>> with store:
+        ...     check_is_open(store)
+        ...
+
+        ```
+    """
+    if store.closed:
+        msg = (
+            f"{type(store).__name__} is not open; call open()/aopen() or use it as a "
+            "context manager."
+        )
+        raise RuntimeError(msg)
+
+
+def check_is_closed(store: BaseStore) -> None:
+    """Check that a store is closed, raising if it is not.
+
+    Args:
+        store: The :class:`~persista.store.base.BaseStore` to check.
+
+    Raises:
+        RuntimeError: If ``store`` is open.
+
+    Example:
+        ```pycon
+        >>> from persista.store import InMemoryStore
+        >>> from persista.store.validation import check_is_closed
+        >>> store = InMemoryStore()
+        >>> check_is_closed(store)
+
+        ```
+    """
+    if not store.closed:
+        msg = f"{type(store).__name__} is not closed; call close()/aclose() first."
+        raise RuntimeError(msg)
