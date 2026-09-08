@@ -1,8 +1,8 @@
 name: Nightly Package Tests
 on:
   schedule:
-    - cron: '30 10 * * *' # run at 10:30 AM UTC
-  workflow_dispatch:  # to trigger manually
+    - cron: "30 10 * * *" # run at 10:30 AM UTC
+  workflow_dispatch: # to trigger manually
 
 permissions:
   contents: read
@@ -14,7 +14,7 @@ jobs:
   stable:
     uses: ./.github/workflows/test-package.yaml
     with:
-      install-cmd: 'uv pip install persista'
+      install-cmd: "uv pip install persista"
 
   stable-all:
     uses: ./.github/workflows/test-package.yaml
@@ -27,7 +27,7 @@ jobs:
   latest:
     uses: ./.github/workflows/test-package.yaml
     with:
-      install-cmd: 'uv pip install --pre persista'
+      install-cmd: "uv pip install --pre persista"
 
   latest-all:
     uses: ./.github/workflows/test-package.yaml
@@ -37,8 +37,7 @@ jobs:
   latest-extras:
     uses: ./.github/workflows/test-package-extras.yaml
     with:
-      install-args: '--pre'
-
+      install-args: "--pre"
 
   ########################
   #     Dependencies     #
@@ -50,7 +49,6 @@ jobs:
     with:
       package-name: coola
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).coola) }}
-
 
   #################################
   #     Optional dependencies     #
@@ -91,12 +89,12 @@ jobs:
       package-name: lmdb
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).lmdb) }}
 
-#  polars:
-#    needs: get-versions
-#    uses: ./.github/workflows/test-package-dep.yaml
-#    with:
-#      package-name: polars
-#      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).polars) }}
+  #  polars:
+  #    needs: get-versions
+  #    uses: ./.github/workflows/test-package-dep.yaml
+  #    with:
+  #      package-name: polars
+  #      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).polars) }}
 
   psycopg:
     needs: get-versions

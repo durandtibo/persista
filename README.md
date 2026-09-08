@@ -52,6 +52,9 @@
         <img  alt="Monthly downloads" src="https://static.pepy.tech/badge/persista/month">
     </a>
     <br/>
+    <a href="https://scorecard.dev/viewer/?uri=github.com/durandtibo/persista">
+        <img alt="OpenSSF Scorecard" src="https://img.shields.io/badge/dynamic/json?url=https://api.scorecard.dev/projects/github.com/durandtibo/persista&label=openssf%20scorecard&query=score">
+    </a>
 </p>
 
 ## Overview
