@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote
 
 from coola.display import MultilineDisplayMixin
+from coola.io import load_json, load_pickle, save_json, save_pickle
 from coola.utils.batching import batchify
 from coola.utils.path import sanitize_path
-from iden.io import load_json, load_pickle, save_json, save_pickle
 
 from persista.store.base import BaseStore
 from persista.store.threaded import ThreadedAsyncStoreMixin
@@ -40,7 +40,7 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     r"""Define a base class for file-based key-value stores.
 
     Each value is persisted as its own file in a directory, using
-    :mod:`iden.io` to read and write files. Keys are mapped to
+    :mod:`coola.io` to read and write files. Keys are mapped to
     filenames with ``urllib.parse.quote``, so keys containing
     characters like ``/`` or ``..`` cannot escape the store's
     directory. There is no index of keys beyond the directory
@@ -57,7 +57,7 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         path: The directory where value files are stored. Created
             automatically if it does not already exist.
         **kwargs: Additional keyword arguments to pass to the
-            underlying ``iden.io`` save function.
+            underlying ``coola.io`` save function.
     """
 
     #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
@@ -239,7 +239,7 @@ class JsonFileStore(BaseFileStore):
         path: The directory where value files are stored. Created
             automatically if it does not already exist.
         **kwargs: Additional keyword arguments to pass to
-            ``iden.io.save_json``.
+            ``coola.io.save_json``.
 
     Example:
         ```pycon
@@ -297,7 +297,7 @@ class PickleFileStore(BaseFileStore):
         path: The directory where value files are stored. Created
             automatically if it does not already exist.
         **kwargs: Additional keyword arguments to pass to
-            ``iden.io.save_pickle``.
+            ``coola.io.save_pickle``.
 
     Example:
         ```pycon
