@@ -1183,7 +1183,7 @@ wheels = [
 
 [[package]]
 name = "persista"
-version = "0.0.4a0"
+version = "0.0.4a1"
 source = { editable = "." }
 dependencies = [
     { name = "coola" },
