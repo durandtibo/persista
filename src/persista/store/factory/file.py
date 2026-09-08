@@ -23,7 +23,7 @@ class JsonFileStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
     Args:
         path: The directory where value files are stored.
         **kwargs: Additional keyword arguments to pass to
-            ``iden.io.save_json``.
+            ``coola.io.save_json``.
 
     Example:
         ```pycon
@@ -56,7 +56,7 @@ class PickleFileStoreFactory(BaseStoreFactory, MultilineDisplayMixin):
     Args:
         path: The directory where value files are stored.
         **kwargs: Additional keyword arguments to pass to
-            ``iden.io.save_pickle``.
+            ``coola.io.save_pickle``.
 
     Example:
         ```pycon
