@@ -5,12 +5,18 @@ import logging
 import pytest
 
 from persista.store import (
+    InMemoryStore,
     normalize_on_conflict,
     validate_batch_size,
     validate_field_name,
     validate_on_conflict,
 )
-from persista.store.validation import ON_CONFLICT_VALUES, validate_table_name
+from persista.store.validation import (
+    ON_CONFLICT_VALUES,
+    check_is_closed,
+    check_is_open,
+    validate_table_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -154,3 +160,51 @@ def test_validate_table_name_rejects_invalid_identifier() -> None:
 def test_validate_table_name_rejects_leading_digit() -> None:
     with pytest.raises(ValueError, match=r"Invalid table name"):
         validate_table_name("2store")
+
+
+###############################
+#     check_is_open            #
+###############################
+
+
+def test_check_is_open_does_not_raise_when_open() -> None:
+    store = InMemoryStore()
+    with store:
+        check_is_open(store)
+
+
+def test_check_is_open_raises_when_closed() -> None:
+    store = InMemoryStore()
+    with pytest.raises(RuntimeError, match="is not open"):
+        check_is_open(store)
+
+
+def test_check_is_open_raises_after_close() -> None:
+    store = InMemoryStore()
+    store.open()
+    store.close()
+    with pytest.raises(RuntimeError, match="is not open"):
+        check_is_open(store)
+
+
+###############################
+#     check_is_closed          #
+###############################
+
+
+def test_check_is_closed_does_not_raise_when_closed() -> None:
+    store = InMemoryStore()
+    check_is_closed(store)
+
+
+def test_check_is_closed_raises_when_open() -> None:
+    store = InMemoryStore()
+    with store, pytest.raises(RuntimeError, match="is not closed"):
+        check_is_closed(store)
+
+
+def test_check_is_closed_does_not_raise_after_close() -> None:
+    store = InMemoryStore()
+    store.open()
+    store.close()
+    check_is_closed(store)
