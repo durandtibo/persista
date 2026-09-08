@@ -10,6 +10,8 @@ __all__ = [
     "SQLiteRecordStore",
     "TypedDuckDBRecordStore",
     "TypedSQLiteRecordStore",
+    "check_is_closed",
+    "check_is_open",
     "resolve_record_store",
 ]
 
@@ -23,3 +25,4 @@ from persista.record.store.custom import (
 )
 from persista.record.store.record import RecordStore
 from persista.record.store.resolve import resolve_record_store
+from persista.record.store.validation import check_is_closed, check_is_open
