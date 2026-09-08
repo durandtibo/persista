@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+# Cancel stale in-progress runs when a new commit is pushed to the same PR/branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify-workflows:
     runs-on: ubuntu-latest
@@ -23,8 +28,8 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
 
       # Verify workflow files are valid and follow best practices
       - name: Verify GitHub Workflows
-        uses: durandtibo/verify-github-workflow-action@v0.0.3
+        uses: durandtibo/verify-github-workflow-action@e5dc341675711838a82b2433f70a225858ad70d1 # ratchet:durandtibo/verify-github-workflow-action@v0.0.3
