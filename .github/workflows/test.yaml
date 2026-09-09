@@ -47,7 +47,6 @@ jobs:
       - name: Run integration tests
         run: |
           inv integration-test --cov
-
   # Test with minimal dependencies to ensure optional dependencies are truly optional
   min:
     runs-on: ${{ matrix.os }}
@@ -72,6 +71,7 @@ jobs:
         python-version: ["3.14", "3.13", "3.12", "3.11", "3.10"]
     steps:
       - name: Checkout
+
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
       # Install only required dependencies, not optional ones
       - name: Setup python environment
@@ -85,7 +85,6 @@ jobs:
       - name: Run integration tests
         run: |
           inv integration-test --cov
-
   # Test RedisStore against a live Redis server (only supported on Linux-hosted
   # runners, hence the separate job instead of a service on the OS matrix above)
   redis:
@@ -97,10 +96,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04, ubuntu-22.04]
         python-version: ["3.14", "3.13", "3.12", "3.11", "3.10"]
-
     services:
       redis:
-        image: redis:7
+        image: index.docker.io/library/redis@sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7 # ratchet:redis:7
         ports:
           - 6379:6379
         options: >-
@@ -108,10 +106,10 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
+
       - name: Setup python environment
         uses: durandtibo/setup-venv-uv-action@59716ab8fb83cc7025548b3831c06b6f5c268f4f # ratchet:durandtibo/setup-venv-uv-action@v0.1.0
         with:
@@ -121,9 +119,9 @@ jobs:
           PERSISTA_TEST_REDIS_URL: redis://localhost:6379/0
         run: |
           inv integration-test
-
   # Test PostgresStore/TypedPostgresStore against a live Postgres server (only
   # supported on Linux-hosted runners, hence the separate job instead of a
+
   # service on the OS matrix above)
   postgres:
     runs-on: ${{ matrix.os }}
@@ -137,7 +135,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        image: index.docker.io/library/postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685 # ratchet:postgres:16-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
@@ -147,9 +145,9 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s
+
           --health-timeout 5s
           --health-retries 5
-
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
@@ -160,5 +158,6 @@ jobs:
       - name: Run PostgresStore integration tests
         env:
           PERSISTA_TEST_POSTGRES_URL: postgresql://postgres@localhost:5432/postgres
+
         run: |
           inv integration-test
