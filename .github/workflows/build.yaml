@@ -63,7 +63,6 @@ jobs:
             exit 1
           fi
           echo "✅ Package '${{ matrix.package-extra }}' is installed"
-
   build-all:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -77,6 +76,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
       - name: Verify Build
         uses: durandtibo/verify-uv-build-action@88da014d506b5f0b4f657d4ba8920061ab785620 # ratchet:durandtibo/verify-uv-build-action@v0.0.7
+
         with:
           package-name: persista
           package-extra: all
