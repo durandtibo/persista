@@ -522,7 +522,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def _get_repr_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"table": self._table, "closed": self._closed}
         if not self._closed:
-            kwargs["count"] = self.count()
+            kwargs["count"] = f"{self.count():,}"
         return kwargs | self._kwargs
 
 

@@ -260,7 +260,7 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def _get_repr_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"path": self._path, "closed": self._closed}
         if not self._closed:
-            kwargs["count"] = self.count()
+            kwargs["count"] = f"{self.count():,}"
         return kwargs | self._kwargs
 
 
