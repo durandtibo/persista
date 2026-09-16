@@ -7,12 +7,29 @@ from __future__ import annotations
 __all__ = ["ThreadedAsyncStoreMixin"]
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
+    from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 
     from persista.store.types import OnConflict
+
+_T = TypeVar("_T")
+
+
+_SENTINEL: Any = object()
+
+
+async def _athread_iter(sync_iter_factory: Callable[[], Iterator[_T]]) -> AsyncIterator[_T]:
+    r"""Bridge a sync iterator/generator to an async one, pulling one
+    item at a time via ``asyncio.to_thread`` rather than materializing
+    it."""
+    iterator = await asyncio.to_thread(lambda: iter(sync_iter_factory()))
+    while True:
+        item = await asyncio.to_thread(next, iterator, _SENTINEL)
+        if item is _SENTINEL:
+            return
+        yield item
 
 
 class ThreadedAsyncStoreMixin:
@@ -69,21 +86,11 @@ class ThreadedAsyncStoreMixin:
         return await asyncio.to_thread(self.contains_many, keys)
 
     async def akeys(self) -> AsyncIterator[str]:
-        sentinel = object()
-        iterator = await asyncio.to_thread(lambda: iter(self.keys()))
-        while True:
-            key = await asyncio.to_thread(next, iterator, sentinel)
-            if key is sentinel:
-                return
+        async for key in _athread_iter(self.keys):
             yield key
 
     async def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
-        sentinel = object()
-        iterator = await asyncio.to_thread(lambda: iter(self.iter_batches(batch_size=batch_size)))
-        while True:
-            batch = await asyncio.to_thread(next, iterator, sentinel)
-            if batch is sentinel:
-                return
+        async for batch in _athread_iter(lambda: self.iter_batches(batch_size=batch_size)):
             yield batch
 
     async def acount(self) -> int:
