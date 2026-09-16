@@ -35,7 +35,6 @@ jobs:
             "rich",
             "urllib3",
           ]
-
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
@@ -49,6 +48,7 @@ jobs:
           uv pip install ${{ inputs.install-args }} "persista[${{ matrix.extra }}]"
       - name: Show dependency tree
         run: |
+
           uv pip tree --show-version-specifiers
       - name: Run some checks
         run: |
