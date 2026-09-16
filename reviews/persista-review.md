@@ -63,7 +63,7 @@ tightened, not correctness fires.
 
 ## Duplication / Simplification
 
-4. **`_lock_keys`/`_alock_keys` and the `set_many`/`aset_many` conflict
+4. **FIXED** -- **`_lock_keys`/`_alock_keys` and the `set_many`/`aset_many` conflict
    dispatch in `postgres.py` are near-identical sync/async pairs**
    (`src/persista/store/postgres.py:262-324`), as are the `get`/`aget`,
    `get_many`/`aget_many`, `filter`/`afilter`, `contains`/`acontains`,

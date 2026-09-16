@@ -40,6 +40,10 @@ if is_psycopg_available():  # pragma: no cover
     from psycopg.conninfo import conninfo_to_dict
     from psycopg.types.json import Jsonb
 
+_LOCK_KEYS_QUERY = (
+    "SELECT pg_advisory_xact_lock(hashtextextended(k, 0)) FROM unnest(%s::text[]) AS k ORDER BY k"
+)
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 
@@ -306,22 +310,14 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         # Postgres's deadlock detector would have to step in and abort
         # one of them.
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(k, 0)) "
-                "FROM unnest(%s::text[]) AS k ORDER BY k",
-                (sorted(items),),
-            )
+            cur.execute(_LOCK_KEYS_QUERY, (sorted(items),))
 
     @staticmethod
     async def _alock_keys(
         conn: psycopg.AsyncConnection, items: Mapping[str, dict[str, Any]]
     ) -> None:
         async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(k, 0)) "
-                "FROM unnest(%s::text[]) AS k ORDER BY k",
-                (sorted(items),),
-            )
+            await cur.execute(_LOCK_KEYS_QUERY, (sorted(items),))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         self._check_open()
