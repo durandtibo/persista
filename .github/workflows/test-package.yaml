@@ -37,7 +37,6 @@ jobs:
             macos-15-intel,
           ]
         python-version: ["3.14", "3.13", "3.12", "3.11", "3.10"]
-
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
@@ -50,6 +49,7 @@ jobs:
       # Install package from PyPI using custom install command
       - name: Install package
         run: |
+
           ${{ inputs.install-cmd }}
       # Display dependency tree
       - name: Show dependency tree
