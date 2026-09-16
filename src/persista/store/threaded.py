@@ -4,15 +4,55 @@ driver."""
 
 from __future__ import annotations
 
-__all__ = ["ThreadedAsyncStoreMixin"]
+__all__ = ["ThreadedAsyncStoreMixin", "athread_iter"]
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
+    from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 
     from persista.store.types import OnConflict
+
+_T = TypeVar("_T")
+
+
+_SENTINEL: Any = object()
+
+
+async def athread_iter(sync_iter_factory: Callable[[], Iterator[_T]]) -> AsyncIterator[_T]:
+    r"""Bridge a sync iterator/generator to an async one via a background
+    thread.
+
+    Calls ``sync_iter_factory`` and then pulls one item at a time from
+    the resulting iterator with ``asyncio.to_thread``, so neither
+    creating the iterator nor advancing it blocks the event loop. This
+    is the building block behind :meth:`ThreadedAsyncStoreMixin.akeys`
+    and :meth:`ThreadedAsyncStoreMixin.aiter_batches`, but it is generic
+    enough to bridge any sync iterator/generator, not just store ones.
+
+    Unlike wrapping the whole sync iterable in a single
+    ``asyncio.to_thread`` call, this never materializes more than one
+    item in memory at a time, which matters for iterators that stream
+    over a large or unbounded source (e.g. every row/batch in a table).
+
+    Args:
+        sync_iter_factory: A zero-argument callable that returns the
+            sync iterator/generator to bridge, e.g. ``store.keys`` or
+            ``lambda: store.iter_batches(batch_size=32)``. It is called
+            in a worker thread, so it is safe to use even when creating
+            the iterator itself does blocking I/O (e.g. opening a
+            server-side cursor).
+
+    Yields:
+        Each item produced by the sync iterator, in order.
+    """
+    iterator = await asyncio.to_thread(lambda: iter(sync_iter_factory()))
+    while True:
+        item = await asyncio.to_thread(next, iterator, _SENTINEL)
+        if item is _SENTINEL:
+            return
+        yield item
 
 
 class ThreadedAsyncStoreMixin:
@@ -23,10 +63,10 @@ class ThreadedAsyncStoreMixin:
     backend has no native async driver (in-memory, file, LMDB, DuckDB):
     the subclass only needs to implement the sync side, and this mixin
     supplies a fully-conformant async side for free by running each sync
-    call in a worker thread. ``akeys``/ ``aiter_batches`` additionally
-    bridge the sync generators returned by ``keys``/``iter_batches``
-    across the thread boundary, pulling one key/batch at a time via
-    ``asyncio.to_thread`` rather than materializing the whole store in
+    call in a worker thread. ``akeys``/``aiter_batches`` additionally
+    use :func:`athread_iter` to bridge the sync generators returned by
+    ``keys``/``iter_batches`` across the thread boundary, pulling one
+    key/batch at a time rather than materializing the whole store in
     memory.
 
     Must be listed before ``BaseStore`` in the MRO (e.g. ``class
@@ -69,21 +109,11 @@ class ThreadedAsyncStoreMixin:
         return await asyncio.to_thread(self.contains_many, keys)
 
     async def akeys(self) -> AsyncIterator[str]:
-        sentinel = object()
-        iterator = await asyncio.to_thread(lambda: iter(self.keys()))
-        while True:
-            key = await asyncio.to_thread(next, iterator, sentinel)
-            if key is sentinel:
-                return
+        async for key in athread_iter(self.keys):
             yield key
 
     async def aiter_batches(self, batch_size: int = 32) -> AsyncIterator[dict[str, dict[str, Any]]]:
-        sentinel = object()
-        iterator = await asyncio.to_thread(lambda: iter(self.iter_batches(batch_size=batch_size)))
-        while True:
-            batch = await asyncio.to_thread(next, iterator, sentinel)
-            if batch is sentinel:
-                return
+        async for batch in athread_iter(lambda: self.iter_batches(batch_size=batch_size)):
             yield batch
 
     async def acount(self) -> int:

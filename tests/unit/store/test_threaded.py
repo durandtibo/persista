@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from persista.store.base import BaseStore
-from persista.store.threaded import ThreadedAsyncStoreMixin
+from persista.store.threaded import ThreadedAsyncStoreMixin, athread_iter
 from persista.store.validation import normalize_on_conflict, validate_batch_size
 
 if TYPE_CHECKING:
@@ -271,3 +271,113 @@ async def test_threaded_mixin_concurrent_aset_calls_all_persist() -> None:
     assert await store.acount() == 50
     for i in range(50):
         assert await store.aget(str(i)) == {"a": i}
+
+
+# --- athread_iter ---
+
+
+async def test_athread_iter_yields_all_items_in_order() -> None:
+    items = [1, 2, 3, 4, 5]
+    result = [item async for item in athread_iter(lambda: iter(items))]
+    assert result == items
+
+
+async def test_athread_iter_empty_iterator_yields_nothing() -> None:
+    result = [item async for item in athread_iter(lambda: iter([]))]
+    assert result == []
+
+
+async def test_athread_iter_calls_factory_lazily_on_first_iteration() -> None:
+    called = False
+
+    def factory() -> Iterator[int]:
+        nonlocal called
+        called = True
+        return iter([1, 2, 3])
+
+    gen = athread_iter(factory)
+    assert called is False
+    result = [item async for item in gen]
+    assert called is True
+    assert result == [1, 2, 3]
+
+
+async def test_athread_iter_calls_factory_once_per_call() -> None:
+    calls = 0
+
+    def factory() -> Iterator[int]:
+        nonlocal calls
+        calls += 1
+        return iter([1, 2, 3])
+
+    assert [item async for item in athread_iter(factory)] == [1, 2, 3]
+    assert calls == 1
+
+
+async def test_athread_iter_bridges_a_generator_not_just_a_list_iterator() -> None:
+    def gen_factory() -> Iterator[int]:
+        yield from range(3)
+
+    result = [item async for item in athread_iter(gen_factory)]
+    assert result == [0, 1, 2]
+
+
+async def test_athread_iter_advances_items_on_a_worker_thread() -> None:
+    main_thread = threading.current_thread()
+    threads_seen: list[threading.Thread] = []
+
+    class _ThreadRecordingIterator:
+        def __iter__(self) -> _ThreadRecordingIterator:
+            return self
+
+        def __next__(self) -> int:
+            threads_seen.append(threading.current_thread())
+            if len(threads_seen) > 3:
+                raise StopIteration
+            return len(threads_seen)
+
+    result = [item async for item in athread_iter(_ThreadRecordingIterator)]
+
+    assert result == [1, 2, 3]
+    assert threads_seen
+    assert all(thread is not main_thread for thread in threads_seen)
+
+
+async def test_athread_iter_propagates_exception_raised_while_advancing() -> None:
+    def factory() -> Iterator[int]:
+        def gen() -> Iterator[int]:
+            yield 1
+            msg = "boom"
+            raise _BoomError(msg)
+
+        return gen()
+
+    with pytest.raises(_BoomError, match="boom"):
+        [item async for item in athread_iter(factory)]
+
+
+async def test_athread_iter_does_not_block_the_event_loop() -> None:
+    def factory() -> Iterator[int]:
+        def gen() -> Iterator[int]:
+            for i in range(20):
+                time.sleep(0.005)
+                yield i
+
+        return gen()
+
+    ticks = 0
+
+    async def tick_counter() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    ticker = asyncio.create_task(tick_counter())
+    result = [item async for item in athread_iter(factory)]
+    ticker.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await ticker
+
+    assert result == list(range(20))
+    assert ticks > 3

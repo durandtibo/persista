@@ -75,7 +75,7 @@ tightened, not correctness fires.
    generator (docstring-driven, run at test/lint time to check the two stay
    in sync) would catch drift more cheaply than review alone.
 
-5. **`ThreadedAsyncStoreMixin.akeys`/`aiter_batches`
+5. **FIXED** -- **`ThreadedAsyncStoreMixin.akeys`/`aiter_batches`
    (`src/persista/store/threaded.py:532-548`) duplicate the "sentinel +
    `next()` in a thread" bridging pattern almost verbatim.** Both could
    share one generic helper, e.g. `_athread_iter(sync_iter_factory)`, cutting
