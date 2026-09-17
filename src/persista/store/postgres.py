@@ -321,13 +321,26 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             await cur.execute(_LOCK_KEYS_QUERY, (sorted(items),))
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        return list(self.filter_items(**field_filters).values())
+
+    async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        return list((await self.afilter_items(**field_filters)).values())
+
+    def filter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
+        """Like :meth:`filter`, but keyed by the matching rows' keys.
+
+        This lets callers that need to know *which* key each matching
+        value belongs to (e.g. a record store layered on top) push their
+        filter down into the SQL ``WHERE`` clause instead of pulling
+        every row and filtering in Python.
+        """
         self._check_open()
         if not field_filters:
             query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
             with self._conn.cursor() as cur:
                 cur.execute(query)
                 rows = cur.fetchall()
-            return [self._row_to_value(row) for row in rows]
+            return {row[0]: self._row_to_value(row) for row in rows}
 
         conditions = [self._build_filter_condition(key) for key in field_filters]
         where = sql.SQL(" AND ").join(conditions)
@@ -337,16 +350,17 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         with self._conn.cursor() as cur:
             cur.execute(query, list(field_filters.values()))
             rows = cur.fetchall()
-        return [self._row_to_value(row) for row in rows]
+        return {row[0]: self._row_to_value(row) for row in rows}
 
-    async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:
+    async def afilter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
+        """Async equivalent of :meth:`filter_items`."""
         conn = await self._ensure_aconn()
         if not field_filters:
             query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
             async with conn.cursor() as cur:
                 await cur.execute(query)
                 rows = await cur.fetchall()
-            return [self._row_to_value(row) for row in rows]
+            return {row[0]: self._row_to_value(row) for row in rows}
 
         conditions = [self._build_filter_condition(key) for key in field_filters]
         where = sql.SQL(" AND ").join(conditions)
@@ -356,7 +370,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         async with conn.cursor() as cur:
             await cur.execute(query, list(field_filters.values()))
             rows = await cur.fetchall()
-        return [self._row_to_value(row) for row in rows]
+        return {row[0]: self._row_to_value(row) for row in rows}
 
     def delete(self, key: str) -> None:
         self._check_open()

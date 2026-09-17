@@ -38,7 +38,7 @@ tightened, not correctness fires.
    either explicitly documenting record stores as upsert-only-by-design (and
    dropping the "mirrors" language), or adding the missing surface.
 
-2. **`RecordStore.filter`/`afilter` always full-scan, even for
+2. **FIXED** -- **`RecordStore.filter`/`afilter` always full-scan, even for
    `Typed*RecordStore` variants with real SQL columns**
    (`src/persista/record/store/record.py:99-129`). The docstring is honest
    about this, which is good, but it means the typed backends' main
@@ -82,7 +82,7 @@ tightened, not correctness fires.
    ~10 lines of duplication and one future opportunity to fix the same bug
    in only one place.
 
-6. **`BasePostgresStore.get`/`get_many`/`filter`/`contains`/`contains_many`/
+6. **FIXED** -- **`BasePostgresStore.get`/`get_many`/`filter`/`contains`/`contains_many`/
    `keys` and their async twins all repeat `sql.SQL(...).format(table=...,
    key_col=...)` for the same "SELECT ... FROM {table} WHERE {key_col} =
    ..." shape** (`postgres.py:208-466`). A couple of small query-builder

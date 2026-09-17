@@ -378,6 +378,43 @@ def test_filter_matches_explicit_json_null(store: BaseDuckDBStore) -> None:
     assert store.filter(author=None) == [{"author": None, "title": "Untitled"}]
 
 
+# --- filter_items ---
+
+
+def test_filter_items_no_args_returns_all(
+    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.filter_items() == items
+
+
+def test_filter_items_single_field(
+    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    result = store.filter_items(author="Alice")
+    assert result == {"1": items["1"], "2": items["2"]}
+
+
+def test_filter_items_no_match_returns_empty(
+    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.filter_items(author="Charlie") == {}
+
+
+def test_filter_items_empty_store_returns_empty(store: BaseDuckDBStore) -> None:
+    assert store.filter_items(author="Alice") == {}
+
+
+async def test_afilter_items_single_field(
+    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    result = await store.afilter_items(author="Alice")
+    assert result == {"1": items["1"], "2": items["2"]}
+
+
 # --- delete ---
 
 
@@ -926,6 +963,14 @@ def test_filter_multiple_typed_fields(
     typed_store.set_many(items)
     result = typed_store.filter(author="Alice", category="Programming")
     assert len(result) == 2
+
+
+def test_filter_items_single_typed_field(
+    typed_store: TypedDuckDBStore, items: dict[str, dict[str, Any]]
+) -> None:
+    typed_store.set_many(items)
+    result = typed_store.filter_items(author="Alice")
+    assert result == {"1": items["1"], "2": items["2"]}
 
 
 def test_filter_extra_field(typed_store: TypedDuckDBStore) -> None:

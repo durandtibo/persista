@@ -807,6 +807,44 @@ def test_filter_integer_value_no_match_returns_empty(
     assert store.filter(year=9999) == []
 
 
+# --- filter_items ---
+
+
+def test_filter_items_no_args_returns_all(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.filter_items() == items
+
+
+def test_filter_items_single_field(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    result = store.filter_items(author="Alice")
+    assert result == {"1": items["1"], "2": items["2"]}
+
+
+def test_filter_items_no_match_returns_empty(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.filter_items(author="Charlie") == {}
+
+
+def test_filter_items_empty_store_returns_empty(store: BasePostgresStore) -> None:
+    assert store.filter_items(author="Alice") == {}
+
+
+def test_filter_matches_filter_items_keys(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert sorted(store.filter(author="Bob"), key=lambda v: v["title"]) == sorted(
+        store.filter_items(author="Bob").values(), key=lambda v: v["title"]
+    )
+
+
 # --- delete ---
 
 
@@ -1311,6 +1349,14 @@ def test_filter_integer_typed_column_no_match(
 ) -> None:
     typed_store.set_many(items)
     assert typed_store.filter(year=9999) == []
+
+
+def test_filter_items_single_typed_field(
+    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    typed_store.set_many(items)
+    result = typed_store.filter_items(author="Alice")
+    assert result == {"1": items["1"], "2": items["2"]}
 
 
 def test_iter_batches_with_typed_schema(
@@ -2123,6 +2169,31 @@ async def test_afilter_integer_value_no_match_returns_empty(
 ) -> None:
     await store.aset_many(items)
     assert await store.afilter(year=9999) == []
+
+
+# --- afilter_items ---
+
+
+async def test_afilter_items_no_args_returns_all(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    assert await store.afilter_items() == items
+
+
+async def test_afilter_items_single_field(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    result = await store.afilter_items(author="Alice")
+    assert result == {"1": items["1"], "2": items["2"]}
+
+
+async def test_afilter_items_no_match_returns_empty(
+    store: BasePostgresStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    assert await store.afilter_items(author="Charlie") == {}
 
 
 # --- adelete ---

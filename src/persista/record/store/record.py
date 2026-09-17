@@ -98,15 +98,21 @@ class RecordStore(BaseRecordStore, MultilineDisplayMixin):
         """See :meth:`BaseRecordStore.filter`.
 
         Note:
-            This always performs a full scan of the underlying store
-            (via :meth:`~persista.store.BaseStore.iter_batches`) and
-            filters records in Python, regardless of the underlying
-            store's own query capabilities. In particular, for
-            ``Typed*RecordStore`` variants whose metadata fields are
-            stored as their own SQL columns, this does not push
-            ``metadata_filters`` down to a SQL ``WHERE`` clause, so a
-            filtered call is no cheaper than fetching every record.
+            When the underlying store exposes ``filter_items`` (e.g.
+            ``Typed*Store`` variants whose metadata fields are stored
+            as their own SQL columns), ``metadata_filters`` is pushed
+            down to it, letting the store answer via a SQL ``WHERE``
+            clause instead of a full scan. Otherwise this falls back
+            to a full scan of the underlying store (via
+            :meth:`~persista.store.BaseStore.iter_batches`), filtering
+            records in Python.
         """
+        filter_items = getattr(self._store, "filter_items", None)
+        if filter_items is not None:
+            return [
+                self._from_value(record_id, value)
+                for record_id, value in filter_items(**metadata_filters).items()
+            ]
         records = []
         for batch in self._store.iter_batches():
             for record_id, value in batch.items():
@@ -119,9 +125,15 @@ class RecordStore(BaseRecordStore, MultilineDisplayMixin):
         """Async equivalent of :meth:`filter`.
 
         Note:
-            Same full-scan performance characteristics as :meth:`filter`;
-            see its Note.
+            Same fast-path/full-scan behavior as :meth:`filter`; see
+            its Note.
         """
+        afilter_items = getattr(self._store, "afilter_items", None)
+        if afilter_items is not None:
+            return [
+                self._from_value(record_id, value)
+                for record_id, value in (await afilter_items(**metadata_filters)).items()
+            ]
         records = []
         async for batch in self._store.aiter_batches():
             for record_id, value in batch.items():
