@@ -30,7 +30,7 @@ from persista.utils.imports import check_psycopg, is_psycopg_available
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator, Iterator, Mapping
-    from typing import Self
+    from typing import LiteralString, Self
 
     from persista.store.types import OnConflict
 
@@ -138,6 +138,15 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def _table_ident(self) -> sql.Identifier:
         return sql.Identifier(self._table)
 
+    @property
+    def _key_col_ident(self) -> sql.Identifier:
+        return sql.Identifier(self._key_column)
+
+    def _key_query(self, template: LiteralString) -> sql.Composed:
+        """Format ``template`` (containing ``{table}``/``{key_col}``
+        placeholders) against this store's table and key column."""
+        return sql.SQL(template).format(table=self._table_ident, key_col=self._key_col_ident)
+
     @abstractmethod
     def _create_table_sql(self) -> sql.Composed:
         """Return the ``CREATE TABLE IF NOT EXISTS`` statement for this
@@ -211,9 +220,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
 
     def get(self, key: str) -> dict[str, Any] | None:
         self._check_open()
-        query = sql.SQL("SELECT * FROM {table} WHERE {key_col} = %s").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("SELECT * FROM {table} WHERE {key_col} = %s")
         with self._conn.cursor() as cur:
             cur.execute(query, (key,))
             row = cur.fetchone()
@@ -221,9 +228,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
 
     async def aget(self, key: str) -> dict[str, Any] | None:
         conn = await self._ensure_aconn()
-        query = sql.SQL("SELECT * FROM {table} WHERE {key_col} = %s").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("SELECT * FROM {table} WHERE {key_col} = %s")
         async with conn.cursor() as cur:
             await cur.execute(query, (key,))
             row = await cur.fetchone()
@@ -233,9 +238,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         self._check_open()
         if not keys:
             return []
-        query = sql.SQL("SELECT * FROM {table} WHERE {key_col} = ANY(%s)").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("SELECT * FROM {table} WHERE {key_col} = ANY(%s)")
         with self._conn.cursor() as cur:
             cur.execute(query, (keys,))
             rows = cur.fetchall()
@@ -246,9 +249,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         if not keys:
             return []
         conn = await self._ensure_aconn()
-        query = sql.SQL("SELECT * FROM {table} WHERE {key_col} = ANY(%s)").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("SELECT * FROM {table} WHERE {key_col} = ANY(%s)")
         async with conn.cursor() as cur:
             await cur.execute(query, (keys,))
             rows = await cur.fetchall()
@@ -359,34 +360,26 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
 
     def delete(self, key: str) -> None:
         self._check_open()
-        query = sql.SQL("DELETE FROM {table} WHERE {key_col} = %s").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("DELETE FROM {table} WHERE {key_col} = %s")
         self._conn.execute(query, (key,))
 
     async def adelete(self, key: str) -> None:
         conn = await self._ensure_aconn()
-        query = sql.SQL("DELETE FROM {table} WHERE {key_col} = %s").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("DELETE FROM {table} WHERE {key_col} = %s")
         await conn.execute(query, (key,))
 
     def delete_many(self, keys: list[str]) -> None:
         self._check_open()
         if not keys:
             return
-        query = sql.SQL("DELETE FROM {table} WHERE {key_col} = ANY(%s)").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("DELETE FROM {table} WHERE {key_col} = ANY(%s)")
         self._conn.execute(query, (keys,))
 
     async def adelete_many(self, keys: list[str]) -> None:
         if not keys:
             return
         conn = await self._ensure_aconn()
-        query = sql.SQL("DELETE FROM {table} WHERE {key_col} = ANY(%s)").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("DELETE FROM {table} WHERE {key_col} = ANY(%s)")
         await conn.execute(query, (keys,))
 
     def clear(self) -> None:
@@ -401,18 +394,14 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
 
     def contains(self, key: str) -> bool:
         self._check_open()
-        query = sql.SQL("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1")
         with self._conn.cursor() as cur:
             cur.execute(query, (key,))
             return cur.fetchone() is not None
 
     async def acontains(self, key: str) -> bool:
         conn = await self._ensure_aconn()
-        query = sql.SQL("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1")
         async with conn.cursor() as cur:
             await cur.execute(query, (key,))
             return await cur.fetchone() is not None
@@ -421,9 +410,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         self._check_open()
         if not keys:
             return []
-        query = sql.SQL("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)")
         with self._conn.cursor() as cur:
             cur.execute(query, (keys,))
             existing = {row[0] for row in cur.fetchall()}
@@ -433,9 +420,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         if not keys:
             return []
         conn = await self._ensure_aconn()
-        query = sql.SQL("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)")
         async with conn.cursor() as cur:
             await cur.execute(query, (keys,))
             existing = {row[0] for row in await cur.fetchall()}
@@ -443,9 +428,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
 
     def keys(self) -> Iterator[str]:
         self._check_open()
-        query = sql.SQL("SELECT {key_col} FROM {table}").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("SELECT {key_col} FROM {table}")
         with self._conn.cursor() as cur:
             cur.execute(query)
             for (key,) in cur.fetchall():
@@ -453,9 +436,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
 
     async def akeys(self) -> AsyncIterator[str]:
         conn = await self._ensure_aconn()
-        query = sql.SQL("SELECT {key_col} FROM {table}").format(
-            table=self._table_ident, key_col=sql.Identifier(self._key_column)
-        )
+        query = self._key_query("SELECT {key_col} FROM {table}")
         async with conn.cursor() as cur:
             await cur.execute(query)
             async for (key,) in cur:
@@ -572,10 +553,10 @@ class PostgresStore(BasePostgresStore):
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
-            query = sql.SQL(
+            query = self._key_query(
                 "INSERT INTO {table} ({key_col}, value) VALUES (%s, %s) "
                 "ON CONFLICT ({key_col}) DO UPDATE SET value = EXCLUDED.value"
-            ).format(table=self._table_ident, key_col=sql.Identifier(self._key_column))
+            )
             with self._conn.cursor() as cur:
                 cur.executemany(query, [(key, Jsonb(value)) for key, value in items.items()])
 
@@ -584,10 +565,10 @@ class PostgresStore(BasePostgresStore):
     async def _aset_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
             conn = await self._ensure_aconn()
-            query = sql.SQL(
+            query = self._key_query(
                 "INSERT INTO {table} ({key_col}, value) VALUES (%s, %s) "
                 "ON CONFLICT ({key_col}) DO UPDATE SET value = EXCLUDED.value"
-            ).format(table=self._table_ident, key_col=sql.Identifier(self._key_column))
+            )
             async with conn.cursor() as cur:
                 await cur.executemany(query, [(key, Jsonb(value)) for key, value in items.items()])
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
