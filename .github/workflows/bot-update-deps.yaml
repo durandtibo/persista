@@ -2,11 +2,10 @@
 # Updates all dependencies to their latest compatible versions weekly.
 # Creates a pull request with the updates after running tests.
 
-name: Update dependencies
+name: Update Dependencies
 on:
   schedule:
     - cron: "0 6 * * 6" # Run every Saturday at 6:00 AM UTC
-  workflow_call:
   workflow_dispatch: # to trigger manually
 
 permissions: {}
