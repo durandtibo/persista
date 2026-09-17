@@ -13,7 +13,7 @@ permissions:
 jobs:
   # Get dependency version information from config file
   get-versions:
-    uses: ./.github/workflows/get-versions.yaml
+    uses: ./.github/workflows/lib-get-package-versions.yaml
 
   ########################
   #     Dependencies     #
@@ -21,7 +21,7 @@ jobs:
 
   coola:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: coola
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).coola) }}
@@ -32,77 +32,77 @@ jobs:
 
   aiosqlite:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: aiosqlite
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).aiosqlite) }}
 
   duckdb:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: duckdb
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).duckdb) }}
 
   faker:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: faker
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).faker) }}
 
   httpx:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: httpx
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).httpx) }}
 
   lmdb:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: lmdb
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).lmdb) }}
 
   #  polars:
   #    needs: get-versions
-  #    uses: ./.github/workflows/test-code-dep.yaml
+  #    uses: ./.github/workflows/ci-test-code-dep.yaml
   #    with:
   #      package-name: polars
   #      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).polars) }}
 
   psycopg:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: psycopg
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).psycopg) }}
 
   redis:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: redis
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).redis) }}
 
   requests:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: requests
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).requests) }}
 
   rich:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: rich
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).rich) }}
 
   urllib3:
     needs: get-versions
-    uses: ./.github/workflows/test-code-dep.yaml
+    uses: ./.github/workflows/ci-test-code-dep.yaml
     with:
       package-name: urllib3
       package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).urllib3) }}
