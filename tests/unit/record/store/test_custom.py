@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -110,6 +111,36 @@ def test_typed_duckdb_record_store_default_schema_is_empty() -> None:
         assert store.get("1") == Record(id="1", metadata={"author": "Alice"})
 
 
+@duckdb_available
+def test_typed_duckdb_record_store_filter_uses_pushdown_not_full_scan() -> None:
+    with TypedDuckDBRecordStore(metadata_schema={"author": "TEXT"}) as store:
+        store.set_many(
+            [
+                Record(id="1", metadata={"author": "Alice"}),
+                Record(id="2", metadata={"author": "Bob"}),
+            ]
+        )
+        with patch.object(store.store, "iter_batches", wraps=store.store.iter_batches) as scan:
+            result = store.filter(author="Alice")
+        assert result == [Record(id="1", metadata={"author": "Alice"})]
+        scan.assert_not_called()
+
+
+@duckdb_available
+async def test_typed_duckdb_record_store_afilter_uses_pushdown_not_full_scan() -> None:
+    with TypedDuckDBRecordStore(metadata_schema={"author": "TEXT"}) as store:
+        store.set_many(
+            [
+                Record(id="1", metadata={"author": "Alice"}),
+                Record(id="2", metadata={"author": "Bob"}),
+            ]
+        )
+        with patch.object(store.store, "aiter_batches", wraps=store.store.aiter_batches) as scan:
+            result = await store.afilter(author="Alice")
+        assert result == [Record(id="1", metadata={"author": "Alice"})]
+        scan.assert_not_called()
+
+
 ###################################
 #     Tests for SQLiteRecordStore     #
 ###################################
@@ -156,3 +187,31 @@ def test_typed_sqlite_record_store_filter_on_typed_column() -> None:
         )
         result = store.filter(author="Alice")
         assert result == [Record(id="1", metadata={"author": "Alice"})]
+
+
+def test_typed_sqlite_record_store_filter_uses_pushdown_not_full_scan() -> None:
+    with TypedSQLiteRecordStore(metadata_schema={"author": "TEXT"}) as store:
+        store.set_many(
+            [
+                Record(id="1", metadata={"author": "Alice"}),
+                Record(id="2", metadata={"author": "Bob"}),
+            ]
+        )
+        with patch.object(store.store, "iter_batches", wraps=store.store.iter_batches) as scan:
+            result = store.filter(author="Alice")
+        assert result == [Record(id="1", metadata={"author": "Alice"})]
+        scan.assert_not_called()
+
+
+async def test_typed_sqlite_record_store_afilter_uses_pushdown_not_full_scan() -> None:
+    async with TypedSQLiteRecordStore(metadata_schema={"author": "TEXT"}) as store:
+        await store.aset_many(
+            [
+                Record(id="1", metadata={"author": "Alice"}),
+                Record(id="2", metadata={"author": "Bob"}),
+            ]
+        )
+        with patch.object(store.store, "aiter_batches", wraps=store.store.aiter_batches) as scan:
+            result = await store.afilter(author="Alice")
+        assert result == [Record(id="1", metadata={"author": "Alice"})]
+        scan.assert_not_called()

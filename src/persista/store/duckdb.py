@@ -5,6 +5,7 @@ from __future__ import annotations
 
 __all__ = ["BaseDuckDBStore", "DuckDBStore", "TypedDuckDBStore"]
 
+import asyncio
 import json
 import logging
 import threading
@@ -125,11 +126,21 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         return sql
 
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+        return list(self.filter_items(**field_filters).values())
+
+    def filter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
+        """Like :meth:`filter`, but keyed by the matching rows' keys.
+
+        This lets callers that need to know *which* key each matching
+        value belongs to (e.g. a record store layered on top) push their
+        filter down into the SQL ``WHERE`` clause instead of pulling
+        every row and filtering in Python.
+        """
         self._check_open()
         if not field_filters:
             with self._lock:
                 rows = self._conn.execute(self._select_sql()).fetchall()
-            return [self._row_to_kv(row)[1] for row in rows]
+            return dict(self._row_to_kv(row) for row in rows)
 
         conditions, values = [], []
         for field, expected in field_filters.items():
@@ -142,7 +153,11 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         where = " AND ".join(conditions)
         with self._lock:
             rows = self._conn.execute(self._select_sql(where), values).fetchall()
-        return [self._row_to_kv(row)[1] for row in rows]
+        return dict(self._row_to_kv(row) for row in rows)
+
+    async def afilter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
+        """Async equivalent of :meth:`filter_items`."""
+        return await asyncio.to_thread(lambda: self.filter_items(**field_filters))
 
     def _check_open(self) -> None:
         if self._closed:

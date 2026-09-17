@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Generator, Iterator
+from unittest.mock import patch
 
 import pytest
 
 from persista.record import Record
 from persista.record.store import BaseRecordStore, RecordStore
-from persista.store import BaseStore, InMemoryStore
+from persista.store import BaseStore, InMemoryStore, TypedSQLiteStore
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -116,6 +117,43 @@ def test_filter_no_match_returns_empty(store: RecordStore, records: list[Record]
     assert store.filter(author="Charlie") == []
 
 
+def test_filter_falls_back_to_full_scan_when_store_has_no_filter_items(
+    store: RecordStore, records: list[Record]
+) -> None:
+    """``InMemoryStore`` has no ``filter_items``, so ``filter`` must
+    fall back to scanning ``iter_batches`` rather than crashing or
+    silently returning nothing."""
+    store.set_many(records)
+    with patch.object(store.store, "iter_batches", wraps=store.store.iter_batches) as scan:
+        result = store.filter(author="Alice")
+    assert {r.id for r in result} == {"1", "2"}
+    scan.assert_called_once()
+
+
+def test_filter_uses_store_filter_items_when_available() -> None:
+    """When the underlying store exposes ``filter_items`` (e.g. a
+    ``Typed*Store`` with real SQL columns), ``filter`` must push
+    ``metadata_filters`` down to it instead of scanning."""
+    sqlite_store = TypedSQLiteStore(value_schema={"author": "TEXT"})
+    with RecordStore(sqlite_store) as store:
+        store.set_many(
+            [
+                Record(id="1", metadata={"author": "Alice"}),
+                Record(id="2", metadata={"author": "Bob"}),
+            ]
+        )
+        with (
+            patch.object(sqlite_store, "iter_batches", wraps=sqlite_store.iter_batches) as scan,
+            patch.object(
+                sqlite_store, "filter_items", wraps=sqlite_store.filter_items
+            ) as filter_items,
+        ):
+            result = store.filter(author="Alice")
+        assert result == [Record(id="1", metadata={"author": "Alice"})]
+        filter_items.assert_called_once_with(author="Alice")
+        scan.assert_not_called()
+
+
 # --- afilter ---
 
 
@@ -146,6 +184,37 @@ async def test_filter_and_afilter_agree(store: RecordStore, records: list[Record
     sync_result = {r.id for r in store.filter(author="Bob")}
     async_result = {r.id for r in await store.afilter(author="Bob")}
     assert sync_result == async_result
+
+
+async def test_afilter_falls_back_to_full_scan_when_store_has_no_filter_items(
+    store: RecordStore, records: list[Record]
+) -> None:
+    store.set_many(records)
+    with patch.object(store.store, "aiter_batches", wraps=store.store.aiter_batches) as scan:
+        result = await store.afilter(author="Alice")
+    assert {r.id for r in result} == {"1", "2"}
+    scan.assert_called_once()
+
+
+async def test_afilter_uses_store_afilter_items_when_available() -> None:
+    sqlite_store = TypedSQLiteStore(value_schema={"author": "TEXT"})
+    async with RecordStore(sqlite_store) as store:
+        await store.aset_many(
+            [
+                Record(id="1", metadata={"author": "Alice"}),
+                Record(id="2", metadata={"author": "Bob"}),
+            ]
+        )
+        with (
+            patch.object(sqlite_store, "aiter_batches", wraps=sqlite_store.aiter_batches) as scan,
+            patch.object(
+                sqlite_store, "afilter_items", wraps=sqlite_store.afilter_items
+            ) as afilter_items,
+        ):
+            result = await store.afilter(author="Alice")
+        assert result == [Record(id="1", metadata={"author": "Alice"})]
+        afilter_items.assert_called_once_with(author="Alice")
+        scan.assert_not_called()
 
 
 # --- _matches ---
