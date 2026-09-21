@@ -1,3 +1,7 @@
+# OSSF Scorecard supply-chain security workflow.
+# Runs the Scorecard analysis and publishes results to the OpenSSF badge API
+# and GitHub's code-scanning dashboard, so the repo's supply-chain security
+# posture is tracked over time.
 # This workflow uses actions that are not certified by GitHub. They are provided
 # by a third-party and are governed by separate terms of service, privacy
 # policy, and support documentation.
@@ -13,24 +17,25 @@ on:
     - cron: "45 5 * * 2"
   push:
     branches: ["main"]
+  workflow_dispatch: # to trigger manually
 
-# Declare default permissions as read only.
-permissions: read-all
+# Declare default permissions as read only, narrowed to just what's needed
+# (consistent with the least-privilege style used across the other workflows).
+permissions:
+  contents: read
 
 jobs:
   analysis:
     name: Scorecard analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # `publish_results: true` only works when run from the default branch. conditional can be removed if disabled.
-    if: github.event.repository.default_branch == github.ref_name || github.event_name == 'pull_request'
+    if: github.event.repository.default_branch == github.ref_name
     permissions:
       # Needed to upload the results to code-scanning dashboard.
       security-events: write
       # Needed to publish results and get a badge (see publish_results below).
       id-token: write
-      # Uncomment the permissions below if installing in a private repository.
-      # contents: read
-      # actions: read
 
     steps:
       # Needed for the Branch-Protection check, which requires a token with
@@ -67,11 +72,7 @@ jobs:
           #     of the value entered here.
           publish_results: true
 
-          # (Optional) Uncomment file_mode if you have a .gitattributes with files marked export-ignore
-          # file_mode: git
-
-      # Upload the results as artifacts (optional). Commenting out will disable uploads of run results in SARIF
-      # format to the repository Actions tab.
+      # Upload the results as artifacts, for visibility in the Actions tab.
       - name: "Upload artifact"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # ratchet:actions/upload-artifact@v7.0.1
         with:
@@ -79,8 +80,7 @@ jobs:
           path: results.sarif
           retention-days: 5
 
-      # Upload the results to GitHub's code scanning dashboard (optional).
-      # Commenting out will disable upload of results to your repo's Code Scanning dashboard
+      # Upload the results to GitHub's code scanning dashboard.
       - name: "Upload to code-scanning"
         uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # ratchet:github/codeql-action/upload-sarif@v4.38.0
         with:
