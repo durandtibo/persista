@@ -260,9 +260,9 @@ with PostgresStore(
 ```
 
 !!! warning
-    Unlike the SQLite, DuckDB, LMDB, and Redis stores, `BasePostgresStore` does not automatically
-    reopen a closed connection when re-entering a `with` block. Create a new store instance
-    instead of reusing one after `close()`.
+Unlike the SQLite, DuckDB, LMDB, and Redis stores, `BasePostgresStore` does not automatically
+reopen a closed connection when re-entering a `with` block. Create a new store instance
+instead of reusing one after `close()`.
 
 ## Embedded and Server-Backed Stores
 
@@ -305,8 +305,8 @@ with PickleLmdbStore("/tmp/lmdb_store") as store:
 ```
 
 !!! warning
-    `pickle.loads` can execute arbitrary code. Only use `PickleLmdbStore` (and
-    `PickleRedisStore`) with data from trusted sources.
+`pickle.loads` can execute arbitrary code. Only use `PickleLmdbStore` (and
+`PickleRedisStore`) with data from trusted sources.
 
 ### Redis
 
@@ -531,15 +531,15 @@ with store_from_uri("mycustom://...") as store:
 
 ## Choosing a Store
 
-| Store           | Backend            | Persisted | Typed columns | Pickle values | Async |
-|-----------------|---------------------|-----------|----------------|----------------|-------|
-| `InMemoryStore` | Python `dict`        | No        | No             | N/A            | Yes   |
-| `SQLiteStore`   | SQLite               | Yes       | Yes (`Typed…`) | No             | Yes   |
-| `DuckDBStore`   | DuckDB               | Yes       | Yes (`Typed…`) | No             | Yes (thread pool) |
-| `LmdbStore`     | LMDB                 | Yes       | No             | Yes (`Pickle…`)| Yes (thread pool) |
-| `RedisStore`    | Redis                | Yes       | No             | Yes (`Pickle…`)| Yes   |
-| `PostgresStore` | PostgreSQL           | Yes       | Yes (`Typed…`) | No             | Yes   |
-| `NullStore`     | None (discards everything) | No  | No             | N/A            | Yes   |
+| Store           | Backend                    | Persisted | Typed columns  | Pickle values   | Async             |
+| --------------- | -------------------------- | --------- | -------------- | --------------- | ----------------- |
+| `InMemoryStore` | Python `dict`              | No        | No             | N/A             | Yes               |
+| `SQLiteStore`   | SQLite                     | Yes       | Yes (`Typed…`) | No              | Yes               |
+| `DuckDBStore`   | DuckDB                     | Yes       | Yes (`Typed…`) | No              | Yes (thread pool) |
+| `LmdbStore`     | LMDB                       | Yes       | No             | Yes (`Pickle…`) | Yes (thread pool) |
+| `RedisStore`    | Redis                      | Yes       | No             | Yes (`Pickle…`) | Yes               |
+| `PostgresStore` | PostgreSQL                 | Yes       | Yes (`Typed…`) | No              | Yes               |
+| `NullStore`     | None (discards everything) | No        | No             | N/A             | Yes               |
 
 Use `InMemoryStore` for tests and prototyping, `SQLiteStore`/`DuckDBStore` for local
 single-process persistence without a server, and `RedisStore`/`PostgresStore` when data needs to

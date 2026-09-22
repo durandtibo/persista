@@ -238,7 +238,7 @@ signatures and locality-sensitive hashing (LSH):
 
 ### Id Collisions
 
-`find_id_collisions` flags the *same* id appearing more than once with *different* metadata,
+`find_id_collisions` flags the _same_ id appearing more than once with _different_ metadata,
 which usually indicates an id-generation bug rather than a legitimate duplicate:
 
 ```pycon
@@ -296,7 +296,7 @@ generator), since it makes two passes over `records`:
 
 ### Schema Shapes and Value Frequency
 
-`compute_schema_shapes` groups record ids by the *shape* of their metadata (the set of keys
+`compute_schema_shapes` groups record ids by the _shape_ of their metadata (the set of keys
 present, ignoring values), which surfaces schema drift across a corpus:
 
 ```pycon
