@@ -1,5 +1,5 @@
 # Code formatting and linting workflow.
-# Checks code formatting with black and code quality with ruff.
+# Checks code formatting and code quality with ruff.
 # Ensures code follows project style guidelines.
 
 name: Format
@@ -21,15 +21,15 @@ jobs:
       - name: Setup python environment
         uses: durandtibo/setup-venv-uv-action@59716ab8fb83cc7025548b3831c06b6f5c268f4f # ratchet:durandtibo/setup-venv-uv-action@v0.1.0
 
-      # Check code formatting with black
+      # Check code formatting with ruff
       - name: Check format
         run: |
-          inv check-format
+          inv format.check-python
 
       # Check code quality with ruff
       - name: Check lint
         run: |
-          inv check-lint
+          inv lint.check-lint
 
   shell:
     runs-on: ubuntu-latest
@@ -39,23 +39,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
 
-      - name: Install ShellCheck
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
-          shellcheck --version
-
+      # Installs and runs ShellCheck in one step. `version: stable` always
+      # resolves to the latest stable ShellCheck release at run time, and the
+      # action reference itself is kept current by dependabot.yml (github-actions
+      # ecosystem) + the bot-pin-action.yaml ratchet job — so no version to bump by hand.
       - name: Run ShellCheck
-        run: |
-          shopt -s globstar
-          echo "🔍 Running ShellCheck..."
-          shellcheck -- **/*.sh || exit 1
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # ratchet:ludeeus/action-shellcheck@2.0.0
+        with:
+          version: stable
+          check_together: "yes"
 
+      # setup-shfmt defaults shfmt-version to `latest`, so it also auto-updates;
+      # the action reference is kept current the same way as ShellCheck above.
       - name: Install shfmt
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shfmt
-          shfmt --version
+        uses: mfinelli/setup-shfmt@a25fda4c1fe115aec0f85e04126610841bc3141d # ratchet:mfinelli/setup-shfmt@v4.0.1
 
       - name: Run shfmt
         run: |

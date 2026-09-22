@@ -24,8 +24,6 @@ jobs:
         with:
           client-id: ${{ secrets.TIBOT_CLIENT_ID }}
           private-key: ${{ secrets.TIBOT_APP_PRIVATE_KEY }}
-          permission-contents: write
-          permission-pull-requests: write
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
@@ -39,12 +37,12 @@ jobs:
       # Update all dependencies to their latest compatible versions
       - name: Update dependencies
         run: |
-          inv update
+          inv env.update
 
       # Install dependencies including documentation dependencies
       - name: Install dependencies with docs
         run: |
-          inv install --docs-deps
+          inv env.install --groups dev,docs
 
       # Display updated dependency tree
       - name: Show dependency tree
@@ -55,10 +53,11 @@ jobs:
       # Run tests to ensure updates don't break functionality
       - name: Run unit tests
         run: |
-          inv unit-test --cov
+          inv test.unit --cov
 
       # Create a pull request with the dependency updates
-      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # ratchet:peter-evans/create-pull-request@v8
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # ratchet:peter-evans/create-pull-request@v8
         if: always()
         with:
           token: ${{ steps.app-token.outputs.token }}

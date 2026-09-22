@@ -80,7 +80,6 @@ solves this with a single, consistent `BaseStore` interface:
 >>> with InMemoryStore() as store:
 ...     store.set("user:1", {"name": "Alice"})
 ...     store.get("user:1")
-...
 {'name': 'Alice'}
 
 ```
@@ -95,7 +94,6 @@ solves this with a single, consistent `BaseStore` interface:
 ...     with SQLiteStore(Path(tmpdir).joinpath("data.sqlite")) as store:
 ...         store.set("user:1", {"name": "Alice"})
 ...         store.get("user:1")
-...
 {'name': 'Alice'}
 
 ```
@@ -107,7 +105,6 @@ solves this with a single, consistent `BaseStore` interface:
 >>> @cached(ttl=60)
 ... def slow_call(x: int) -> int:
 ...     return x**2
-...
 >>> slow_call(4)
 16
 

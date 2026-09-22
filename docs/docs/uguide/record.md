@@ -123,7 +123,6 @@ author name and topic, useful for tests, demos, and prototyping:
 >>> with RecordStore(InMemoryStore()) as store:
 ...     store.set_many([Record(id="1", metadata={"author": "Alice"})])
 ...     store.get("1")
-...
 Record(id='1', metadata={'author': 'Alice'})
 
 ```
@@ -141,7 +140,6 @@ Record(id='1', metadata={'author': 'Alice'})
 ...         ]
 ...     )
 ...     len(store.filter(category="Programming"))
-...
 2
 
 ```
@@ -160,7 +158,6 @@ Ready-to-use backends avoid wiring up the underlying `BaseStore` yourself:
 >>> with TypedSQLiteRecordStore(metadata_schema={"author": "TEXT"}) as store:
 ...     store.set_many([Record(id="1", metadata={"author": "Alice"})])
 ...     store.get("1")
-...
 Record(id='1', metadata={'author': 'Alice'})
 
 ```

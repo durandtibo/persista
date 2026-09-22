@@ -50,7 +50,6 @@ for tests and prototyping:
 ...     store.set("1", {"title": "Intro to Python", "author": "Alice"})
 ...     print(store.count())
 ...     print(store.get("1"))
-...
 1
 {'title': 'Intro to Python', 'author': 'Alice'}
 
@@ -88,7 +87,6 @@ match the given keyword arguments:
 ...     print(len(store.filter(author="Alice")))
 ...     print(len(store.filter(author="Alice", category="Programming")))
 ...     print(len(store.filter(category="History")))
-...
 2
 2
 1
@@ -113,7 +111,6 @@ exists:
 ...     print(store.get("1"))
 ...     store.set("1", {"title": "New title"}, on_conflict="skip")
 ...     print(store.get("1"))
-...
 {'title': 'Intro to Python', 'views': 11}
 {'title': 'Intro to Python', 'views': 11}
 
@@ -129,7 +126,6 @@ exists:
 ...     print(store.count())
 ...     store.clear()
 ...     print(store.count())
-...
 1
 0
 
@@ -161,7 +157,6 @@ It works both with a file path and with `":memory:"`:
 ...         }
 ...     )
 ...     print(len(store.filter(author="Alice")))
-...
 2
 
 ```
@@ -201,7 +196,6 @@ with SQLiteStore(Path("tmp/data.sqlite")) as store:
 ...         }
 ...     )
 ...     print(len(store.filter(author="Alice")))
-...
 2
 
 ```
@@ -234,7 +228,6 @@ schema can be used efficiently in `filter`/indexes:
 ...         }
 ...     )
 ...     print(len(store.filter(author="Alice")))
-...
 2
 
 ```
@@ -247,9 +240,7 @@ string, and store values in a configurable `table` (requires the `psycopg` extra
 ```python
 from persista.store import PostgresStore
 
-with PostgresStore(
-    "postgresql://user:pass@localhost/dbname", table="documents"
-) as store:
+with PostgresStore("postgresql://user:pass@localhost/dbname", table="documents") as store:
     store.set_many(
         {
             "1": {"title": "Intro to Python", "author": "Alice"},
@@ -355,7 +346,6 @@ also expose async methods, backed by a thread pool.
 ...         await store.aset("1", {"text": "hello"})
 ...         print(await store.acount())
 ...         print(await store.aget("1"))
-...
 >>> asyncio.run(main())
 1
 {'text': 'hello'}
@@ -378,7 +368,6 @@ also expose async methods, backed by a thread pool.
 ...         )
 ...         result = await store.afilter(author="Alice")
 ...         print(len(result))
-...
 >>> asyncio.run(main())
 2
 
@@ -420,7 +409,6 @@ as the input, without fetching the values themselves:
 >>> with InMemoryStore() as store:
 ...     store.set_many({"1": {"a": 1}, "2": {"a": 2}})
 ...     print(store.contains_many(["1", "2", "3"]))
-...
 [True, True, False]
 
 ```
@@ -436,7 +424,6 @@ zipping keys and flags yourself:
 ...     present, missing = split_present_missing(keys, store.contains_many(keys))
 ...     print(present)
 ...     print(missing)
-...
 ['1', '2']
 ['3']
 
@@ -453,7 +440,6 @@ into memory at once:
 ...     store.set_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
 ...     print(sorted(store.keys()))
 ...     print(sorted(v["a"] for v in store.values()))
-...
 ['1', '2', '3']
 [1, 2, 3]
 
@@ -467,7 +453,6 @@ in mini-batches, which is useful when the source data does not fit comfortably i
 >>> with InMemoryStore() as store:
 ...     store.set_batches((str(i), {"value": i}) for i in range(5))
 ...     print(store.count())
-...
 5
 
 ```
@@ -482,10 +467,8 @@ class from that URI:
 >>> from persista.store import SQLiteStore
 >>> with SQLiteStore("tmp/data.sqlite") as store:
 ...     uri = store.to_uri()
-...
 >>> with SQLiteStore.from_uri(uri) as reloaded:
 ...     pass
-...
 
 ```
 
@@ -503,11 +486,9 @@ URI's scheme to the right class automatically:
 >>> with JsonFileStore("data") as store:
 ...     store.set("1", {"title": "Intro to Python"})
 ...     uri = store.to_uri()
-...
 >>> with store_from_uri(uri) as reloaded:
 ...     print(isinstance(reloaded, JsonFileStore))
 ...     print(reloaded.get("1"))
-...
 True
 {'title': 'Intro to Python'}
 
