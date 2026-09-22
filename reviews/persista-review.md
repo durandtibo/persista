@@ -44,7 +44,7 @@ tightened, not correctness fires.
    about this, which is good, but it means the typed backends' main
    selling point (indexable columns) is invisible at the record-store
    layer — `RecordStore.filter` never delegates to `store.filter()`
-   (which for `TypedPostgresStore`/`TypedSQLiteStore` *does* push schema
+   (which for `TypedPostgresStore`/`TypedSQLiteStore` _does_ push schema
    fields into a `WHERE` clause) and instead re-implements filtering by
    iterating batches in Python. Worth at least offering a fast path that
    calls `self._store.filter(**metadata_filters)` when the underlying
@@ -68,7 +68,7 @@ tightened, not correctness fires.
    (`src/persista/store/postgres.py:262-324`), as are the `get`/`aget`,
    `get_many`/`aget_many`, `filter`/`afilter`, `contains`/`acontains`,
    etc. pairs throughout the file (each pair differs only in `await`/`async
-   with`). This mirrors the same pattern in `sqlite.py`/`duckdb.py`. Given
+with`). This mirrors the same pattern in `sqlite.py`/`duckdb.py`. Given
    there's no sync/async-agnostic codegen in play, this is probably an
    accepted cost of the "one class, sync+async twins" design rather than
    an oversight — but if the pattern keeps growing, a small internal code
@@ -84,7 +84,7 @@ tightened, not correctness fires.
 
 6. **FIXED** -- **`BasePostgresStore.get`/`get_many`/`filter`/`contains`/`contains_many`/
    `keys` and their async twins all repeat `sql.SQL(...).format(table=...,
-   key_col=...)` for the same "SELECT ... FROM {table} WHERE {key_col} =
+key_col=...)` for the same "SELECT ... FROM {table} WHERE {key_col} =
    ..." shape** (`postgres.py:208-466`). A couple of small query-builder
    helpers (`_select_by_key(cols, where)`) would remove a lot of repeated
    `sql.Identifier(self._key_column)` boilerplate without hurting
@@ -107,7 +107,7 @@ tightened, not correctness fires.
 8. **`RecordStore.filter`'s full-scan behavior for typed backends
    (finding 2) has no test asserting the current (documented) behavior**,
    i.e. that filtering via `RecordStore` on a `TypedPostgresStore`/
-   `TypedSQLiteStore`-backed instance does *not* use the typed columns.
+   `TypedSQLiteStore`-backed instance does _not_ use the typed columns.
    Adding one now would make it a deliberate, pinned behavior rather than
    something that could silently start doing pushdown (or vice versa)
    without anyone noticing.
@@ -129,7 +129,7 @@ tightened, not correctness fires.
     in different modules collide on cache keys
     (`src/persista/cache/cache.py:1061-1067`, `1153-1161`). This is
     called out as intentional for closures from the same factory, but two
-    *unrelated* functions that happen to share a qualname across modules
+    _unrelated_ functions that happen to share a qualname across modules
     (e.g. `pkg_a.foo` and `pkg_b.foo` both named top-level `foo`) would
     silently share cache entries too. Including `__module__` in the key
     would remove this narrower, almost certainly unintended collision

@@ -467,7 +467,7 @@ True
 
 This is useful for arguments that will never be serializable (e.g. a logger or a client instance)
 but that shouldn't block caching. Note that since the argument is dropped rather than incorporated
-into the key, calls that differ *only* in such an argument are treated as the same call and share
+into the key, calls that differ _only_ in such an argument are treated as the same call and share
 a cached result — make sure that's the behavior you want before enabling it for a given argument.
 
 ## API Reference

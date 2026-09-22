@@ -1,5 +1,5 @@
 site_name: persista
-site_url: 'https://durandtibo.github.io/persista/'
+site_url: "https://durandtibo.github.io/persista/"
 theme:
   name: material
   features:
@@ -66,7 +66,7 @@ plugins:
       default_handler: python
       handlers:
         python:
-          paths: [ ../src ]
+          paths: [../src]
           options:
             allow_inspection: true
             docstring_style: google

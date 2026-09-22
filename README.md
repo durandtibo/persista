@@ -1,6 +1,5 @@
 # persista
 
-
 <p align="center">
     <a href="https://github.com/durandtibo/persista/actions/workflows/ci.yaml">
         <img alt="CI" src="https://github.com/durandtibo/persista/actions/workflows/ci.yaml/badge.svg">
@@ -222,18 +221,18 @@ pip install persista[redis,httpx]  # with Redis and httpx support
 
 **Optional dependencies**, enabled per-backend:
 
-| Extra       | Enables                              |
-|-------------|---------------------------------------|
-| `aiosqlite` | Async SQLite store                    |
-| `duckdb`    | DuckDB store                          |
-| `faker`     | Test data generation helpers          |
-| `httpx`     | Sync/async HTTP fetch utilities       |
-| `lmdb`      | LMDB store                            |
-| `psycopg`   | PostgreSQL store                      |
-| `redis`     | Redis store                           |
-| `requests`  | Sync HTTP fetch utilities             |
-| `rich`      | Rich-formatted output                 |
-| `urllib3`   | urllib3-based HTTP utilities          |
+| Extra       | Enables                         |
+| ----------- | ------------------------------- |
+| `aiosqlite` | Async SQLite store              |
+| `duckdb`    | DuckDB store                    |
+| `faker`     | Test data generation helpers    |
+| `httpx`     | Sync/async HTTP fetch utilities |
+| `lmdb`      | LMDB store                      |
+| `psycopg`   | PostgreSQL store                |
+| `redis`     | Redis store                     |
+| `requests`  | Sync HTTP fetch utilities       |
+| `rich`      | Rich-formatted output           |
+| `urllib3`   | urllib3-based HTTP utilities    |
 
 For detailed installation instructions, see the [documentation](https://durandtibo.github.io/persista/).
 
