@@ -28,7 +28,7 @@ jobs:
       - name: Setup python environment
         uses: durandtibo/setup-venv-uv-action@59716ab8fb83cc7025548b3831c06b6f5c268f4f # ratchet:durandtibo/setup-venv-uv-action@v0.1.0
         with:
-          install-args: "--docs-deps"
+          install-args: "--groups dev,docs"
 
       # Configure git and fetch gh-pages branch for mike
       - name: Setup doc deploy
@@ -45,8 +45,8 @@ jobs:
           MODE: ${{ inputs.mode }}
         run: |
           case "$MODE" in
-            stable) inv publish-doc-latest ;;
-            dev) inv publish-doc-dev ;;
+            stable) inv doc.publish-latest ;;
+            dev) inv doc.publish-dev ;;
             *)
               echo "::error::Unknown mode '$MODE', expected 'stable' or 'dev'"
               exit 1

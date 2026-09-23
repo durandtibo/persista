@@ -9,17 +9,14 @@
 name: Dependency Review
 on:
   pull_request:
-    branches: ["main"]
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
   # Required for the comment-summary-in-pr option below.
   pull-requests: write
-
-# Cancel stale in-progress runs when a new commit is pushed to the same PR.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 jobs:
   dependency-review:

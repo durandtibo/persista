@@ -57,16 +57,20 @@ jobs:
       - name: Check optional packages installation
         if: ${{ matrix.package-extra != '' }}
         shell: bash
+        env:
+          PACKAGE_EXTRA: ${{ matrix.package-extra }}
         run: |
           set -euo pipefail
-          echo "🔍 Verifying if ${{ matrix.package-extra }} is installed..."
-          if ! uv pip list | grep -qE "^${{ matrix.package-extra }}\s"; then
-            echo "❌ Error: Package '${{ matrix.package-extra }}' not found in installed packages"
+          echo "🔍 Verifying if $PACKAGE_EXTRA is installed..."
+
+          if ! uv pip list | grep -qE "^${PACKAGE_EXTRA}\s"; then
+            echo "❌ Error: Package '$PACKAGE_EXTRA' not found in installed packages"
             echo "Installed packages:"
             uv pip list
             exit 1
           fi
-          echo "✅ Package '${{ matrix.package-extra }}' is installed"
+
+          echo "✅ Package '$PACKAGE_EXTRA' is installed"
 
   build-all:
     runs-on: ubuntu-latest

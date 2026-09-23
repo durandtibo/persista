@@ -1,3 +1,7 @@
+# Cyclic imports check.
+# Imports every persista subpackage in isolation to catch circular-import
+# regressions that only surface once a submodule is imported directly.
+
 name: Cyclic Imports
 on:
   workflow_call:
@@ -12,32 +16,27 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
 
       - name: Setup python environment
         uses: durandtibo/setup-venv-uv-action@59716ab8fb83cc7025548b3831c06b6f5c268f4f # ratchet:durandtibo/setup-venv-uv-action@v0.1.0
 
-      - name: check persista
+      - name: check modules
         run: |
-          python -c "import persista"
-
-      - name: check persista.cache
-        run: |
-          python -c "from persista import cache"
-          python -c "from persista.cache import factory"
-
-      - name: check persista.http
-        run: |
-          python -c "from persista import http"
-          python -c "from persista.http import httpx"
-          python -c "from persista.http import requests"
-
-      - name: check persista.store
-        run: |
-          python -c "from persista import store"
-          python -c "from persista.store import factory"
-
-      - name: check persista.utils
-        run: |
-          python -c "from persista import utils"
-          python -c "from persista.utils import imports"
+          # Discover all persista subpackages dynamically instead of a hand-maintained
+          # list, so newly added subpackages are automatically covered.
+          modules=$(python -c "
+          import pkgutil
+          import persista
+          names = ['persista'] + sorted(
+              name for _, name, ispkg in pkgutil.walk_packages(persista.__path__, prefix='persista.')
+              if ispkg
+          )
+          print('\n'.join(names))
+          ")
+          echo "$modules" | while IFS= read -r module; do
+            echo "::group::check ${module}"
+            python -c "import ${module}"
+            echo "::endgroup::"
+          done

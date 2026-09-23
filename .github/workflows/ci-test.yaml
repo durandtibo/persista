@@ -37,10 +37,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Run unit tests
         run: |
-          inv unit-test --cov
+          inv test.unit --cov
       - name: Run integration tests
         run: |
-          inv integration-test --cov
+          inv test.integration --cov
       # Upload coverage from a single representative cell of the matrix (only
       # for the main repository, to avoid spam from forks).
       - name: Upload coverage to Codecov
@@ -78,10 +78,10 @@ jobs:
           install-args: "--no-optional-deps"
       - name: Run unit tests
         run: |
-          inv unit-test --cov
+          inv test.unit --cov
       - name: Run integration tests
         run: |
-          inv integration-test --cov
+          inv test.integration --cov
 
   # Test RedisStore against a live Redis server (only supported on Linux-hosted
   # runners, hence the separate job instead of a service on the OS matrix above)
@@ -117,7 +117,7 @@ jobs:
         env:
           PERSISTA_TEST_REDIS_URL: redis://localhost:6379/0
         run: |
-          inv integration-test
+          inv test.integration
 
   # Test PostgresStore/TypedPostgresStore against a live Postgres server (only
   # supported on Linux-hosted runners, hence the separate job instead of a
@@ -158,4 +158,4 @@ jobs:
         env:
           PERSISTA_TEST_POSTGRES_URL: postgresql://postgres@localhost:5432/postgres
         run: |
-          inv integration-test
+          inv test.integration
