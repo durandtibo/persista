@@ -97,7 +97,7 @@ jobs:
 
     services:
       redis:
-        image: redis:7
+        image: index.docker.io/library/redis@sha256:c6eabf748fc7a61dbb5a705c78bcf3d6377b1127a97d0ce965c11c44ba46896f # ratchet:redis:7
         ports:
           - 6379:6379
         options: >-
@@ -134,7 +134,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16-alpine
+        image: index.docker.io/library/postgres@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea # ratchet:postgres:16-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_DB: postgres
