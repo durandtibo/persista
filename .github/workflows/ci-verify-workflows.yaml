@@ -6,20 +6,13 @@ name: Verify Workflows
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/*" # Trigger on changes to workflow files
   push:
-    paths:
-      - ".github/workflows/*" # Trigger on changes to workflow files
+    branches:
+      - main
   workflow_dispatch: # to trigger manually
 
 permissions:
   contents: read
-
-# Cancel stale in-progress runs when a new commit is pushed to the same PR/branch.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 jobs:
   verify-workflows:

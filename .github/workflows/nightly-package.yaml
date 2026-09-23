@@ -8,8 +8,15 @@ permissions:
   contents: read
 
 jobs:
+  # Get the version bounds for required (non-optional) dependencies from
+  # dev/config/package_versions.json.
   get-versions:
     uses: ./.github/workflows/lib-get-package-versions.yaml
+
+  # Get the extra names from pyproject.toml, and their version bounds from
+  # dev/config/package_versions.json.
+  get-deps:
+    uses: ./.github/workflows/lib-get-package-deps.yaml
 
   # Load the shared python-version/OS matrix once, and pass it down to every
   # job below that needs it.
@@ -61,6 +68,8 @@ jobs:
   #     Dependencies     #
   ########################
 
+  # persista depends on coola directly (not via an optional extra), so it is
+  # tested separately from the optional dependencies below.
   coola:
     needs: [get-versions, get-matrix]
     uses: ./.github/workflows/nightly-test-package-dep.yaml
@@ -73,90 +82,18 @@ jobs:
   #     Optional dependencies     #
   #################################
 
-  aiosqlite:
-    needs: [get-versions, get-matrix]
+  # One job per optional dependency, driven by get-deps instead of a
+  # hardcoded list, so a new optional dependency only needs to be added to
+  # pyproject.toml (and dev/config/package_versions.json, kept up to date by
+  # bot-generate-package-versions.yaml).
+  test-dep:
+    needs: [get-deps, get-matrix]
+    strategy:
+      fail-fast: false
+      matrix:
+        package-name: ${{ fromJson(needs.get-deps.outputs.extras) }}
     uses: ./.github/workflows/nightly-test-package-dep.yaml
     with:
-      package-name: aiosqlite
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).aiosqlite) }}
-      test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}
-
-  duckdb:
-    needs: [get-versions, get-matrix]
-    uses: ./.github/workflows/nightly-test-package-dep.yaml
-    with:
-      package-name: duckdb
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).duckdb) }}
-      test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}
-
-  faker:
-    needs: [get-versions, get-matrix]
-    uses: ./.github/workflows/nightly-test-package-dep.yaml
-    with:
-      package-name: faker
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).faker) }}
-      test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}
-
-  httpx:
-    needs: [get-versions, get-matrix]
-    uses: ./.github/workflows/nightly-test-package-dep.yaml
-    with:
-      package-name: httpx
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).httpx) }}
-      test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}
-
-  lmdb:
-    needs: [get-versions, get-matrix]
-    uses: ./.github/workflows/nightly-test-package-dep.yaml
-    with:
-      package-name: lmdb
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).lmdb) }}
-      test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}
-
-  #  polars:
-  #    needs: [get-versions, get-matrix]
-  #    uses: ./.github/workflows/nightly-test-package-dep.yaml
-  #    with:
-  #      package-name: polars
-  #      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).polars) }}
-  #      test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}
-
-  psycopg:
-    needs: [get-versions, get-matrix]
-    uses: ./.github/workflows/nightly-test-package-dep.yaml
-    with:
-      package-name: psycopg
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).psycopg) }}
-      test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}
-
-  redis:
-    needs: [get-versions, get-matrix]
-    uses: ./.github/workflows/nightly-test-package-dep.yaml
-    with:
-      package-name: redis
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).redis) }}
-      test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}
-
-  requests:
-    needs: [get-versions, get-matrix]
-    uses: ./.github/workflows/nightly-test-package-dep.yaml
-    with:
-      package-name: requests
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).requests) }}
-      test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}
-
-  rich:
-    needs: [get-versions, get-matrix]
-    uses: ./.github/workflows/nightly-test-package-dep.yaml
-    with:
-      package-name: rich
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).rich) }}
-      test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}
-
-  urllib3:
-    needs: [get-versions, get-matrix]
-    uses: ./.github/workflows/nightly-test-package-dep.yaml
-    with:
-      package-name: urllib3
-      package-versions: ${{ toJson(fromJson(needs.get-versions.outputs.package_versions).urllib3) }}
+      package-name: ${{ matrix.package-name }}
+      package-versions: ${{ toJson(fromJson(needs.get-deps.outputs.package_versions)[matrix.package-name]) }}
       test-matrix: ${{ needs.get-matrix.outputs.test_matrix }}

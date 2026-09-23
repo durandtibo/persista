@@ -31,7 +31,7 @@ jobs:
       max-parallel: 8
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: ${{ fromJson(inputs.test-matrix).os_matrix }}
         python-version: ${{ fromJson(inputs.test-matrix).python_versions }}
         extra: ${{ fromJson(needs.get-extras.outputs.extras) }}
 
@@ -44,11 +44,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
           activate-environment: true
       - name: Install package
+        env:
+          INSTALL_ARGS: ${{ inputs.install-args }}
+          EXTRA: ${{ matrix.extra }}
         run: |
-          uv pip install ${{ inputs.install-args }} "persista[${{ matrix.extra }}]"
-      - name: Show dependency tree
-        run: |
-          uv pip tree --show-version-specifiers
-      - name: Run some checks
-        run: |
-          python tests/package_checks.py
+          read -ra install_args <<< "$INSTALL_ARGS"
+          uv pip install "${install_args[@]}" "persista[$EXTRA]"
+      # Display dependency tree and run basic package checks
+      - name: Verify installed package
+        uses: ./.github/actions/verify-installed-package

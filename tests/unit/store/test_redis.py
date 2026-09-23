@@ -7,8 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from persista.store import PickleRedisStore, RedisStore
-from persista.store import redis as redis_module
+from persista.store import PickleRedisStore, RedisStore, redis as redis_module
 
 if TYPE_CHECKING:
     from persista.store import BaseRedisStore

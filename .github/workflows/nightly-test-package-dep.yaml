@@ -28,7 +28,7 @@ jobs:
       max-parallel: 8
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        os: ${{ fromJson(inputs.test-matrix).os_matrix }}
         python-version: ${{ fromJson(inputs.test-matrix).python_versions }}
         # Test with each version of the specified package
         package-version: ${{ fromJson(inputs.package-versions) }}
@@ -57,13 +57,6 @@ jobs:
           package-version: ${{ matrix.package-version }}
           python-version: ${{ matrix.python-version }}
 
-      # Display dependency tree
-      - name: Show dependency tree
-        shell: bash
-        run: |
-          uv pip tree --show-version-specifiers
-
-      # Run basic package checks
-      - name: Run some checks
-        run: |
-          python tests/package_checks.py
+      # Display dependency tree and run basic package checks
+      - name: Verify installed package
+        uses: ./.github/actions/verify-installed-package
