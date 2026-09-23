@@ -9,8 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from persista.store import BaseSQLiteStore, SQLiteStore, TypedSQLiteStore
-from persista.store import sqlite as sqlite_module
+from persista.store import BaseSQLiteStore, SQLiteStore, TypedSQLiteStore, sqlite as sqlite_module
 from persista.testing.fixtures import aiosqlite_available
 
 if TYPE_CHECKING:
