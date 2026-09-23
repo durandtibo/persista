@@ -45,12 +45,6 @@ jobs:
           INSTALL_CMD: ${{ inputs.install-cmd }}
         run: |
           $INSTALL_CMD
-      # Display dependency tree
-      - name: Show dependency tree
-        shell: bash
-        run: |
-          uv pip tree --show-version-specifiers
-      # Run basic package checks (imports, version, etc.)
-      - name: Run some checks
-        run: |
-          python tests/package_checks.py
+      # Display dependency tree and run basic package checks (imports, version, etc.)
+      - name: Verify installed package
+        uses: ./.github/actions/verify-installed-package

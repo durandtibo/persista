@@ -65,4 +65,4 @@ jobs:
           title: Update dependencies
           commit-message: "Update dependencies"
           body: Update dependencies to latest compatible version.
-          author: ci-bot <${{secrets.CI_BOT_EMAIL}}>
+          author: ci-bot <${{ secrets.CI_BOT_EMAIL }}>
