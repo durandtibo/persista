@@ -12,7 +12,7 @@ only-include = ["src"]
 
 [project]
 name = "persista"
-version = "0.0.4a1"
+version = "0.0.4a2"
 description = "library for persisting and caching data"
 readme = "README.md"
 authors = [
@@ -47,7 +47,7 @@ classifiers = [
 
 requires-python = ">=3.10"
 dependencies = [
-    "coola >=1.1.11a0,<2.0",
+    "coola >=1.2.0a1,<2.0",
 ]
 
 [project.optional-dependencies]
