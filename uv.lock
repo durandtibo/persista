@@ -270,11 +270,11 @@ wheels = [
 
 [[package]]
 name = "coola"
-version = "1.2.0a1"
+version = "1.2.0a2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/25/7e/3d3a551c5ce8776c3217506a330eb5d9382616ccbf837953d985ba954968/coola-1.2.0a1.tar.gz", hash = "sha256:d758eacc86ee7789df9446814dd34c78c610744027631512b777fbb30d9d8ae0", size = 155327, upload-time = "2026-09-23T00:59:21.124Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/c9/8513ad832da5c8b6a468afc89ecabb5abd7ac27c7e6f7dc8806d061c4334/coola-1.2.0a2.tar.gz", hash = "sha256:bc8feec16c2b1730339e47b2d4a3e7933a6ce831854a7fc7aee91140008baace", size = 155285, upload-time = "2026-09-26T21:39:59.085Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/25/1b/28506ca88c9799b14eedcd9cb09df300dbd142d7269a7ee275ebac48dc9f/coola-1.2.0a1-py3-none-any.whl", hash = "sha256:4c473a6302e9465d2978abd98d134b4048aea784dceded6be0df871d42cbc6fd", size = 266857, upload-time = "2026-09-23T00:59:19.411Z" },
+    { url = "https://files.pythonhosted.org/packages/13/00/ed9a123dc21eca7c18142dfd8242eaab739f4dd3b31ac5d518700ee8bdc7/coola-1.2.0a2-py3-none-any.whl", hash = "sha256:3953be44259246dc07ab1a71a2493d9f1c01374142f737504f8294154d5b930a", size = 266851, upload-time = "2026-09-26T21:39:57.619Z" },
 ]
 
 [[package]]
