@@ -95,6 +95,15 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         return key.decode()
 
     @property
+    def environment(self) -> lmdb.Environment:
+        """Return the underlying LMDB environment.
+
+        This is not part of the regular store API. It is meant for
+        debugging or running specific commands. The store must be open.
+        """
+        return self._environment
+
+    @property
     def _environment(self) -> lmdb.Environment:
         if self._env is None:
             msg = f"{type(self).__name__} is not open."

@@ -1751,3 +1751,16 @@ async def test_json_store_normalizes_tuples_and_sets_are_unsupported_async(
         assert await store.aget("1") == {"coordinates": [1, 2, 3]}
         with pytest.raises(TypeError, match="not JSON serializable"):
             await store.aset("2", {"tags": {"python", "redis"}})
+
+
+# --- client ---
+
+
+def test_client_executes_commands(store: BaseRedisStore) -> None:
+    store.set("a", {"x": 1})
+    assert store.client.scard("__keys__") == 1
+
+
+def test_client_before_open_raises(store_cls: type[BaseRedisStore]) -> None:
+    with pytest.raises(RuntimeError, match="not open"):
+        _ = store_cls().client

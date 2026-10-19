@@ -160,6 +160,15 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         return await asyncio.to_thread(lambda: self.filter_items(**field_filters))
 
     @property
+    def connection(self) -> duckdb.DuckDBPyConnection:
+        """Return the underlying DuckDB connection.
+
+        This is not part of the regular store API. It is meant for
+        debugging or running specific commands. The store must be open.
+        """
+        return self._connection
+
+    @property
     def _connection(self) -> duckdb.DuckDBPyConnection:
         if self._conn is None:
             msg = f"{type(self).__name__} is not open."

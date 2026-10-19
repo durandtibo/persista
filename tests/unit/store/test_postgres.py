@@ -2499,3 +2499,16 @@ async def test_typed_postgres_store_aget_round_trips_extra_field(
 ) -> None:
     await typed_store.aset("1", {"author": "Alice", "publisher": "O'Reilly"})
     assert (await typed_store.aget("1"))["publisher"] == "O'Reilly"
+
+
+# --- connection ---
+
+
+def test_connection_returns_underlying_connection(store: BasePostgresStore) -> None:
+    assert store.connection is store._connection
+
+
+def test_connection_before_open_raises(store_cls: type[BasePostgresStore]) -> None:
+    store = store_cls("postgresql://localhost/db", table="items")
+    with pytest.raises(RuntimeError, match="not open"):
+        _ = store.connection
