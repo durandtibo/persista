@@ -22,8 +22,7 @@ from persista.store.validation import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
-
-    from typing_extensions import Self
+    from typing import Self
 
     from persista.store.types import OnConflict
 

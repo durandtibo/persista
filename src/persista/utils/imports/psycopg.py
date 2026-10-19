@@ -9,8 +9,8 @@ __all__ = [
     "raise_psycopg_missing_error",
 ]
 
-from functools import lru_cache
-from typing import TYPE_CHECKING, Any, NoReturn, TypeVar
+from functools import cache
+from typing import TYPE_CHECKING, Any, Never, TypeVar
 
 from coola.utils.imports import (
     decorator_package_available,
@@ -41,7 +41,7 @@ def check_psycopg() -> None:
         raise_psycopg_missing_error()
 
 
-@lru_cache(1)
+@cache
 def is_psycopg_available() -> bool:
     r"""Indicate if the ``psycopg`` package is installed or not.
 
@@ -83,7 +83,7 @@ def psycopg_available(fn: F) -> F:
     return decorator_package_available(fn, is_psycopg_available)
 
 
-def raise_psycopg_missing_error() -> NoReturn:
+def raise_psycopg_missing_error() -> Never:
     r"""Raise a RuntimeError to indicate the ``psycopg`` package is
     missing."""
     raise_package_missing_error("psycopg", "psycopg[binary]")

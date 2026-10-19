@@ -15,8 +15,7 @@ from persista.utils.asyncio import EmptyAsyncIterator
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator, Mapping
-
-    from typing_extensions import Self
+    from typing import Self
 
     from persista.store.types import OnConflict
 

@@ -34,8 +34,7 @@ from persista.utils.path import prepare_store_path
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator, Iterator, Mapping, Sequence
     from pathlib import Path
-
-    from typing_extensions import Self
+    from typing import Self
 
     from persista.store.types import OnConflict
 
