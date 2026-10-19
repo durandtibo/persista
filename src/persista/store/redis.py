@@ -85,6 +85,15 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         self._aclient_lock = asyncio.Lock()
 
     @property
+    def client(self) -> redis.Redis:
+        """Return the underlying Redis client.
+
+        This is not part of the regular store API. It is meant for
+        debugging or running specific commands. The store must be open.
+        """
+        return self._redis
+
+    @property
     def _redis(self) -> redis.Redis:
         if self._client is None:
             msg = f"{type(self).__name__} is not open."

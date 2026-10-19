@@ -810,3 +810,16 @@ def test_pickle_store_decode_raises_on_corrupted_bytes(tmp_path: Path) -> None:
             txn.put(b"1", b"not-a-valid-pickle-blob")
         with pytest.raises(Exception):  # noqa: B017, PT011
             store.get("1")
+
+
+# --- environment ---
+
+
+def test_environment_exposes_lmdb_env(store: BaseLmdbStore) -> None:
+    store.set("a", {"x": 1})
+    assert store.environment.stat()["entries"] >= 1
+
+
+def test_environment_before_open_raises(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> None:
+    with pytest.raises(RuntimeError, match="not open"):
+        _ = store_cls(tmp_path / "db").environment

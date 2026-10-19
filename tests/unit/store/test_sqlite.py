@@ -2040,3 +2040,16 @@ async def test_typed_sqlite_store_afrom_uri_read_only_rejects_writes(
         assert await reloaded.acount() == len(items)
         with pytest.raises(sqlite3.OperationalError):
             await reloaded.aset("new", {"author": "x"})
+
+
+# --- connection ---
+
+
+def test_connection_executes_sql(store: BaseSQLiteStore) -> None:
+    store.set("a", {"x": 1})
+    assert store.connection.execute("SELECT COUNT(*) FROM store").fetchone()[0] == 1
+
+
+def test_connection_before_open_raises(store_cls: type[BaseSQLiteStore]) -> None:
+    with pytest.raises(RuntimeError, match="not open"):
+        _ = store_cls(":memory:").connection

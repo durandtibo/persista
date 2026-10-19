@@ -1129,3 +1129,16 @@ async def test_duckdb_store_concurrent_async_access_does_not_corrupt(
     assert await store.acount() == 50
     for i in range(50):
         assert await store.aget(str(i)) == {"a": i}
+
+
+# --- connection ---
+
+
+def test_connection_executes_sql(store: BaseDuckDBStore) -> None:
+    store.set("a", {"x": 1})
+    assert store.connection.execute("SELECT COUNT(*) FROM store").fetchone()[0] == 1
+
+
+def test_connection_before_open_raises(store_cls: type[BaseDuckDBStore]) -> None:
+    with pytest.raises(RuntimeError, match="not open"):
+        _ = store_cls(":memory:").connection
