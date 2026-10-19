@@ -49,7 +49,7 @@ jobs:
           before="$(git rev-parse HEAD)"
           make -f .make/self.mk update-subtree
           after="$(git rev-parse HEAD)"
-          if [ "$before" != "$after" ]; then
+          if [ "$before" != "$after" ] && ! git diff --quiet "$before" "$after"; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
