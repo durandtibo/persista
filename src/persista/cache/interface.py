@@ -12,7 +12,7 @@ __all__ = [
 
 import functools
 import inspect
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from persista.cache.cache import _UNSET, Cache
 from persista.cache.utils import make_key
@@ -91,7 +91,7 @@ def _make_call_key(
     """Derive a cache key for one call, shared by :func:`cached` and
     :func:`async_cached`'s wrappers."""
     return make_key(
-        func.__qualname__,
+        getattr(func, "__qualname__", repr(func)),
         args,
         kwargs,
         strategy=strategy,
@@ -162,7 +162,7 @@ def cached(
                 key = _make_call_key(func, args, kwargs, strategy, ignore_non_serializable)
                 return await cache.aget_or_compute(key, func, args, kwargs, ttl=ttl)
 
-            return async_wrapper  # pyright: ignore[reportReturnType]
+            return cast("Callable[..., T]", async_wrapper)
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> T:

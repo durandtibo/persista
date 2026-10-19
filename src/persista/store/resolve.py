@@ -5,7 +5,7 @@ from __future__ import annotations
 
 __all__ = ["resolve_store"]
 
-from typing import Any
+from typing import Any, cast
 
 from coola.factory import resolve_object
 
@@ -46,4 +46,4 @@ def resolve_store(store: BaseStore | dict[str, Any]) -> BaseStore:
 
         ```
     """
-    return resolve_object(store, cls=BaseStore)
+    return cast("BaseStore", resolve_object(store, cls=BaseStore))

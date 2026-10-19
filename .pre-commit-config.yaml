@@ -85,10 +85,9 @@ repos:
           - tomli
   - repo: local
     hooks:
-      # Type-checks Python files with pyright.
-      - id: pyright
-        name: pyright
-        entry: uv run inv types.check
+      - id: ty
+        name: ty
+        entry: uv run ty check
         language: system
         types: [python]
         pass_filenames: false

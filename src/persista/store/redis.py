@@ -84,6 +84,13 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         self._aclient: aredis.Redis | None = None
         self._aclient_lock = asyncio.Lock()
 
+    @property
+    def _redis(self) -> redis.Redis:
+        if self._client is None:
+            msg = f"{type(self).__name__} is not open."
+            raise RuntimeError(msg)
+        return self._client
+
     def _check_open(self) -> None:
         if self._closed:
             msg = (
@@ -137,7 +144,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         if self._closed:
             return
         logger.info("Closing Redis connection at %s", self._url)
-        self._client.close()
+        self._redis.close()
         self._closed = True
 
     async def aclose(self) -> None:
@@ -146,7 +153,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
             self._aclient = None
         if not self._closed:
             logger.info("Closing Redis connection at %s", self._url)
-            self._client.close()
+            self._redis.close()
             self._closed = True
 
     @property
@@ -163,7 +170,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
     def get(self, key: str) -> dict[str, Any] | None:
         self._check_open()
         self._check_no_reserved_key(key)
-        value = self._client.get(key)
+        value = self._redis.get(key)
         return self._decode(value) if value is not None else None
 
     async def aget(self, key: str) -> dict[str, Any] | None:
@@ -177,7 +184,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         if not keys:
             return []
         self._check_no_reserved_keys(keys)
-        values = self._client.mget(keys)
+        values = self._redis.mget(keys)
         return [self._decode(value) if value is not None else None for value in values]
 
     async def aget_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
@@ -229,7 +236,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         # commit, so "raise"/"skip"/"merge" behave correctly even under
         # concurrent access from other clients/processes.
         keys = list(items.keys())
-        with self._client.pipeline() as pipe:
+        with self._redis.pipeline() as pipe:
             while True:
                 pipe.watch(*keys)
                 try:
@@ -278,7 +285,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
-            pipe = self._client.pipeline()
+            pipe = self._redis.pipeline()
             for key, value in items.items():
                 pipe.set(key, self._encode(value))
             pipe.sadd(_KEYS_SET, *items.keys())
@@ -314,7 +321,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
     def delete(self, key: str) -> None:
         self._check_open()
         self._check_no_reserved_key(key)
-        pipe = self._client.pipeline()
+        pipe = self._redis.pipeline()
         pipe.delete(key)
         pipe.srem(_KEYS_SET, key)
         pipe.execute()
@@ -332,7 +339,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         if not keys:
             return
         self._check_no_reserved_keys(keys)
-        pipe = self._client.pipeline()
+        pipe = self._redis.pipeline()
         pipe.delete(*keys)
         pipe.srem(_KEYS_SET, *keys)
         pipe.execute()
@@ -356,7 +363,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
     def contains(self, key: str) -> bool:
         self._check_open()
         self._check_no_reserved_key(key)
-        return bool(self._client.sismember(_KEYS_SET, key))
+        return bool(self._redis.sismember(_KEYS_SET, key))
 
     async def acontains(self, key: str) -> bool:
         self._check_no_reserved_key(key)
@@ -368,7 +375,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         if not keys:
             return []
         self._check_no_reserved_keys(keys)
-        flags = self._client.smismember(_KEYS_SET, keys)
+        flags = self._redis.smismember(_KEYS_SET, keys)
         return [bool(flag) for flag in flags]
 
     async def acontains_many(self, keys: list[str]) -> list[bool]:
@@ -381,7 +388,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
 
     def keys(self) -> Iterator[str]:
         self._check_open()
-        for key in self._client.smembers(_KEYS_SET):
+        for key in self._redis.smembers(_KEYS_SET):
             yield self._key_str(key)
 
     async def akeys(self) -> AsyncIterator[str]:
@@ -394,9 +401,9 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
     ) -> Generator[dict[str, dict[str, Any]], None, None]:
         validate_batch_size(batch_size)
         self._check_open()
-        all_keys = [self._key_str(key) for key in self._client.smembers(_KEYS_SET)]
+        all_keys = [self._key_str(key) for key in self._redis.smembers(_KEYS_SET)]
         for batch in batchify(all_keys, size=batch_size):
-            values = self._client.mget(batch)
+            values = self._redis.mget(batch)
             yield {
                 key: self._decode(value)
                 for key, value in zip(batch, values, strict=True)
@@ -417,7 +424,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
 
     def count(self) -> int:
         self._check_open()
-        return self._client.scard(_KEYS_SET)
+        return self._redis.scard(_KEYS_SET)
 
     async def acount(self) -> int:
         client = await self._ensure_aclient()

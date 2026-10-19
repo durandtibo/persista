@@ -5,7 +5,7 @@ from __future__ import annotations
 
 __all__ = ["resolve_cache"]
 
-from typing import Any
+from typing import Any, cast
 
 from coola.factory import resolve_object
 
@@ -46,4 +46,4 @@ def resolve_cache(cache: Cache | dict[str, Any]) -> Cache:
 
         ```
     """
-    return resolve_object(cache, cls=Cache)
+    return cast("Cache", resolve_object(cache, cls=Cache))
