@@ -949,6 +949,12 @@ def test_closed_true_after_close(store: BaseRedisStore) -> None:
     assert store.closed
 
 
+def test_redis_raises_when_not_open(store_cls: type[BaseRedisStore]) -> None:
+    store = store_cls()
+    with pytest.raises(RuntimeError, match="is not open"):
+        _ = store._redis
+
+
 # --- context manager ---
 
 

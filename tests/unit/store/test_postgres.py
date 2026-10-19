@@ -1171,6 +1171,12 @@ def test_closed_true_after_close(store: BasePostgresStore) -> None:
     assert store.closed
 
 
+def test_connection_raises_when_not_open(store_cls: type[BasePostgresStore]) -> None:
+    store = store_cls("postgresql://x", table="store")
+    with pytest.raises(RuntimeError, match="is not open"):
+        _ = store._connection
+
+
 # --- context manager ---
 
 
