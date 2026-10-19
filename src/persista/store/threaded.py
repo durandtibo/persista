@@ -9,6 +9,8 @@ __all__ = ["ThreadedAsyncStoreMixin", "athread_iter"]
 import asyncio
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from persista.store.base import BaseStore
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 
@@ -49,13 +51,13 @@ async def athread_iter(sync_iter_factory: Callable[[], Iterator[_T]]) -> AsyncIt
     """
     iterator = await asyncio.to_thread(lambda: iter(sync_iter_factory()))
     while True:
-        item = await asyncio.to_thread(next, iterator, _SENTINEL)
+        item: Any = await asyncio.to_thread(next, iterator, _SENTINEL)
         if item is _SENTINEL:
             return
         yield item
 
 
-class ThreadedAsyncStoreMixin:
+class ThreadedAsyncStoreMixin(BaseStore):
     r"""Provide every ``a``-prefixed async method as an
     ``asyncio.to_thread`` wrapper around the corresponding sync method.
 

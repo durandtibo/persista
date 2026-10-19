@@ -94,6 +94,13 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def _key_str(key: bytes) -> str:
         return key.decode()
 
+    @property
+    def _environment(self) -> lmdb.Environment:
+        if self._env is None:
+            msg = f"{type(self).__name__} is not open."
+            raise RuntimeError(msg)
+        return self._env
+
     def _check_open(self) -> None:
         if self._closed:
             msg = (
@@ -113,7 +120,7 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         if self._closed:
             return
         logger.info("Closing LMDB environment at %s", self._path)
-        self._env.close()
+        self._environment.close()
         self._closed = True
 
     @property
@@ -122,7 +129,7 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
 
     def get(self, key: str) -> dict[str, Any] | None:
         self._check_open()
-        with self._env.begin() as txn:
+        with self._environment.begin() as txn:
             raw = txn.get(self._key_bytes(key))
         return self._decode(raw) if raw is not None else None
 
@@ -130,7 +137,7 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         self._check_open()
         if not keys:
             return []
-        with self._env.begin() as txn:
+        with self._environment.begin() as txn:
             raws = [txn.get(self._key_bytes(key)) for key in keys]
         return [self._decode(raw) if raw is not None else None for raw in raws]
 
@@ -153,7 +160,7 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         # other writers the way separate contains_many()/get()/_set_many()
         # calls would be.
         keys = list(items)
-        with self._env.begin(write=True) as txn:
+        with self._environment.begin(write=True) as txn:
             conflicts = {key for key in keys if txn.get(self._key_bytes(key)) is not None}
             if conflicts and on_conflict == "raise":
                 msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
@@ -164,13 +171,13 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
                     if on_conflict == "skip":
                         continue
                     raw = txn.get(self._key_bytes(key))
-                    to_write = {**self._decode(raw), **value}
+                    to_write = {**(self._decode(raw) if raw is not None else {}), **value}
                 txn.put(self._key_bytes(key), self._encode(to_write))
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
-            with self._env.begin(write=True) as txn:
+            with self._environment.begin(write=True) as txn:
                 for key, value in items.items():
                     txn.put(self._key_bytes(key), self._encode(value))
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
@@ -185,33 +192,33 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
 
     def delete(self, key: str) -> None:
         self._check_open()
-        with self._env.begin(write=True) as txn:
+        with self._environment.begin(write=True) as txn:
             txn.delete(self._key_bytes(key))
 
     def delete_many(self, keys: list[str]) -> None:
         self._check_open()
         if not keys:
             return
-        with self._env.begin(write=True) as txn:
+        with self._environment.begin(write=True) as txn:
             for key in keys:
                 txn.delete(self._key_bytes(key))
 
     def clear(self) -> None:
         self._check_open()
-        with self._env.begin(write=True) as txn:
-            db = self._env.open_db()
+        with self._environment.begin(write=True) as txn:
+            db = self._environment.open_db()
             txn.drop(db, delete=False)
 
     def contains(self, key: str) -> bool:
         self._check_open()
-        with self._env.begin() as txn:
+        with self._environment.begin() as txn:
             return txn.get(self._key_bytes(key)) is not None
 
     def contains_many(self, keys: list[str]) -> list[bool]:
         self._check_open()
         if not keys:
             return []
-        with self._env.begin() as txn:
+        with self._environment.begin() as txn:
             return [txn.get(self._key_bytes(key)) is not None for key in keys]
 
     def keys(self) -> Iterator[str]:
@@ -222,7 +229,7 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         # thread-affine, and ThreadedAsyncStoreMixin.akeys() resumes this
         # generator via asyncio.to_thread(), which offers no guarantee that
         # the same worker thread services every call.
-        with self._env.begin() as txn, txn.cursor() as cursor:
+        with self._environment.begin() as txn, txn.cursor() as cursor:
             all_keys = [self._key_str(key) for key in cursor.iternext(values=False)]
         yield from all_keys
 
@@ -237,16 +244,16 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
         # are never held in memory at once and no transaction is kept
         # open across yields (see keys() for why that matters for async
         # callers).
-        with self._env.begin() as txn, txn.cursor() as cursor:
+        with self._environment.begin() as txn, txn.cursor() as cursor:
             all_keys = [self._key_str(key) for key in cursor.iternext(values=False)]
         for batch_keys in batchify(all_keys, size=batch_size):
-            with self._env.begin() as txn:
+            with self._environment.begin() as txn:
                 raws = [(key, txn.get(self._key_bytes(key))) for key in batch_keys]
             yield {key: self._decode(raw) for key, raw in raws if raw is not None}
 
     def count(self) -> int:
         self._check_open()
-        with self._env.begin() as txn:
+        with self._environment.begin() as txn:
             return txn.stat()["entries"]
 
     def to_uri(self) -> str:

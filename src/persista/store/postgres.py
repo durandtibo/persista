@@ -9,7 +9,7 @@ import asyncio
 import logging
 import uuid
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from coola.display import MultilineDisplayMixin
@@ -104,6 +104,13 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         self._aconn: psycopg.AsyncConnection | None = None
         self._aconn_lock = asyncio.Lock()
 
+    @property
+    def _connection(self) -> psycopg.Connection:
+        if self._conn is None:
+            msg = f"{type(self).__name__} is not open."
+            raise RuntimeError(msg)
+        return self._conn
+
     def _check_open(self) -> None:
         if self._closed:
             msg = (
@@ -116,7 +123,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         if not self._closed:
             return
         self._conn = psycopg.connect(self._conninfo, autocommit=True, **self._kwargs)
-        self._conn.execute(self._create_table_sql())
+        self._connection.execute(self._create_table_sql())
         self._closed = False
 
     async def aopen(self) -> None:
@@ -179,7 +186,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         if self._closed:
             return
         logger.info("Closing Postgres connection for table %s", self._table)
-        self._conn.close()
+        self._connection.close()
         self._closed = True
 
     async def aclose(self) -> None:
@@ -188,7 +195,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             self._aconn = None
         if not self._closed:
             logger.info("Closing Postgres connection for table %s", self._table)
-            self._conn.close()
+            self._connection.close()
             self._closed = True
 
     @property
@@ -221,7 +228,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def get(self, key: str) -> dict[str, Any] | None:
         self._check_open()
         query = self._key_query("SELECT * FROM {table} WHERE {key_col} = %s")
-        with self._conn.cursor() as cur:
+        with self._connection.cursor() as cur:
             cur.execute(query, (key,))
             row = cur.fetchone()
         return self._row_to_value(row) if row else None
@@ -239,7 +246,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         if not keys:
             return []
         query = self._key_query("SELECT * FROM {table} WHERE {key_col} = ANY(%s)")
-        with self._conn.cursor() as cur:
+        with self._connection.cursor() as cur:
             cur.execute(query, (keys,))
             rows = cur.fetchall()
         by_key = {row[0]: self._row_to_value(row) for row in rows}
@@ -281,8 +288,8 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         # duration of the transaction so a concurrent set/set_many on any
         # of the same keys blocks until this one commits, making
         # "raise"/"skip"/"merge" behave correctly under concurrency.
-        with self._conn.transaction():
-            self._lock_keys(self._conn, items)
+        with self._connection.transaction():
+            self._lock_keys(self._connection, items)
             to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
             self._set_many(to_write)
 
@@ -337,7 +344,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         self._check_open()
         if not field_filters:
             query = sql.SQL("SELECT * FROM {table}").format(table=self._table_ident)
-            with self._conn.cursor() as cur:
+            with self._connection.cursor() as cur:
                 cur.execute(query)
                 rows = cur.fetchall()
             return {row[0]: self._row_to_value(row) for row in rows}
@@ -347,7 +354,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         query = sql.SQL("SELECT * FROM {table} WHERE {where}").format(
             table=self._table_ident, where=where
         )
-        with self._conn.cursor() as cur:
+        with self._connection.cursor() as cur:
             cur.execute(query, list(field_filters.values()))
             rows = cur.fetchall()
         return {row[0]: self._row_to_value(row) for row in rows}
@@ -375,7 +382,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def delete(self, key: str) -> None:
         self._check_open()
         query = self._key_query("DELETE FROM {table} WHERE {key_col} = %s")
-        self._conn.execute(query, (key,))
+        self._connection.execute(query, (key,))
 
     async def adelete(self, key: str) -> None:
         conn = await self._ensure_aconn()
@@ -387,7 +394,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         if not keys:
             return
         query = self._key_query("DELETE FROM {table} WHERE {key_col} = ANY(%s)")
-        self._conn.execute(query, (keys,))
+        self._connection.execute(query, (keys,))
 
     async def adelete_many(self, keys: list[str]) -> None:
         if not keys:
@@ -399,7 +406,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def clear(self) -> None:
         self._check_open()
         query = sql.SQL("DELETE FROM {table}").format(table=self._table_ident)
-        self._conn.execute(query)
+        self._connection.execute(query)
 
     async def aclear(self) -> None:
         conn = await self._ensure_aconn()
@@ -409,7 +416,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def contains(self, key: str) -> bool:
         self._check_open()
         query = self._key_query("SELECT 1 FROM {table} WHERE {key_col} = %s LIMIT 1")
-        with self._conn.cursor() as cur:
+        with self._connection.cursor() as cur:
             cur.execute(query, (key,))
             return cur.fetchone() is not None
 
@@ -425,7 +432,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         if not keys:
             return []
         query = self._key_query("SELECT {key_col} FROM {table} WHERE {key_col} = ANY(%s)")
-        with self._conn.cursor() as cur:
+        with self._connection.cursor() as cur:
             cur.execute(query, (keys,))
             existing = {row[0] for row in cur.fetchall()}
         return [key in existing for key in keys]
@@ -443,7 +450,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def keys(self) -> Iterator[str]:
         self._check_open()
         query = self._key_query("SELECT {key_col} FROM {table}")
-        with self._conn.cursor() as cur:
+        with self._connection.cursor() as cur:
             cur.execute(query)
             for (key,) in cur.fetchall():
                 yield key
@@ -467,8 +474,8 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         # uuid4 so concurrent calls don't collide on the same server-side
         # cursor name.
         with (
-            self._conn.transaction(),
-            self._conn.cursor(name=f"iter_batches_{uuid.uuid4().hex}") as cur,
+            self._connection.transaction(),
+            self._connection.cursor(name=f"iter_batches_{uuid.uuid4().hex}") as cur,
         ):
             cur.itersize = batch_size
             cur.execute(query)
@@ -497,7 +504,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
     def count(self) -> int:
         self._check_open()
         query = sql.SQL("SELECT COUNT(*) FROM {table}").format(table=self._table_ident)
-        with self._conn.cursor() as cur:
+        with self._connection.cursor() as cur:
             cur.execute(query)
             row = cur.fetchone()
             return row[0] if row else 0
@@ -571,7 +578,7 @@ class PostgresStore(BasePostgresStore):
                 "INSERT INTO {table} ({key_col}, value) VALUES (%s, %s) "
                 "ON CONFLICT ({key_col}) DO UPDATE SET value = EXCLUDED.value"
             )
-            with self._conn.cursor() as cur:
+            with self._connection.cursor() as cur:
                 cur.executemany(query, [(key, Jsonb(value)) for key, value in items.items()])
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
@@ -667,7 +674,7 @@ class TypedPostgresStore(BasePostgresStore):
         typed_cols = sql.SQL("").join(
             sql.SQL(", {col} {dtype}").format(
                 col=sql.Identifier(name),
-                dtype=sql.SQL(dtype),
+                dtype=sql.SQL(cast("LiteralString", dtype)),
             )
             for name, dtype in self._schema.items()
         )
@@ -697,7 +704,7 @@ class TypedPostgresStore(BasePostgresStore):
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
             query = self._build_insert()
-            with self._conn.cursor() as cur:
+            with self._connection.cursor() as cur:
                 cur.executemany(
                     query, [self._value_to_row(key, value) for key, value in items.items()]
                 )

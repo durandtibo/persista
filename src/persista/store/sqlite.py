@@ -32,7 +32,7 @@ from persista.utils.imports import is_aiosqlite_available
 from persista.utils.path import prepare_store_path
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Generator, Iterator, Mapping
+    from collections.abc import AsyncIterator, Generator, Iterator, Mapping, Sequence
     from pathlib import Path
 
     from typing_extensions import Self
@@ -149,6 +149,13 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         self._awrite_lock = asyncio.Lock()
         self._aschema_ready = False
 
+    @property
+    def _connection(self) -> sqlite3.Connection:
+        if self._conn is None:
+            msg = f"{type(self).__name__} is not open."
+            raise RuntimeError(msg)
+        return self._conn
+
     def _check_open(self) -> None:
         if self._closed:
             msg = (
@@ -167,7 +174,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             # Don't leak the connection just opened above: __enter__ never
             # calls __exit__/close() when it raises, so this is the only
             # chance to close it before it's garbage-collected.
-            self._conn.close()
+            self._connection.close()
             self._conn = None
             raise
         self._aschema_ready = False
@@ -213,7 +220,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         themselves; SQLite's own per-connection lock keeps individual
         statements safe either way.
         """
-        connect_kwargs = {"check_same_thread": False, **self._kwargs}
+        connect_kwargs: dict[str, Any] = {"check_same_thread": False, **self._kwargs}
         return sqlite3.connect(self._database, **connect_kwargs)
 
     def _ensure_schema(self) -> None:
@@ -228,8 +235,8 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         """
         try:
             with self._lock:
-                self._conn.execute(self._create_table_sql())
-                self._conn.commit()
+                self._connection.execute(self._create_table_sql())
+                self._connection.commit()
         except sqlite3.OperationalError as exc:
             if not _is_readonly_error(exc):
                 # Some other failure (locked database, disk I/O error,
@@ -245,7 +252,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         store's schema."""
 
     @abstractmethod
-    def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
+    def _row_to_value(self, row: Sequence[Any]) -> dict[str, Any]:
         """Convert a raw ``SELECT * FROM store`` row back to a value
         dict."""
 
@@ -352,7 +359,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             return
         logger.info("Closing SQLite at %s", self._database)
         with self._lock:
-            self._conn.close()
+            self._connection.close()
         self._closed = True
 
     @property
@@ -362,7 +369,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     def get(self, key: str) -> dict[str, Any] | None:
         self._check_open()
         with self._lock:
-            row = self._conn.execute(
+            row = self._connection.execute(
                 f"SELECT * FROM store WHERE {self._key_column} = ?",  # noqa: S608
                 (key,),
             ).fetchone()
@@ -387,7 +394,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         for chunk in _chunk(keys, _MAX_SQL_VARIABLES):
             placeholders = ", ".join("?" * len(chunk))
             with self._lock:
-                rows = self._conn.execute(
+                rows = self._connection.execute(
                     f"SELECT * FROM store WHERE {self._key_column} IN ({placeholders})",  # noqa: S608
                     chunk,
                 ).fetchall()
@@ -494,12 +501,12 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         self._check_open()
         if not field_filters:
             with self._lock:
-                rows = self._conn.execute("SELECT * FROM store").fetchall()
+                rows = self._connection.execute("SELECT * FROM store").fetchall()
             return {row[0]: self._row_to_value(row) for row in rows}
 
         where, values = self._build_filter_where(field_filters)
         with self._lock:
-            rows = self._conn.execute(
+            rows = self._connection.execute(
                 f"SELECT * FROM store WHERE {where}",  # noqa: S608
                 values,
             ).fetchall()
@@ -526,11 +533,11 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     def delete(self, key: str) -> None:
         self._check_open()
         with self._lock:
-            self._conn.execute(
+            self._connection.execute(
                 f"DELETE FROM store WHERE {self._key_column} = ?",  # noqa: S608
                 (key,),
             )
-            self._conn.commit()
+            self._connection.commit()
 
     async def adelete(self, key: str) -> None:
         if not is_aiosqlite_available():
@@ -547,11 +554,11 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         with self._lock:
             for chunk in _chunk(keys, _MAX_SQL_VARIABLES):
                 placeholders = ", ".join("?" * len(chunk))
-                self._conn.execute(
+                self._connection.execute(
                     f"DELETE FROM store WHERE {self._key_column} IN ({placeholders})",  # noqa: S608
                     chunk,
                 )
-            self._conn.commit()
+            self._connection.commit()
 
     async def adelete_many(self, keys: list[str]) -> None:
         if not keys:
@@ -571,8 +578,8 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     def clear(self) -> None:
         self._check_open()
         with self._lock:
-            self._conn.execute("DELETE FROM store")
-            self._conn.commit()
+            self._connection.execute("DELETE FROM store")
+            self._connection.commit()
 
     async def aclear(self) -> None:
         if not is_aiosqlite_available():
@@ -585,7 +592,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     def contains(self, key: str) -> bool:
         self._check_open()
         with self._lock:
-            row = self._conn.execute(
+            row = self._connection.execute(
                 f"SELECT 1 FROM store WHERE {self._key_column} = ? LIMIT 1",  # noqa: S608
                 [key],
             ).fetchone()
@@ -609,7 +616,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         for chunk in _chunk(keys, _MAX_SQL_VARIABLES):
             placeholders = ", ".join("?" * len(chunk))
             with self._lock:
-                rows = self._conn.execute(
+                rows = self._connection.execute(
                     f"SELECT {self._key_column} FROM store "  # noqa: S608
                     f"WHERE {self._key_column} IN ({placeholders})",
                     chunk,
@@ -637,7 +644,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     def keys(self) -> Iterator[str]:
         self._check_open()
         with self._lock:
-            rows = self._conn.execute(
+            rows = self._connection.execute(
                 f"SELECT {self._key_column} FROM store"  # noqa: S608
             ).fetchall()
         for (key,) in rows:
@@ -665,7 +672,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         offset = 0
         while True:
             with self._lock:
-                rows = self._conn.execute(sql, (batch_size, offset)).fetchall()
+                rows = self._connection.execute(sql, (batch_size, offset)).fetchall()
             if not rows:
                 return
             yield {row[0]: self._row_to_value(row) for row in rows}
@@ -698,7 +705,8 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     def count(self) -> int:
         self._check_open()
         with self._lock:
-            return self._conn.execute("SELECT COUNT(*) FROM store").fetchone()[0]
+            row = self._connection.execute("SELECT COUNT(*) FROM store").fetchone()
+            return row[0] if row else 0
 
     async def acount(self) -> int:
         if not is_aiosqlite_available():
@@ -706,7 +714,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         conn = await self._ensure_aconn()
         cursor = await conn.execute("SELECT COUNT(*) FROM store")
         row = await cursor.fetchone()
-        return row[0]
+        return row[0] if row else 0
 
     async def aclose(self) -> None:
         if self._aconn is not None:
@@ -715,7 +723,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         if not self._closed:
             logger.info("Closing SQLite at %s", self._database)
             with self._lock:
-                self._conn.close()
+                self._connection.close()
             self._closed = True
 
     def get_columns_info(self) -> dict[str, str]:
@@ -736,7 +744,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         """
         self._check_open()
         with self._lock:
-            rows = self._conn.execute("PRAGMA table_info(store)").fetchall()
+            rows = self._connection.execute("PRAGMA table_info(store)").fetchall()
         # PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
         return {row[1]: row[2] for row in rows}
 
@@ -748,7 +756,7 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         :meth:`get_columns_info` instead.
         """
         for name, dtype in self.get_columns_info().items():
-            logger.info(f"{name}\t{dtype}")
+            logger.info("%s\t%s", name, dtype)
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"database": self._database, "closed": self._closed}
@@ -820,7 +828,7 @@ class SQLiteStore(BaseSQLiteStore):
     def _create_table_sql(self) -> str:
         return _CREATE_TABLE
 
-    def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
+    def _row_to_value(self, row: Sequence[Any]) -> dict[str, Any]:
         return json.loads(row[1])
 
     def _filter_expr(self, key: str) -> str:
@@ -830,11 +838,11 @@ class SQLiteStore(BaseSQLiteStore):
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
             with self._lock:
-                self._conn.executemany(
+                self._connection.executemany(
                     "INSERT OR REPLACE INTO store VALUES (?, ?)",
                     [(key, json.dumps(value)) for key, value in items.items()],
                 )
-                self._conn.commit()
+                self._connection.commit()
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
@@ -942,7 +950,7 @@ class TypedSQLiteStore(BaseSQLiteStore):
             f"({_KEY_COLUMN} TEXT PRIMARY KEY{typed_cols}, extra JSON)"
         )
 
-    def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
+    def _row_to_value(self, row: Sequence[Any]) -> dict[str, Any]:
         # row layout: key, [schema cols...], extra
         schema_vals = dict(zip(self._schema.keys(), row[1 : 1 + len(self._schema)], strict=True))
         extra_json = row[1 + len(self._schema)]
@@ -960,11 +968,11 @@ class TypedSQLiteStore(BaseSQLiteStore):
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
             with self._lock:
-                self._conn.executemany(
+                self._connection.executemany(
                     self._build_insert(),
                     [self._value_to_row(key, value) for key, value in items.items()],
                 )
-                self._conn.commit()
+                self._connection.commit()
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
@@ -1047,7 +1055,7 @@ class PickleSQLiteStore(BaseSQLiteStore):
     def _create_table_sql(self) -> str:
         return _CREATE_TABLE_PICKLE
 
-    def _row_to_value(self, row: tuple[Any, ...]) -> dict[str, Any]:
+    def _row_to_value(self, row: Sequence[Any]) -> dict[str, Any]:
         return pickle.loads(row[1])  # noqa: S301
 
     def _filter_expr(self, key: str) -> str:
@@ -1061,7 +1069,7 @@ class PickleSQLiteStore(BaseSQLiteStore):
     def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
         self._check_open()
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM store").fetchall()
+            rows = self._connection.execute("SELECT * FROM store").fetchall()
         values = (self._row_to_value(row) for row in rows)
         if not field_filters:
             return list(values)
@@ -1089,11 +1097,11 @@ class PickleSQLiteStore(BaseSQLiteStore):
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
             with self._lock:
-                self._conn.executemany(
+                self._connection.executemany(
                     "INSERT OR REPLACE INTO store VALUES (?, ?)",
                     [(key, pickle.dumps(value)) for key, value in items.items()],
                 )
-                self._conn.commit()
+                self._connection.commit()
 
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 

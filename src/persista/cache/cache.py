@@ -8,7 +8,7 @@ import functools
 import inspect
 import logging
 import time
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from coola.display import MultilineDisplayMixin
 
@@ -1109,7 +1109,7 @@ class Cache(MultilineDisplayMixin):
                 @functools.wraps(func)
                 async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                     key = make_key(
-                        func.__qualname__,
+                        getattr(func, "__qualname__", repr(func)),
                         args,
                         kwargs,
                         strategy=strategy,
@@ -1119,12 +1119,12 @@ class Cache(MultilineDisplayMixin):
                         key=key, fn=func, args=args, kwargs=kwargs, ttl=ttl
                     )
 
-                return async_wrapper
+                return cast("Callable[..., T]", async_wrapper)
 
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> T:
                 key = make_key(
-                    func.__qualname__,
+                    getattr(func, "__qualname__", repr(func)),
                     args,
                     kwargs,
                     strategy=strategy,
@@ -1210,7 +1210,7 @@ class Cache(MultilineDisplayMixin):
             @functools.wraps(func)
             async def wrapper(*args: Any, **kwargs: Any) -> Any:
                 key = make_key(
-                    func.__qualname__,
+                    getattr(func, "__qualname__", repr(func)),
                     args,
                     kwargs,
                     strategy=strategy,

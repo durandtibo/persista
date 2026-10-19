@@ -769,6 +769,12 @@ def test_closed_true_after_close(store: BaseDuckDBStore) -> None:
     assert store.closed
 
 
+def test_connection_raises_when_not_open(store_cls: type[BaseDuckDBStore]) -> None:
+    store = store_cls(":memory:")
+    with pytest.raises(RuntimeError, match="is not open"):
+        _ = store._connection
+
+
 # --- context manager ---
 
 

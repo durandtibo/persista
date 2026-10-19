@@ -119,38 +119,49 @@ def find_near_duplicate_record_ids(
         ids.append(record.id)
         signatures.append(_minhash_signature(record.metadata, num_hashes))
 
-    n = len(ids)
-    parent = list(range(n))
-
-    def find(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    def union(i: int, j: int) -> None:
-        root_i, root_j = find(i), find(j)
-        if root_i != root_j:
-            parent[root_j] = root_i
-
+    union_find = _UnionFind(len(ids))
     for band in range(num_bands):
         start = band * rows_per_band
-        end = start + rows_per_band
-        buckets: dict[tuple[int, ...], int] = {}
-        for i, signature in enumerate(signatures):
-            if signature[start] == -1:
-                # Sentinel signature (empty metadata) - never bucket together.
-                # Checking only position `start` is sufficient because
-                # _minhash_signature applies the -1 sentinel uniformly to every
-                # position when metadata is empty, so no partial band can be -1.
-                continue
-            band_key = signature[start:end]
-            if band_key in buckets:
-                union(i, buckets[band_key])
-            else:
-                buckets[band_key] = i
+        _union_band(signatures, start, start + rows_per_band, union_find)
 
     groups: dict[int, list[Any]] = {}
-    for i in range(n):
-        groups.setdefault(find(i), []).append(ids[i])
+    for i, record_id in enumerate(ids):
+        groups.setdefault(union_find.find(i), []).append(record_id)
     return [group for group in groups.values() if len(group) > 1]
+
+
+class _UnionFind:
+    r"""Disjoint-set structure with path compression."""
+
+    def __init__(self, size: int) -> None:
+        self._parent = list(range(size))
+
+    def find(self, i: int) -> int:
+        while self._parent[i] != i:
+            self._parent[i] = self._parent[self._parent[i]]
+            i = self._parent[i]
+        return i
+
+    def union(self, i: int, j: int) -> None:
+        root_i, root_j = self.find(i), self.find(j)
+        if root_i != root_j:
+            self._parent[root_j] = root_i
+
+
+def _union_band(
+    signatures: list[tuple[int, ...]], start: int, end: int, union_find: _UnionFind
+) -> None:
+    r"""Merge records whose signatures share an identical band."""
+    buckets: dict[tuple[int, ...], int] = {}
+    for i, signature in enumerate(signatures):
+        if signature[start] == -1:
+            # Sentinel signature (empty metadata) - never bucket together.
+            # Checking only position `start` is sufficient because
+            # _minhash_signature applies the -1 sentinel uniformly to every
+            # position when metadata is empty, so no partial band can be -1.
+            continue
+        band_key = signature[start:end]
+        if band_key in buckets:
+            union_find.union(i, buckets[band_key])
+        else:
+            buckets[band_key] = i

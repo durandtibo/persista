@@ -139,7 +139,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         self._check_open()
         if not field_filters:
             with self._lock:
-                rows = self._conn.execute(self._select_sql()).fetchall()
+                rows = self._connection.execute(self._select_sql()).fetchall()
             return dict(self._row_to_kv(row) for row in rows)
 
         conditions, values = [], []
@@ -152,12 +152,19 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
                 values.append(expected)
         where = " AND ".join(conditions)
         with self._lock:
-            rows = self._conn.execute(self._select_sql(where), values).fetchall()
+            rows = self._connection.execute(self._select_sql(where), values).fetchall()
         return dict(self._row_to_kv(row) for row in rows)
 
     async def afilter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
         """Async equivalent of :meth:`filter_items`."""
         return await asyncio.to_thread(lambda: self.filter_items(**field_filters))
+
+    @property
+    def _connection(self) -> duckdb.DuckDBPyConnection:
+        if self._conn is None:
+            msg = f"{type(self).__name__} is not open."
+            raise RuntimeError(msg)
+        return self._conn
 
     def _check_open(self) -> None:
         if self._closed:
@@ -180,7 +187,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             return
         logger.info("Closing DuckDB at %s", self._database)
         with self._lock:
-            self._conn.close()
+            self._connection.close()
         self._closed = True
 
     @property
@@ -190,7 +197,9 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
     def get(self, key: str) -> dict[str, Any] | None:
         self._check_open()
         with self._lock:
-            row = self._conn.execute(self._select_sql(f"{self._key_column} = ?"), [key]).fetchone()
+            row = self._connection.execute(
+                self._select_sql(f"{self._key_column} = ?"), [key]
+            ).fetchone()
         return self._row_to_kv(row)[1] if row else None
 
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
@@ -199,7 +208,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             return []
         placeholders = ", ".join("?" * len(keys))
         with self._lock:
-            rows = self._conn.execute(
+            rows = self._connection.execute(
                 self._select_sql(f"{self._key_column} IN ({placeholders})"), keys
             ).fetchall()
         by_key = dict(self._row_to_kv(row) for row in rows)
@@ -226,7 +235,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
     def delete(self, key: str) -> None:
         self._check_open()
         with self._lock:
-            self._conn.execute(
+            self._connection.execute(
                 f"DELETE FROM store WHERE {self._key_column} = ?",  # noqa: S608
                 [key],
             )
@@ -237,7 +246,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
             return
         placeholders = ", ".join("?" * len(keys))
         with self._lock:
-            self._conn.execute(
+            self._connection.execute(
                 f"DELETE FROM store WHERE {self._key_column} IN ({placeholders})",  # noqa: S608
                 keys,
             )
@@ -245,12 +254,12 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
     def clear(self) -> None:
         self._check_open()
         with self._lock:
-            self._conn.execute("DELETE FROM store")
+            self._connection.execute("DELETE FROM store")
 
     def contains(self, key: str) -> bool:
         self._check_open()
         with self._lock:
-            row = self._conn.execute(
+            row = self._connection.execute(
                 f"SELECT 1 FROM store WHERE {self._key_column} = ? LIMIT 1",  # noqa: S608
                 [key],
             ).fetchone()
@@ -264,7 +273,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         with self._lock:
             existing = {
                 row[0]
-                for row in self._conn.execute(
+                for row in self._connection.execute(
                     f"SELECT {self._key_column} FROM store "  # noqa: S608
                     f"WHERE {self._key_column} IN ({placeholders})",
                     keys,
@@ -275,7 +284,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
     def keys(self) -> Iterator[str]:
         self._check_open()
         with self._lock:
-            rows = self._conn.execute(
+            rows = self._connection.execute(
                 f"SELECT {self._key_column} FROM store"  # noqa: S608
             ).fetchall()
         for (key,) in rows:
@@ -290,7 +299,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         offset = 0
         while True:
             with self._lock:
-                rows = self._conn.execute(sql, [batch_size, offset]).fetchall()
+                rows = self._connection.execute(sql, [batch_size, offset]).fetchall()
             if not rows:
                 return
             yield dict(self._row_to_kv(row) for row in rows)
@@ -301,7 +310,8 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
     def count(self) -> int:
         self._check_open()
         with self._lock:
-            return self._conn.execute("SELECT COUNT(*) FROM store").fetchone()[0]
+            row = self._connection.execute("SELECT COUNT(*) FROM store").fetchone()
+            return row[0] if row else 0
 
     def get_columns_info(self) -> dict[str, str]:
         """Return the column names and types of the store's table.
@@ -321,7 +331,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         """
         self._check_open()
         with self._lock:
-            rows = self._conn.sql("DESCRIBE store").fetchall()
+            rows = self._connection.sql("DESCRIBE store").fetchall()
         return {row[0]: str(row[1]) for row in rows}
 
     def show_columns_info(self) -> None:
@@ -333,7 +343,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         """
         self._check_open()
         with self._lock:
-            self._conn.sql("DESCRIBE store").show()
+            self._connection.sql("DESCRIBE store").show()
 
     def to_uri(self) -> str:
         return encode_path_uri(self._scheme, str(self._database))
@@ -409,7 +419,7 @@ class DuckDBStore(BaseDuckDBStore):
     def _ensure_schema(self) -> None:
         if not self._kwargs.get("read_only", False):
             with self._lock:
-                self._conn.execute(_CREATE_TABLE)
+                self._connection.execute(_CREATE_TABLE)
 
     def _select_columns(self) -> list[str]:
         return ["key", "value"]
@@ -420,7 +430,7 @@ class DuckDBStore(BaseDuckDBStore):
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
             with self._lock:
-                self._conn.executemany(
+                self._connection.executemany(
                     "INSERT OR REPLACE INTO store VALUES (?, ?)",
                     [(key, json.dumps(value)) for key, value in items.items()],
                 )
@@ -518,7 +528,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
     def _ensure_schema(self) -> None:
         if not self._kwargs.get("read_only", False):
             with self._lock:
-                self._conn.execute(self._build_create_table())
+                self._connection.execute(self._build_create_table())
 
     def _select_columns(self) -> list[str]:
         return [_KEY_COLUMN, *self._schema.keys(), "extra"]
@@ -529,7 +539,7 @@ class TypedDuckDBStore(BaseDuckDBStore):
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:
             with self._lock:
-                self._conn.executemany(
+                self._connection.executemany(
                     self._build_insert(),
                     [self._value_to_row(key, value) for key, value in items.items()],
                 )

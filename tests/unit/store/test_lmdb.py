@@ -610,6 +610,12 @@ def test_closed_true_after_close(store: BaseLmdbStore) -> None:
     assert store.closed
 
 
+def test_environment_raises_when_not_open(store_cls: type[BaseLmdbStore], tmp_path: Path) -> None:
+    store = store_cls(tmp_path / "db")
+    with pytest.raises(RuntimeError, match="is not open"):
+        _ = store._environment
+
+
 # --- context manager ---
 
 
