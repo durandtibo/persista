@@ -300,9 +300,5 @@ known-first-party = ["src"]
 numpy = "np"
 polars = "pl"
 
-[tool.ty.environment]
-# `typing.Self` is only imported under `TYPE_CHECKING`
-python-version = "3.11"
-
 [tool.ty.src]
 include = ["src"]
