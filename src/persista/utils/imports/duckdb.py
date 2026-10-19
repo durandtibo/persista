@@ -9,8 +9,8 @@ __all__ = [
     "raise_duckdb_missing_error",
 ]
 
-from functools import lru_cache
-from typing import TYPE_CHECKING, Any, NoReturn, TypeVar
+from functools import cache
+from typing import TYPE_CHECKING, Any, Never, TypeVar
 
 from coola.utils.imports import (
     decorator_package_available,
@@ -41,7 +41,7 @@ def check_duckdb() -> None:
         raise_duckdb_missing_error()
 
 
-@lru_cache(1)
+@cache
 def is_duckdb_available() -> bool:
     r"""Indicate if the ``duckdb`` package is installed or not.
 
@@ -83,7 +83,7 @@ def duckdb_available(fn: F) -> F:
     return decorator_package_available(fn, is_duckdb_available)
 
 
-def raise_duckdb_missing_error() -> NoReturn:
+def raise_duckdb_missing_error() -> Never:
     r"""Raise a RuntimeError to indicate the ``duckdb`` package is
     missing."""
     raise_package_missing_error("duckdb", "duckdb")

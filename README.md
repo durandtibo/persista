@@ -213,7 +213,7 @@ pip install persista[redis,httpx]  # with Redis and httpx support
 
 ### Requirements
 
-- **Python**: 3.10 or higher
+- **Python**: 3.11 or higher
 - **Core dependencies**: [`coola`](https://github.com/durandtibo/coola)
 
 **Optional dependencies**, enabled per-backend:

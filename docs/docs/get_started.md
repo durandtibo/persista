@@ -56,7 +56,7 @@ git clone git@github.com:durandtibo/persista.git
 cd persista
 ```
 
-**Note**: `persista` requires Python 3.10 or higher.
+**Note**: `persista` requires Python 3.11 or higher.
 
 It is recommended to create a virtual environment (this step is optional).
 To create a virtual environment, you can use the following command:

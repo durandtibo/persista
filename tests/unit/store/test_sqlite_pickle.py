@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -190,7 +190,7 @@ def test_round_trips_tuples_and_sets(store: PickleSQLiteStore) -> None:
 
 
 def test_round_trips_custom_objects(store: PickleSQLiteStore) -> None:
-    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2024, 1, 1, tzinfo=UTC)
     store.set("1", {"created_at": now})
     assert store.get("1") == {"created_at": now}
 
@@ -650,7 +650,7 @@ async def test_around_trips_tuples_and_sets() -> None:
 async def test_around_trips_custom_objects() -> None:
     store = PickleSQLiteStore(":memory:")
     await store.aopen()
-    now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    now = datetime(2024, 1, 1, tzinfo=UTC)
     await store.aset("1", {"created_at": now})
     assert await store.aget("1") == {"created_at": now}
     await store.aclose()
