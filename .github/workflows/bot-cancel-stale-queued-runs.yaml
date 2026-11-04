@@ -14,7 +14,7 @@
 #   - No age threshold specified (uses action's default)
 #
 # Uses:
-#   - durandtibo/cancel-queued-runs-action@v1.9
+#   - durandtibo/cancel-queued-runs-action@v1.7
 #     Specialized action for managing workflow run queue
 #
 # Purpose:

@@ -1,257 +1,246 @@
-# persista
+# shared-makefiles
 
-<p align="center">
-    <a href="https://github.com/durandtibo/persista/actions/workflows/ci.yaml">
-        <img alt="CI" src="https://github.com/durandtibo/persista/actions/workflows/ci.yaml/badge.svg">
-    </a>
-    <a href="https://github.com/durandtibo/persista/actions/workflows/nightly-tests.yaml">
-        <img alt="Nightly Tests" src="https://github.com/durandtibo/persista/actions/workflows/nightly-tests.yaml/badge.svg">
-    </a>
-    <a href="https://github.com/durandtibo/persista/actions/workflows/nightly-package.yaml">
-        <img alt="Nightly Package Tests" src="https://github.com/durandtibo/persista/actions/workflows/nightly-package.yaml/badge.svg">
-    </a>
-    <a href="https://codecov.io/gh/durandtibo/persista">
-        <img alt="Codecov" src="https://codecov.io/gh/durandtibo/persista/branch/main/graph/badge.svg">
-    </a>
-    <br/>
-    <a href="https://durandtibo.github.io/persista/">
-        <img alt="Documentation" src="https://github.com/durandtibo/persista/actions/workflows/docs.yaml/badge.svg">
-    </a>
-    <a href="https://durandtibo.github.io/persista/dev/">
-        <img alt="Documentation" src="https://github.com/durandtibo/persista/actions/workflows/docs-dev.yaml/badge.svg">
-    </a>
-    <br/>
-    <a href="https://github.com/psf/black">
-        <img  alt="Code style: black" src="https://img.shields.io/badge/code%20style-black-000000.svg">
-    </a>
-    <a href="https://google.github.io/styleguide/pyguide.html#s3.8-comments-and-docstrings">
-        <img  alt="Doc style: google" src="https://img.shields.io/badge/%20style-google-3666d6.svg">
-    </a>
-    <a href="https://github.com/astral-sh/ruff">
-        <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff" style="max-width:100%;">
-    </a>
-    <a href="https://github.com/guilatrova/tryceratops">
-        <img  alt="try/except style: tryceratops" src="https://img.shields.io/badge/try%2Fexcept%20style-tryceratops%20%F0%9F%A6%96%E2%9C%A8-black">
-    </a>
-    <br/>
-    <a href="https://pypi.org/project/persista/">
-        <img alt="PYPI version" src="https://img.shields.io/pypi/v/persista">
-    </a>
-    <a href="https://pypi.org/project/persista/">
-        <img alt="Python" src="https://img.shields.io/pypi/pyversions/persista.svg">
-    </a>
-    <a href="https://opensource.org/licenses/BSD-3-Clause">
-        <img alt="BSD-3-Clause" src="https://img.shields.io/pypi/l/persista">
-    </a>
-    <br/>
-    <a href="https://pepy.tech/project/persista">
-        <img  alt="Downloads" src="https://static.pepy.tech/badge/persista">
-    </a>
-    <a href="https://pepy.tech/project/persista">
-        <img  alt="Monthly downloads" src="https://static.pepy.tech/badge/persista/month">
-    </a>
-    <br/>
-    <a href="https://scorecard.dev/viewer/?uri=github.com/durandtibo/persista">
-        <img alt="OpenSSF Scorecard" src="https://img.shields.io/badge/dynamic/json?url=https://api.scorecard.dev/projects/github.com/durandtibo/persista&label=openssf%20scorecard&query=score">
-    </a>
-</p>
+Shared/reusable Makefiles for formatting and linting common file types across projects.
 
-## Overview
+Each file is self-contained, include-guarded, and configurable via variables — pull in only what
+you need.
 
-`persista` is a lightweight Python library that provides simple, consistent building blocks for
-persisting and caching data. It offers a uniform key-value store interface backed by multiple
-storage engines (in-memory, SQLite, DuckDB, LMDB, Redis, PostgreSQL) with both sync and async
-APIs, plus TTL caching and HTTP fetch utilities.
+## Usage
 
-**Quick Links:**
+Include the files you need in your project's `Makefile`:
 
-- [Documentation](https://durandtibo.github.io/persista/)
-- [Installation](#installation)
-- [Features](#features)
-- [Contributing](#contributing)
-- [License](#license)
+```makefile
+include yaml.mk
+include makefile.mk
+include shell.mk
+include toml.mk
+include markdown.mk
+include actions.mk
+include help.mk
 
-## Why persista?
+.DEFAULT_GOAL := help
 
-Storage backends have different APIs, and switching between them (e.g. moving from an in-memory
-store in tests to Redis or PostgreSQL in production) usually means rewriting code. `persista`
-solves this with a single, consistent `BaseStore` interface:
+.PHONY: install-tools
+install-tools: install-prettier install-yamllint install-mbake install-checkmake install-shellcheck install-shfmt install-bats install-taplo install-markdownlint install-actionlint ## Install all formatting/linting tools
 
-**Store and retrieve values:**
+.PHONY: format
+format: format-yaml format-makefile format-shell format-toml format-markdown ## Format all files
 
-```pycon
->>> from persista.store import InMemoryStore
->>> with InMemoryStore() as store:
-...     store.set("user:1", {"name": "Alice"})
-...     store.get("user:1")
-{'name': 'Alice'}
-
+.PHONY: lint
+lint: lint-yaml lint-makefile lint-shell lint-markdown lint-actions ## Lint all files
 ```
 
-**Swap the backend without changing the calling code:**
+Required tools (`prettier`, `yamllint`, `mbake`, `checkmake`, `shellcheck`, `shfmt`, `markdownlint`,
+`actionlint`) are installed on demand — each
+`format-*`/`lint-*` target depends on an `install-*` target that installs the tool if it isn't
+already on `PATH`. Run `make install-tools` to install all of them upfront.
 
-```pycon
->>> import tempfile
->>> from pathlib import Path
->>> from persista.store import SQLiteStore
->>> with tempfile.TemporaryDirectory() as tmpdir:
-...     with SQLiteStore(Path(tmpdir).joinpath("data.sqlite")) as store:
-...         store.set("user:1", {"name": "Alice"})
-...         store.get("user:1")
-{'name': 'Alice'}
+Run `make help` to list every target that has a `## description` comment (see `help.mk` below).
 
-```
+## Adding as a git subtree
 
-**Cache expensive calls with a TTL:**
-
-```pycon
->>> from persista.cache import cached
->>> @cached(ttl=60)
-... def slow_call(x: int) -> int:
-...     return x**2
->>> slow_call(4)
-16
-
-```
-
-See the [documentation](https://durandtibo.github.io/persista/) for detailed examples.
-
-## Features
-
-`persista` provides a comprehensive set of utilities for persisting and caching data:
-
-### 🗄️ **Key-Value Stores**
-
-A consistent `BaseStore` interface for storing dict values under string keys, with both
-synchronous and `a`-prefixed asynchronous methods on every store:
-
-- Uniform API across backends: `get`/`aget`, `get_many`/`aget_many`, `set`/`aset`,
-  `set_many`/`aset_many`, `delete`/`adelete`, `filter`/`afilter`, iteration
-- Backends: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`
-- Typed variants (`TypedSQLiteStore`, `TypedPostgresStore`, ...) and pickle-backed variants
-  (`PickleLmdbStore`, `PickleRedisStore`) for non-dict values
-- Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`, `"merge"`)
-
-### ⏱️ **TTL Caching**
-
-Time-to-live caching for functions and values, with sync and async variants:
-
-- `Cache`, with sync and async (`a`-prefixed) methods, for explicit cache instances
-- `cached` / `async_cached` decorators for caching function calls
-- A shared default cache via `get_cache`
-
-### 🌐 **HTTP Utilities**
-
-Helpers to fetch HTTP responses with automatic retries, built on top of `requests` or `httpx`:
-
-- `fetch_response` (sync, `requests`); `get_response`/`post_response`/`put_response`/
-  `patch_response`/`delete_response`/`send_request` (sync, `httpx`) and their `_async`
-  counterparts (async, `httpx`)
-- `HttpClient`/`AsyncHttpClient`: class-based wrappers around `httpx.Client`/`httpx.AsyncClient`
-  with the same retries, plus optional response caching via a `Cache`
-
-### 🧾 **Records**
-
-A `Record` container (a stable UUID `id` plus a `metadata` dict) with helpers to filter, sort,
-persist, and analyze collections of records:
-
-- `filter_by_metadata`/`filter_by_metadata_range`/`filter_by_metadata_values`,
-  `sort_by_metadata`: filter and sort records by metadata
-- `RecordStore` and ready-to-use backends (`InMemoryRecordStore`, `SQLiteRecordStore`,
-  `DuckDBRecordStore`, typed variants, ...) built on top of `persista.store`
-- `persista.record.analysis`: exact/near-duplicate detection, id-collision detection, diffing two
-  snapshots, orphan-reference checks, schema-shape clustering, value frequency/cardinality, and
-  metadata stats/reporting
-- `generate_fake_records` for synthetic test data (requires the `faker` extra)
-
-```pycon
->>> from persista.record import Record
->>> from persista.record.analysis import find_duplicate_record_ids
->>> records = [
-...     Record(id="a", metadata={"source": "a.pdf"}),
-...     Record(id="b", metadata={"source": "a.pdf"}),
-...     Record(id="c", metadata={"source": "b.pdf"}),
-... ]
->>> find_duplicate_record_ids(records)
-[['a', 'b']]
-
-```
-
-## Installation
-
-We highly recommend installing `persista` in
-a [virtual environment](https://packaging.python.org/guides/installing-using-pip-and-virtual-environments/)
-to avoid dependency conflicts.
-
-### Using uv (recommended)
-
-[`uv`](https://docs.astral.sh/uv/) is a fast Python package installer and resolver:
+This repo is meant to be vendored into consuming projects as a git subtree (conventionally at
+`.make/`), rather than being added as a submodule or copy-pasted:
 
 ```shell
-uv pip install persista
+git remote add shared-makefiles https://github.com/durandtibo/shared-makefiles.git
+git fetch shared-makefiles main
+
+git subtree add --prefix=.make shared-makefiles main --squash
 ```
 
-**Install with specific optional dependencies:**
+Then `include` the files you need from `.make/` in your project's `Makefile`, e.g.
+`include .make/yaml.mk`.
 
-```shell
-uv pip install persista[redis,httpx]  # with Redis and httpx support
+To pull in upstream changes later, `include .make/self.mk` and run `make update-subtree` — see
+[`self.mk`](#self-mk) below. It fetches the latest commits and runs `git subtree pull`, so you
+don't need to remember the raw `git subtree`/`git remote` invocations yourself.
+
+## Available files
+
+| File          | Targets                                     | Tools                      | Description                                                           |
+| ------------- | ------------------------------------------- | -------------------------- | --------------------------------------------------------------------- |
+| `yaml.mk`     | `format-yaml`, `lint-yaml`                  | `prettier`, `yamllint`     | Format and lint YAML files                                            |
+| `makefile.mk` | `format-makefile`, `lint-makefile`          | `mbake`, `checkmake`       | Format and lint Makefiles and `.mk` files                             |
+| `shell.mk`    | `format-shell`, `lint-shell`                | `shfmt`, `shellcheck`      | Format and lint shell scripts                                         |
+| `toml.mk`     | `format-toml`                               | `taplo`                    | Format TOML files                                                     |
+| `markdown.mk` | `format-markdown`, `lint-markdown`          | `prettier`, `markdownlint` | Format and lint Markdown files                                        |
+| `actions.mk`  | `lint-actions`                              | `actionlint`               | Lint GitHub Actions workflow files                                    |
+| `uv.mk`       | `install-invoke`, `update-uv`, `setup-venv` | `uv`                       | Manage Python virtual environments with `uv`                          |
+| `prettier.mk` | `install-prettier`                          | `prettier`                 | Shared `install-prettier` target, included by `yaml.mk`/`markdown.mk` |
+| `self.mk`     | `update-subtree`                            | `git`                      | Sync the `.make` shared-makefiles subtree                             |
+| `help.mk`     | `help`                                      | —                          | List all documented (`## ...`) targets                                |
+
+### `yaml.mk`
+
+Optional variables (set before `include`):
+
+| Variable           | Default | Description                                                   |
+| ------------------ | ------- | ------------------------------------------------------------- |
+| `YAML_FORMAT_PATH` | `.`     | Root path globbed for `**/*.{yml,yaml}`, passed to `prettier` |
+| `YAML_LINT_PATH`   | `.`     | Path passed to `yamllint`                                     |
+
+```makefile
+include yaml.mk
+
+YAML_LINT_PATH = .github/workflows
 ```
 
-### Using pip
+### `makefile.mk`
 
-Alternatively, you can use `pip`:
+Optional variables (set before `include`):
 
-```shell
-pip install persista
+| Variable                | Default         | Description                    |
+| ----------------------- | --------------- | ------------------------------ |
+| `MAKEFILE_FORMAT_FILES` | `Makefile *.mk` | Files passed to `mbake format` |
+| `MAKEFILE_LINT_FILES`   | `Makefile *.mk` | Files passed to `checkmake`    |
+
+```makefile
+include makefile.mk
+
+MAKEFILE_LINT_FILES = Makefile makefile.mk yaml.mk
 ```
 
-**Install with specific optional dependencies:**
+### `shell.mk`
 
-```shell
-pip install persista[redis,httpx]  # with Redis and httpx support
+Optional variables (set before `include`):
+
+| Variable            | Default | Description                                           |
+| ------------------- | ------- | ----------------------------------------------------- |
+| `SHELL_FORMAT_PATH` | `.`     | Path passed to `shfmt` (walked recursively)           |
+| `SHELL_LINT_PATH`   | `.`     | Path searched for `*.sh` files passed to `shellcheck` |
+
+```makefile
+include shell.mk
+
+SHELL_LINT_PATH = scripts
 ```
 
-### Requirements
+### `toml.mk`
 
-- **Python**: 3.11 or higher
-- **Core dependencies**: [`coola`](https://github.com/durandtibo/coola)
+Optional variables (set before `include`):
 
-**Optional dependencies**, enabled per-backend:
+| Variable           | Default | Description                                        |
+| ------------------ | ------- | -------------------------------------------------- |
+| `TOML_FORMAT_PATH` | `.`     | Path searched for `*.toml` files passed to `taplo` |
 
-| Extra       | Enables                         |
-| ----------- | ------------------------------- |
-| `aiosqlite` | Async SQLite store              |
-| `duckdb`    | DuckDB store                    |
-| `faker`     | Test data generation helpers    |
-| `httpx`     | Sync/async HTTP fetch utilities |
-| `lmdb`      | LMDB store                      |
-| `psycopg`   | PostgreSQL store                |
-| `redis`     | Redis store                     |
-| `requests`  | Sync HTTP fetch utilities       |
-| `rich`      | Rich-formatted output           |
-| `urllib3`   | urllib3-based HTTP utilities    |
+```makefile
+include toml.mk
 
-For detailed installation instructions, see the [documentation](https://durandtibo.github.io/persista/).
+TOML_FORMAT_PATH = config
+```
 
-## Contributing
+### `markdown.mk`
 
-Contributions are welcome! We appreciate bug fixes, feature additions, documentation improvements,
-and more. Please check the [contributing guidelines](CONTRIBUTING.md) for details on:
+Optional variables (set before `include`):
 
-- Setting up the development environment
-- Code style and testing requirements
-- Submitting pull requests
+| Variable               | Default   | Description                                           |
+| ---------------------- | --------- | ----------------------------------------------------- |
+| `MARKDOWN_FORMAT_PATH` | `.`       | Root path globbed for `**/*.md`, passed to `prettier` |
+| `MARKDOWN_LINT_GLOB`   | `**/*.md` | Glob passed to `markdownlint`                         |
 
-Whether you're fixing a bug or proposing a new feature, please open an issue first to discuss
-your changes.
+```makefile
+include markdown.mk
 
-## API Stability
+MARKDOWN_LINT_GLOB = docs/**/*.md
+```
 
-:warning: **Important**: As `persista` is under active development, its API is not yet stable and may
-change between releases. We recommend pinning a specific version in your project’s dependencies to
-ensure consistent behavior.
+### `actions.mk`
+
+Optional variables (set before `include`):
+
+| Variable            | Default | Description                                                                      |
+| ------------------- | ------- | -------------------------------------------------------------------------------- |
+| `ACTIONS_LINT_PATH` | `.`     | Path searched for `.github/workflows/*.{yml,yaml}` files, passed to `actionlint` |
+
+```makefile
+include actions.mk
+
+ACTIONS_LINT_PATH = .
+```
+
+### `uv.mk`
+
+Optional variables (set before `include`):
+
+| Variable         | Default | Description                                 |
+| ---------------- | ------- | ------------------------------------------- |
+| `PYTHON_VERSION` | `3.14`  | Python version passed to `uv venv --python` |
+
+```makefile
+include uv.mk
+
+PYTHON_VERSION = 3.12
+```
+
+`install-invoke` installs `uv` on demand and then `invoke>=3.0` and `invoke-tasklib>=0.0.8` via `uv pip install` into the
+active virtual environment (create one first, e.g. with `uv venv`).
+`update-uv` runs `uv self update`. `setup-venv` updates `uv`, creates a fresh `.venv`
+(`uv venv --python $(PYTHON_VERSION) --clear`), installs `invoke` into it, and runs
+`uv run inv env.create-venv` and `uv run inv env.install` — it assumes the project's
+`tasks.py` exposes the `invoke-tasklib` tasks (`from invoke_tasklib import ns`).
+
+### `self.mk`
+
+For projects that vendor this repo as a subtree (e.g. at `.make/`), `self.mk` provides a target
+to pull in upstream changes.
+
+Optional variables (set before `include`):
+
+| Variable                       | Default                                              | Description     |
+| ------------------------------ | ---------------------------------------------------- | --------------- |
+| `SHARED_MAKEFILES_REMOTE_NAME` | `shared-makefiles`                                   | Git remote name |
+| `SHARED_MAKEFILES_REMOTE_URL`  | `https://github.com/durandtibo/shared-makefiles.git` | Git remote URL  |
+| `SHARED_MAKEFILES_BRANCH`      | `main`                                               | Branch to pull  |
+| `SHARED_MAKEFILES_PREFIX`      | `.make`                                              | Subtree prefix  |
+
+```makefile
+include self.mk
+```
+
+`update-subtree` adds the `$(SHARED_MAKEFILES_REMOTE_NAME)` remote if missing, fetches
+`$(SHARED_MAKEFILES_BRANCH)`, and runs `git subtree pull --prefix=$(SHARED_MAKEFILES_PREFIX)
+$(SHARED_MAKEFILES_REMOTE_NAME) $(SHARED_MAKEFILES_BRANCH) --squash` to sync the subtree. It then
+removes the `.github/`, `testdata/` and `tests/` folders from within `$(SHARED_MAKEFILES_PREFIX)` (not
+needed in consuming projects) and commits the removal.
+
+### `help.mk`
+
+```makefile
+include help.mk
+
+.PHONY: format
+format: format-yaml ## Format all files
+```
+
+`help` scans every included Makefile (`$(MAKEFILE_LIST)`) for lines matching
+`target: ... ## description` and prints them, sorted, as `target` / `description` pairs. Only
+targets with a trailing `## ...` comment show up — add one to any target you want documented. Every
+target defined in this repo's own `.mk` files is already annotated this way, so `include`-ing any
+of them and running `make help` lists them for free.
+
+## Design
+
+- **Include guards** — each file defines an `_MK_INCLUDED` variable so it's safe to `include`
+  more than once (e.g. transitively from multiple project Makefiles).
+- **On-demand install** — every lint/format target depends on an `install-<tool>` target that
+  checks `command -v` before installing, so CI and local runs don't need the tool preinstalled.
+- **Configurable paths** — variables default to sensible project-wide values but can be
+  overridden per project or per target invocation.
+- **`.make/` excluded by default** — this repo is meant to be vendored as a subtree at `.make/`
+  in consuming projects, so every formatter/linter skips that folder by default:
+  [`.prettierignore`](.prettierignore) and [`.markdownlintignore`](.markdownlintignore) exclude
+  it, `.yamllint.yaml` sets `ignore: .make/`, and `shell.mk`'s `find` commands `-prune` it.
+
+## Testing
+
+[`.github/workflows/ci-test.yml`](.github/workflows/ci-test.yml) exercises every file against the
+Unix OS matrix (Ubuntu and macOS runners) resolved dynamically via
+[`durandtibo/workflow-config-action`](https://github.com/durandtibo/workflow-config-action) on
+every push/PR to `main`, running both the lint and format targets (including on-demand tool
+installation) to make sure the rules stay portable across platforms.
 
 ## License
 
-`persista` is licensed under BSD 3-Clause "New" or "Revised" license available in [LICENSE](LICENSE)
+This repo is licensed under BSD 3-Clause "New" or "Revised" license available in [LICENSE](LICENSE)
 file.
