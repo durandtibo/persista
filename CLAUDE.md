@@ -1,0 +1,228 @@
+# Instructions for coding agents
+
+## Environment
+
+- Use the virtual environment in `.venv`: `.venv/bin/python`, `.venv/bin/pytest`, `.venv/bin/ruff`.
+  There is no `python` on the `PATH`.
+- The common commands are `invoke` tasks (`.venv/bin/inv --list`), defined by `invoke-tasklib` and
+  configured in `invoke.yaml`.
+- Lint and format before committing: `.venv/bin/ruff check src tests` and
+  `.venv/bin/ruff format src tests`. Fix the issues raised by ruff. Ignoring an issue (`noqa`, a
+  changed rule set) is not fixing it.
+- Type check with `.venv/bin/ty check`. Fix the issues raised by ty. Ignoring an issue
+  (`type: ignore`, `ty: ignore`, a cast that hides the problem) is not fixing it.
+- Run the unit tests of the packages you changed (for example
+  `.venv/bin/pytest tests/unit/store -q`). If a test fails, check with `git stash` whether it
+  also fails without your change.
+- Some integration tests need a live server and are skipped when it is not reachable. Start one
+  with `dev/start_redis.sh` or `dev/start_postgres.sh` when you change the Redis or Postgres
+  stores (the Postgres tests can also start their own Docker container).
+- Do not edit the files in `.make/`: it is a copy of
+  [shared-makefiles](https://github.com/durandtibo/shared-makefiles), synced by
+  `bot-sync-shared-makefile.yaml`.
+
+## Workflow
+
+- One branch and one pull request per logical change (one feature, one bug fix, one refactor).
+  Branch from an up to date `main`.
+- Name the branch `<type>/<short-description>` in lowercase kebab-case, for example
+  `feat/add-cache-option` or `bugfix/handle-empty-input`. Use one of these types:
+  `feat` (new feature), `bugfix` (bug fix), `hotfix` (urgent fix), `docs` (documentation),
+  `refactor` (no behaviour change), `perf` (performance), `test` (tests only),
+  `chore` (maintenance, dependencies, tooling), `ci` (CI configuration).
+- Do not commit or push to `main`.
+- When working on several sequential PRs where one depends on the previous one, use stacked PRs:
+  branch each PR from the branch of the previous one (not from `main`) and open it with the
+  previous branch as its base. Keep each PR small and reviewable on its own. Once a PR of the stack
+  is merged, retarget the next PR to `main` and merge `origin/main` into it.
+- Write commit messages and PR titles as a short imperative sentence starting with a verb such as
+  `Add`, `Fix`, `Update`, `Remove` or `Improve`. Do not use conventional-commit prefixes like
+  `docs:` or `feat:` (the type prefix is only for branch names). The squash-merge appends the PR
+  number, so do not add one.
+- In the PR description, say what was changed, what was deliberately not changed, and any
+  behaviour change (for example a changed output, or a breaking change of the signature).
+- Do not escape special characters such as the backtick (`` ` ``) in the PR title or description
+  (no `\``): the backslash is not rendered well. Write the characters as is.
+- When a PR conflicts with `main`, merge `origin/main` into the branch and resolve the conflicts
+  (do not rebase and force-push). Most conflicts are two PRs appending tests at the end of the
+  same test file: keep both. Check what `main` already contains before choosing a side.
+- Update any tracking document (changelog, status table, issue) affected by the change, with the
+  PR number.
+
+## Code
+
+- Match the surrounding code: comment density, naming, docstring style (Google style with
+  `Args:`, `Returns:`, `Raises:` and an `Example:` with a `pycon` block that runs as a doctest).
+- Follow the current style of the repository in everything you add (source, tests, docs, commit
+  messages, PR descriptions). Look at a few neighbouring files first, and do not introduce a new
+  convention or reformat code you do not otherwise change.
+- List the public objects of a module in `__all__`.
+- Shared helpers belong in `persista.utils`, or in a module of the package they serve (for
+  example `persista.store.validation`), as public functions (no leading underscore) with their
+  own tests, not as private functions imported across modules.
+- Reuse the validation helpers (`persista.store.validation`, for example `validate_batch_size`,
+  `check_is_open` or `normalize_on_conflict`) instead of writing the same check again.
+- Keep new options keyword-only (`*`), as `SQLiteStore.from_path` does with `read_only`.
+- Optional libraries (duckdb, httpx, lmdb, psycopg, redis, requests, ...) are optional: do not
+  import them unconditionally at module level in `src`. Guard the import with the helpers of
+  `persista.utils.imports` (`if is_redis_available(): import redis`, or under `TYPE_CHECKING`),
+  and call the matching `check_*` function before the library is used.
+- Every function, public or private (leading underscore), needs a docstring and its own unit
+  tests. Private functions are not exempt. An override that adds nothing to the docstring of the
+  method it overrides (same behaviour, arguments and exceptions) has no docstring: it inherits the
+  parent's. Document an override only when it adds something (for example a `Raises:` section).
+- Document the constructor arguments (`Args:`, `Raises:`) in the class docstring, not in a
+  docstring of `__init__`, as the existing classes do. Do not add a docstring to `__init__`
+  or to the other dunder methods (`__repr__`, `__str__`, `__eq__`, ...).
+- Keep docstrings and documentation (`README.md`, `docs/docs/`) up to date and comprehensive:
+  update them whenever the behaviour, signature or options of the code change.
+
+### Stores
+
+- Follow the contract documented in `BaseStore`: every operation that touches the backend has a
+  sync method and an async twin prefixed with `a`, a constructor does not connect to the backend
+  (`open`/`aopen` do), and there is no per-key TTL.
+- All the backends behave the same. A change of behaviour applies to every backend, and
+  `tests/integration/store/test_consistency.py` checks it.
+- A name interpolated into SQL (field, table, column type) must be validated first
+  (`validate_field_name`, `validate_table_name`, `validate_value_schema`). Pass the values as bound
+  parameters.
+- A new backend also needs a factory (`persista.store.factory`), a URI scheme if it can be built
+  from a URI (`persista.store.registry`), an optional extra in `pyproject.toml` if it needs a
+  library, and the documentation.
+
+## Tests
+
+- Always write tests for the code in `src/`, including every private function. Unit tests must be
+  fast and efficient; move big or slow tests to `tests/integration/` if needed.
+- Unit tests mirror the source tree (`tests/unit/<package>/test_<module>.py`). Cross-thread
+  behaviour goes in `tests/integration/`, with a lock around the shared state and a docstring
+  starting with "Test that ...".
+- Write async tests as `async def` functions: they run with `anyio` (`anyio_mode = "auto"`).
+- Do not use local imports inside tests (for example `import redis` in a test body). Import
+  at the top of the module (guarded by `is_*_available()` for an optional library), and use the
+  `*_available` marks from `persista.testing.fixtures` to skip the tests that need it. The tests
+  must pass without the optional dependencies installed.
+- One behaviour per test: a test has one `assert` or one `pytest.raises`. Split a test that checks
+  several things (equal, different, negative, ...) into several tests. Thread-safety tests may
+  assert the count and the uniqueness together.
+- A test may combine `pytest.raises` (or `pytest.warns`) with an `assert` that checks the state
+  after the error (for example that the input was not mutated). This is one behaviour: the call
+  fails and leaves the state unchanged.
+
+  ```python
+  with pytest.raises(KeyError, match=r"already exist"):
+      store.set("1", {"name": "new"}, on_conflict="raise")
+  assert store.get("1") == {"name": "old"}
+  ```
+
+- Do not use `contextlib.suppress` in place of `pytest.raises` to swallow an expected exception:
+  it passes when no exception is raised, so the test does not prove the error happens. Use
+  `pytest.raises` with `match`, then assert on the state afterwards if needed.
+- Keep the unit tests simple and fast: no sleeps, no large data, no real network or heavy I/O,
+  and no logic (loops, branches) in the test body. Anything slow or concurrent belongs in
+  `tests/integration/`.
+- Add the missing tests to get 100% coverage of the code you add or change
+  (`.venv/bin/pytest <tests> --cov=persista --cov-report=term-missing`). Do not use
+  `# pragma: no cover` to skip a line that can be tested.
+- Use `pytest.mark.parametrize` for the same check on several values.
+- Every `pytest.raises` (and `pytest.warns`) must define `match` with a regular expression for the
+  message (raw string if it has metacharacters), so a test does not pass on an unrelated error of
+  the same type. An exception raised by a patched stand-in needs an explicit message for the same
+  reason (`side_effect=KeyboardInterrupt("interrupted")`, not `side_effect=KeyboardInterrupt`).
+- Add a regression test for every bug fixed, and check that it fails without the fix (revert the
+  `src` change with `git stash push src` and run it).
+- Do not add tests for the exports of `__all__` or other trivial structure.
+- Section headers in the tests have three lines. The second line is `#`, 5 spaces, the name,
+  5 spaces and `#`. The first and third lines repeat `#` to match the length of the second line:
+
+  ```python
+  ###################################
+  #     Tests for InMemoryStore     #
+  ###################################
+  ```
+
+- Seed random data (`random.Random(0)`, the `seed` argument of `generate_fake_records`); no
+  unseeded randomness in tests.
+- Patching (`monkeypatch`, `unittest.mock.patch`) is fine in unit tests: it keeps them fast and
+  simple and isolates the logic under test. But a patched test only proves the logic works against
+  the patched stand-in, which may not match the real collaborator (signature, return type,
+  behaviour). A passing patched unit test does not mean the feature works. Every patched behaviour
+  needs an integration test in `tests/integration/` that exercises the real thing without patching.
+  The two kinds of test have different purposes; do not drop one because the other exists.
+
+### Test assertions
+
+- When asserting an expected value, write the final computed number, not the arithmetic
+  expression that produces it (for example `0.6666666666666666`, not `1.0 * 0.4 + 0.0 * 0.2`).
+  If the derivation is not obvious, keep the expression as a comment above the assertion.
+- When a function returns a composite value (a dict, a list, ...), include at least one test that
+  asserts the entire output against a fully-specified literal, not only individual keys or fields.
+  This catches unexpected extra or missing entries that per-field assertions miss:
+
+  ```python
+  result = compute(...)
+  assert result == {...}
+  ```
+
+### Test coverage
+
+When implementing or modifying a function, write comprehensive unit tests, not just a happy-path
+check. Cover, where applicable:
+
+- Typical inputs.
+- Edge cases: empty inputs, single-element inputs, duplicate inputs.
+- Boundary values (0, negative numbers, min/max of a valid range).
+- Error conditions: inputs that should raise, with the right exception type and message
+  (including errors raised by collaborators the function calls).
+- Interactions between parameters, for example a cross-product of two input lists, or the order
+  of output keys or entries.
+- Side effects: the function does not mutate its inputs, is deterministic across repeated calls,
+  and does not leak state when given reused or stateful collaborators.
+- Both the sync method and its async twin.
+
+Prefer many small, precisely named tests (one behavior per test) over a few broad ones, so a
+failure points at the specific behavior that broke.
+
+## GitHub Actions workflows
+
+The workflows are in `.github/workflows/`; the composite actions are in `.github/actions/`.
+`.github/GUIDELINES.md` describes the naming and the conventions: read it and keep it up to date
+when you add, rename or remove a workflow.
+
+- The file name starts with a prefix that gives the role of the workflow:
+  - `ci-`: quality and test checks of the repository source. Most are reusable workflows
+    (`workflow_call`) called from `ci.yaml`. `ci-benchmark.yaml` (scheduled) and
+    `ci-verify-workflows.yaml` are standalone and not called from `ci.yaml`.
+  - `lib-`: reusable helpers that compute an output for other workflows (test matrix, package
+    dependencies, extras, versions).
+  - `nightly-`: scheduled tests of the _published_ PyPI package, not of the source.
+    `nightly-package.yaml` is the entry point; the other `nightly-test-*` are called by it.
+  - `bot-`: scheduled automation that opens pull requests (dependency updates, pinning
+    actions, formatting, ...) with the `ci-bot` GitHub App token.
+  - `release-`: publishing to PyPI and the documentation. The PyPI package and the stable
+    documentation are triggered by version tags (`v*.*.*`) or manually, the development
+    documentation by a push to `main`. They do not run `ci.yaml`, so check that CI passes on the
+    commit before tagging.
+  - `security-`: dependency review of PRs and scorecard.
+- `ci.yaml` is the single entry point of the checks (pull request, push to `main`, nightly).
+  It calls `lib-get-test-matrix.yaml` once and passes the matrix (`test-matrix` input) to the
+  test workflows, so the Python versions and OS are defined in one place. To add a check,
+  create a `ci-<name>.yaml` reusable workflow and add a job in `ci.yaml`.
+- The job ids of `ci.yaml` and of the workflows it calls name the status checks required by the
+  branch protection of `main`: do not rename them.
+- Conventions: a header comment that says what the workflow does and when it runs; the minimum
+  permissions; `timeout-minutes` on every job; actions pinned to a commit SHA with a `# ratchet:`
+  comment (`bot-pin-action.yaml` maintains them).
+- `ci-verify-workflows.yaml` lints the workflows: check your changes with `actionlint` when
+  available.
+
+## Releases
+
+- Releases are immutable exact version tags (`v0.0.2`, ...). Do not create or move floating tags
+  (`v0`, `latest`) and do not document them as an option.
+
+## Reporting
+
+- Report faithfully: say which tests were run, which were not, and that CI was not awaited.
+- Mention test failures that already exist on `main` instead of hiding them.
