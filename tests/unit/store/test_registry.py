@@ -66,6 +66,15 @@ def test_store_from_uri_unknown_scheme_raises() -> None:
         store_from_uri("bogus://x")
 
 
+@pytest.mark.parametrize("scheme", ["sqlite+typed", "duckdb+typed"])
+def test_store_from_uri_typed_scheme_raises(scheme: str, tmp_path: Path) -> None:
+    """A typed store could not be rebuilt from its URI, which has no
+    schema: its scheme is rejected instead of returning a store that
+    cannot read the data."""
+    with pytest.raises(ValueError, match=r"No store registered"):
+        store_from_uri(f"{scheme}:///{tmp_path.as_posix()}/data.db")
+
+
 @pytest.mark.parametrize(
     ("kwargs", "expected"), [({"read_only": True}, True), ({}, False)], ids=["true", "default"]
 )

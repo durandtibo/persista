@@ -130,7 +130,7 @@ jobs:
         run: |
           inv test.integration
 
-  # Test PostgresStore/TypedPostgresStore against a live Postgres server
+  # Test PostgresStore against a live Postgres server
   # (service containers are only supported on Linux-hosted runners, hence the
   # separate job)
   postgres:

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from persista.store import PostgresStore, TypedPostgresStore
+from persista.store import PostgresStore
 from persista.utils.imports import is_psycopg_available
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ MODULE = "persista.store.postgres"
 # Unlike SQLiteStore (":memory:") or RedisStore (fakeredis), there is no
 # lightweight in-process stand-in for a real Postgres server. This fake
 # mimics just enough of psycopg's connection/cursor protocol -- and the
-# handful of SQL shapes BasePostgresStore/PostgresStore/TypedPostgresStore
+# handful of SQL shapes BasePostgresStore/PostgresStore
 # actually generate -- to exercise real store behavior end-to-end without a
 # live server, the same role fakeredis plays for RedisStore. Real server
 # behavior (actual SQL execution, encoding, transactions) is covered
@@ -61,7 +61,7 @@ _EXISTS_RE = re.compile(r'^SELECT 1 FROM "(\w+)" WHERE "([^"]+)" = %s LIMIT 1$')
 _COL_ANY_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
 _COL_ALL_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)"$')
 _STAR_RE = re.compile(r'^SELECT \* FROM "(\w+)"(?: WHERE (.+))?$')
-_TEXT_COND_RE = re.compile(r"^(?:value|extra)->>'([^']+)' = %s::text$")
+_TEXT_COND_RE = re.compile(r"^value->>'([^']+)' = %s::text$")
 _COL_COND_RE = re.compile(r'^"([^"]+)" = %s$')
 _ADVISORY_LOCK_RE = re.compile(
     r"^SELECT pg_advisory_xact_lock\(hashtextextended\(k, 0\)\) "
@@ -105,7 +105,7 @@ class FakeConnection:
         self.tables: dict[str, dict[str, tuple[Any, ...]]] = {}
         # Wired up by `_connect()` right after the store is constructed, so
         # filter-condition evaluation can reuse the store's own
-        # `_row_to_value` instead of duplicating its schema/extra logic.
+        # `_row_to_value` and key column.
         self.store: BasePostgresStore | None = None
         self.closed = False
         # Keys advisory-locked via pg_advisory_xact_lock, in call order;
@@ -198,24 +198,19 @@ class FakeConnection:
         self, table: dict[str, tuple[Any, ...]], where: str, params: tuple[Any, ...]
     ) -> list[tuple[Any, ...]]:
         fields: list[str] = []
-        is_text: list[bool] = []
         for cond in (c.strip() for c in where.split(" AND ")):
-            if m := _TEXT_COND_RE.match(cond):
-                fields.append(m.group(1))
-                is_text.append(True)
-            elif m := _COL_COND_RE.match(cond):
-                fields.append(m.group(1))
-                is_text.append(False)
-            else:
+            m = _TEXT_COND_RE.match(cond)
+            if not m:
                 msg = f"Unsupported filter condition in FakeConnection: {cond!r}"
                 raise AssertionError(msg)
+            fields.append(m.group(1))
         assert self.store is not None
         matches = []
         for row in table.values():
             value = self.store._row_to_value(row)
             if all(
-                (str(value.get(field)) == str(param) if text_cast else value.get(field) == param)
-                for field, text_cast, param in zip(fields, is_text, params, strict=True)
+                str(value.get(field)) == str(param)
+                for field, param in zip(fields, params, strict=True)
             ):
                 matches.append(row)
         return matches
@@ -334,9 +329,9 @@ class _AsyncConnAdapter:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(params=[PostgresStore, TypedPostgresStore], ids=["plain", "typed"])
-def store_cls(request: pytest.FixtureRequest) -> type[BasePostgresStore]:
-    return request.param
+@pytest.fixture
+def store_cls() -> type[BasePostgresStore]:
+    return PostgresStore
 
 
 @pytest.fixture
@@ -344,23 +339,9 @@ def store(store_cls: type[BasePostgresStore]) -> BasePostgresStore:
     return _connect(store_cls)
 
 
-@pytest.fixture
-def typed_store_no_schema() -> TypedPostgresStore:
-    """Store with no schema (everything in `extra`)."""
-    return _connect(TypedPostgresStore)
-
-
-@pytest.fixture
-def typed_store() -> TypedPostgresStore:
-    """Store with a typed schema."""
-    return _connect(
-        TypedPostgresStore, value_schema={"author": "TEXT", "year": "INTEGER", "category": "TEXT"}
-    )
-
-
-#####################################################
-#     Tests for PostgresStore/TypedPostgresStore     #
-#####################################################
+###################################
+#     Tests for PostgresStore     #
+###################################
 
 
 # --- constructor ---
@@ -1250,134 +1231,6 @@ async def test_async_context_manager_reopens_closed_store(
             assert store.count() == 1
 
 
-#######################################################
-#     TypedPostgresStore-specific schema behavior     #
-#######################################################
-
-# PostgresStore and TypedPostgresStore share the exact same behavior when
-# no schema is involved (covered by every test above, run against both
-# `store_cls` params). TypedPostgresStore additionally supports declaring typed
-# columns via `value_schema`, covered here.
-
-
-def test_init_no_schema_stores_everything_in_extra(
-    typed_store_no_schema: TypedPostgresStore,
-) -> None:
-    typed_store_no_schema.set("1", {"title": "Intro to Python", "author": "Alice"})
-    assert typed_store_no_schema.get("1") == {"title": "Intro to Python", "author": "Alice"}
-
-
-def test_init_schema_with_reserved_key_column_raises() -> None:
-    with pytest.raises(ValueError, match=r"reserved key column name"):
-        TypedPostgresStore("postgresql://x", value_schema={"_KEY_": "TEXT"})
-
-
-def test_value_field_named_key_does_not_collide_with_primary_key(
-    typed_store_no_schema: TypedPostgresStore,
-) -> None:
-    """A value field literally named 'key' must not collide with the
-    store's primary key column, and should be stored/retrieved via the
-    extra JSONB overflow column."""
-    typed_store_no_schema.set("1", {"key": "not-the-primary-key"})
-    assert typed_store_no_schema.get("1") == {"key": "not-the-primary-key"}
-    assert typed_store_no_schema.filter(key="not-the-primary-key") == [
-        {"key": "not-the-primary-key"}
-    ]
-
-
-def test_set_on_conflict_merge_with_typed_schema(typed_store: TypedPostgresStore) -> None:
-    typed_store.set("1", {"author": "Alice", "year": 2022})
-    typed_store.set("1", {"category": "Programming"}, on_conflict="merge")
-    assert typed_store.get("1") == {"author": "Alice", "year": 2022, "category": "Programming"}
-
-
-def test_get_round_trips_typed_schema_fields(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    assert typed_store.get("1") == items["1"]
-
-
-def test_get_round_trips_extra_field(typed_store: TypedPostgresStore) -> None:
-    typed_store.set("1", {"author": "Alice", "publisher": "O'Reilly"})
-    assert typed_store.get("1")["publisher"] == "O'Reilly"
-
-
-def test_filter_single_typed_field(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
-    assert len(result) == 2
-
-
-def test_filter_multiple_typed_fields(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter(author="Alice", category="Programming")
-    assert len(result) == 2
-
-
-def test_filter_extra_field(typed_store: TypedPostgresStore) -> None:
-    typed_store.set_many(
-        {
-            "1": {"author": "Alice", "publisher": "O'Reilly"},
-            "2": {"author": "Bob", "publisher": "Manning"},
-        }
-    )
-    result = typed_store.filter(publisher="O'Reilly")
-    assert len(result) == 1
-    assert result[0]["author"] == "Alice"
-
-
-def test_filter_mixed_schema_and_extra_fields(typed_store: TypedPostgresStore) -> None:
-    typed_store.set_many(
-        {
-            "1": {"author": "Alice", "publisher": "O'Reilly"},
-            "2": {"author": "Alice", "publisher": "Manning"},
-        }
-    )
-    result = typed_store.filter(author="Alice", publisher="O'Reilly")
-    assert len(result) == 1
-    assert result[0]["publisher"] == "O'Reilly"
-
-
-def test_filter_integer_typed_column(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter(year=2022)
-    assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
-
-
-def test_filter_integer_typed_column_no_match(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    assert typed_store.filter(year=9999) == []
-
-
-def test_filter_items_single_typed_field(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter_items(author="Alice")
-    assert result == {"1": items["1"], "2": items["2"]}
-
-
-def test_iter_batches_with_typed_schema(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    for batch in typed_store.iter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
-
-
 ##############################################################
 #     PostgresStore-specific SQL-building behavior             #
 ##############################################################
@@ -1389,113 +1242,32 @@ def test_iter_batches_with_typed_schema(
 
 
 @pytest.fixture
-def plain_store() -> PostgresStore:
+def sql_store() -> PostgresStore:
     # These tests only exercise pure SQL-building helpers, which don't touch
     # the connection, so the store is left unopened.
     return PostgresStore("postgresql://x", table="store")
 
 
-def test_plain_create_table_sql(plain_store: PostgresStore) -> None:
-    stmt = plain_store._create_table_sql().as_string(None)
+def test_create_table_sql(sql_store: PostgresStore) -> None:
+    stmt = sql_store._create_table_sql().as_string(None)
     assert "store" in stmt
     assert "value JSONB NOT NULL" in stmt
 
 
-def test_plain_row_to_value_is_passthrough(plain_store: PostgresStore) -> None:
+def test_row_to_value_is_passthrough(sql_store: PostgresStore) -> None:
     value = {"title": "Intro to Python", "author": "Alice"}
-    assert plain_store._row_to_value(("1", value)) == value
+    assert sql_store._row_to_value(("1", value)) == value
 
 
-def test_plain_build_filter_condition(plain_store: PostgresStore) -> None:
-    cond = plain_store._build_filter_condition("author").as_string(None)
+def test_build_filter_condition(sql_store: PostgresStore) -> None:
+    cond = sql_store._build_filter_condition("author").as_string(None)
     assert "value->>" in cond
     assert "'author'" in cond
 
 
-def test_plain_build_filter_condition_invalid_field_name(plain_store: PostgresStore) -> None:
+def test_build_filter_condition_invalid_field_name(sql_store: PostgresStore) -> None:
     with pytest.raises(ValueError, match="Invalid filter field name"):
-        plain_store._build_filter_condition("bad; DROP TABLE")
-
-
-##############################################################
-#     TypedPostgresStore-specific SQL-building behavior        #
-##############################################################
-
-
-@pytest.fixture
-def typed_sql_store() -> TypedPostgresStore:
-    # These tests only exercise pure SQL-building helpers, which don't touch
-    # the connection, so the store is left unopened.
-    return TypedPostgresStore(
-        "postgresql://x", table="store", value_schema={"author": "TEXT", "year": "INTEGER"}
-    )
-
-
-def test_typed_create_table_sql(typed_sql_store: TypedPostgresStore) -> None:
-    stmt = typed_sql_store._create_table_sql().as_string(None)
-    assert "store" in stmt
-    assert "author" in stmt
-    assert "TEXT" in stmt
-    assert "year" in stmt
-    assert "INTEGER" in stmt
-    assert "extra" in stmt
-
-
-def test_typed_build_filter_condition_schema_field(typed_sql_store: TypedPostgresStore) -> None:
-    cond = typed_sql_store._build_filter_condition("author").as_string(None)
-    assert "author" in cond
-    assert "extra->>" not in cond
-
-
-def test_typed_build_filter_condition_extra_field(typed_sql_store: TypedPostgresStore) -> None:
-    cond = typed_sql_store._build_filter_condition("publisher").as_string(None)
-    assert "extra->>" in cond
-    assert "'publisher'" in cond
-
-
-def test_typed_build_filter_condition_extra_field_invalid_name(
-    typed_sql_store: TypedPostgresStore,
-) -> None:
-    with pytest.raises(ValueError, match="Invalid filter field name"):
-        typed_sql_store._build_filter_condition("bad; DROP TABLE")
-
-
-def test_typed_build_insert(typed_sql_store: TypedPostgresStore) -> None:
-    stmt = typed_sql_store._build_insert().as_string(None)
-    assert "INSERT INTO" in stmt
-    assert "ON CONFLICT" in stmt
-    assert "_KEY_" in stmt
-    assert "author" in stmt
-    assert "year" in stmt
-    assert "extra" in stmt
-    assert "DO UPDATE SET" in stmt
-
-
-def test_typed_round_trip_all_known_fields(typed_sql_store: TypedPostgresStore) -> None:
-    value = {"author": "Alice", "year": 2022}
-    row = typed_sql_store._value_to_row("1", value)
-    assert row == ("1", "Alice", 2022, None)
-    assert typed_sql_store._row_to_value(row) == value
-
-
-def test_typed_round_trip_split_schema_and_extra(typed_sql_store: TypedPostgresStore) -> None:
-    value = {"author": "Alice", "title": "Intro to Python"}
-    row = typed_sql_store._value_to_row("1", value)
-    # The overflow column is wrapped in Jsonb for outbound adaptation; a
-    # real SELECT decodes it back to a plain dict, which is what
-    # _row_to_value expects (it is never fed a Jsonb-wrapped row directly).
-    assert row[:3] == ("1", "Alice", None)
-    assert isinstance(row[3], Jsonb)
-    assert row[3].obj == {"title": "Intro to Python"}
-    decoded_row = (*row[:3], row[3].obj)
-    assert typed_sql_store._row_to_value(decoded_row) == value
-
-
-def test_typed_round_trip_empty_value(typed_sql_store: TypedPostgresStore) -> None:
-    value: dict[str, object] = {}
-    row = typed_sql_store._value_to_row("1", value)
-    assert row == ("1", None, None, None)
-    assert typed_sql_store._row_to_value(row) == {}
+        sql_store._build_filter_condition("bad; DROP TABLE")
 
 
 # ---------------------------------------------------------------------------
@@ -1834,149 +1606,6 @@ async def test_postgres_store_avalues(store: BasePostgresStore) -> None:
 async def test_postgres_store_aset_batches(store: BasePostgresStore) -> None:
     await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})], batch_size=1)
     assert await store.acount() == 2
-
-
-# ---------------------------------------------------------------------------
-# async + typed schema
-# ---------------------------------------------------------------------------
-
-
-# --- aget ---
-
-
-async def test_typed_postgres_store_aget_round_trips_typed_schema_fields(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    assert await typed_store.aget("1") == items["1"]
-
-
-# --- aset ---
-
-
-async def test_typed_postgres_store_aset_on_conflict_merge_with_typed_schema(
-    typed_store: TypedPostgresStore,
-) -> None:
-    await typed_store.aset("1", {"author": "Alice", "year": 2022})
-    await typed_store.aset("1", {"category": "Programming"}, on_conflict="merge")
-    assert await typed_store.aget("1") == {
-        "author": "Alice",
-        "year": 2022,
-        "category": "Programming",
-    }
-
-
-# --- afilter ---
-
-
-async def test_typed_postgres_store_afilter_single_typed_field(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    result = await typed_store.afilter(author="Alice")
-    assert {item["title"] for item in result} == {"Intro to Python", "Advanced Python"}
-
-
-async def test_typed_postgres_store_afilter_integer_typed_column(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    result = await typed_store.afilter(year=2022)
-    assert {item["title"] for item in result} == {"Intro to Python"}
-
-
-# --- aiter_batches ---
-
-
-async def test_typed_postgres_store_aiter_batches_with_typed_schema(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    async for batch in typed_store.aiter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
-
-
-# --- avalues ---
-
-
-async def test_typed_postgres_store_avalues_with_typed_schema(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    values = [v async for v in typed_store.avalues(batch_size=2)]
-    assert sorted(v["title"] for v in values) == sorted(item["title"] for item in items.values())
-
-
-# --- aset (conflict variants) ---
-
-
-async def test_typed_postgres_store_aset_on_conflict_raise_with_typed_schema(
-    typed_store: TypedPostgresStore,
-) -> None:
-    await typed_store.aset("1", {"author": "Alice"})
-    with pytest.raises(KeyError, match=r"1"):
-        await typed_store.aset("1", {"author": "Bob"}, on_conflict="raise")
-    assert await typed_store.aget("1") == {"author": "Alice"}
-
-
-async def test_typed_postgres_store_aset_on_conflict_skip_with_typed_schema(
-    typed_store: TypedPostgresStore,
-) -> None:
-    await typed_store.aset("1", {"author": "Alice"})
-    await typed_store.aset("1", {"author": "Bob"}, on_conflict="skip")
-    assert await typed_store.aget("1") == {"author": "Alice"}
-
-
-async def test_typed_postgres_store_aset_on_conflict_overwrite_with_typed_schema(
-    typed_store: TypedPostgresStore,
-) -> None:
-    await typed_store.aset("1", {"author": "Alice"})
-    await typed_store.aset("1", {"author": "Bob"}, on_conflict="overwrite")
-    assert await typed_store.aget("1") == {"author": "Bob"}
-
-
-# --- afilter (extra fields) ---
-
-
-async def test_typed_postgres_store_afilter_multiple_typed_fields(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    result = await typed_store.afilter(author="Alice", category="Programming")
-    assert {item["title"] for item in result} == {"Intro to Python", "Advanced Python"}
-
-
-async def test_typed_postgres_store_afilter_extra_field(typed_store: TypedPostgresStore) -> None:
-    await typed_store.aset_many(
-        {
-            "1": {"author": "Alice", "publisher": "O'Reilly"},
-            "2": {"author": "Bob", "publisher": "Packt"},
-        }
-    )
-    result = await typed_store.afilter(publisher="O'Reilly")
-    assert result == [{"author": "Alice", "publisher": "O'Reilly"}]
-
-
-async def test_typed_postgres_store_afilter_mixed_schema_and_extra_fields(
-    typed_store: TypedPostgresStore,
-) -> None:
-    await typed_store.aset_many(
-        {
-            "1": {"author": "Alice", "publisher": "O'Reilly"},
-            "2": {"author": "Alice", "publisher": "Packt"},
-        }
-    )
-    result = await typed_store.afilter(author="Alice", publisher="O'Reilly")
-    assert result == [{"author": "Alice", "publisher": "O'Reilly"}]
-
-
-async def test_typed_postgres_store_afilter_integer_typed_column_no_match(
-    typed_store: TypedPostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    assert await typed_store.afilter(year=9999) == []
 
 
 # ---------------------------------------------------------------------------
@@ -2470,38 +2099,6 @@ async def test_async_context_manager_closes_on_exception(
         async with _connect(store_cls) as store:
             raise ValueError(msg)
     assert store._conn.closed
-
-
-# ---------------------------------------------------------------------------
-# async + typed schema parity
-# ---------------------------------------------------------------------------
-
-
-async def test_typed_postgres_store_ainit_no_schema_stores_everything_in_extra(
-    typed_store_no_schema: TypedPostgresStore,
-) -> None:
-    await typed_store_no_schema.aset("1", {"title": "Intro to Python", "author": "Alice"})
-    assert await typed_store_no_schema.aget("1") == {
-        "title": "Intro to Python",
-        "author": "Alice",
-    }
-
-
-async def test_typed_postgres_store_avalue_field_named_key_does_not_collide_with_primary_key(
-    typed_store_no_schema: TypedPostgresStore,
-) -> None:
-    await typed_store_no_schema.aset("1", {"key": "not-the-primary-key"})
-    assert await typed_store_no_schema.aget("1") == {"key": "not-the-primary-key"}
-    assert await typed_store_no_schema.afilter(key="not-the-primary-key") == [
-        {"key": "not-the-primary-key"}
-    ]
-
-
-async def test_typed_postgres_store_aget_round_trips_extra_field(
-    typed_store: TypedPostgresStore,
-) -> None:
-    await typed_store.aset("1", {"author": "Alice", "publisher": "O'Reilly"})
-    assert (await typed_store.aget("1"))["publisher"] == "O'Reilly"
 
 
 # --- connection ---

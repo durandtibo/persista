@@ -4,7 +4,7 @@
 store interface backed by several storage engines. This page explains the `BaseStore` interface
 (which supports both synchronous and asynchronous usage) and how to use the concrete store
 implementations: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`,
-`PostgresStore`, and their "typed"/"pickle" variants.
+`PostgresStore`, and their "pickle" variants.
 
 **Prerequisites:** You'll need to know a bit of Python.
 For a refresher, see the [Python tutorial](https://docs.python.org/tutorial/).
@@ -200,42 +200,15 @@ with SQLiteStore(Path("tmp/data.sqlite")) as store:
 
 ```
 
-### Typed Stores
-
-`TypedSQLiteStore`, `TypedDuckDBStore`, and `TypedPostgresStore` map selected fields onto native
-SQL columns instead of storing the whole value as JSON, using a `value_schema` that maps field
-names to SQL types. Fields that are not listed in the schema are still stored (in an `extra` JSON
-overflow column), so filtering by those fields still works, but only the fields declared in the
-schema can be used efficiently in `filter`/indexes:
-
-```pycon
->>> from persista.store import TypedSQLiteStore
->>> schema = {"author": "TEXT", "year": "INTEGER", "category": "TEXT"}
->>> with TypedSQLiteStore(":memory:", value_schema=schema) as store:
-...     store.set_many(
-...         {
-...             "1": {
-...                 "title": "Intro to Python",
-...                 "author": "Alice",
-...                 "category": "Programming",
-...             },
-...             "2": {
-...                 "title": "Advanced Python",
-...                 "author": "Alice",
-...                 "category": "Programming",
-...             },
-...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-...         }
-...     )
-...     print(len(store.filter(author="Alice")))
-2
-
-```
+:warning: Databases and tables written by the typed stores of earlier versions (which
+`SQLiteRecordStore` and `DuckDBRecordStore` also used) have another table layout. The stores
+cannot read them, although opening them does not raise. To keep the data, read it with the earlier
+version and write it to a new database or table.
 
 ### PostgreSQL
 
-`PostgresStore` (and `TypedPostgresStore`) connect to a PostgreSQL database using a connection
-string, and store values in a configurable `table` (requires the `psycopg` extra):
+`PostgresStore` connects to a PostgreSQL database using a connection string, and stores values
+in a configurable `table` (requires the `psycopg` extra):
 
 ```python
 from persista.store import PostgresStore
@@ -254,6 +227,64 @@ with PostgresStore("postgresql://user:pass@localhost/dbname", table="documents")
 Unlike the SQLite, DuckDB, LMDB, and Redis stores, `BasePostgresStore` does not automatically
 reopen a closed connection when re-entering a `with` block. Create a new store instance
 instead of reusing one after `close()`.
+
+## Indexing a Filtered Field
+
+`SQLiteStore` and `PostgresStore` keep each value in a single JSON column, so there is no column
+to declare for a field. To make `filter` fast on a field of a large store, create an index on the
+expression that `filter` uses to read this field. `persista` does not create indexes: run the
+statement yourself on the native connection of an open store.
+
+### SQLite
+
+`SQLiteStore.filter` reads a field with `json_extract(value, '$.<field>')`. An index on exactly
+this expression is used by `filter` and `afilter`:
+
+```pycon
+>>> from persista.store import SQLiteStore
+>>> with SQLiteStore(":memory:") as store:
+...     _ = store.connection.execute(
+...         "CREATE INDEX IF NOT EXISTS store_author ON store(json_extract(value, '$.author'))"
+...     )
+...     store.set("1", {"title": "Intro to Python", "author": "Alice"})
+...     print(store.filter(author="Alice"))
+...     plan = store.connection.execute(
+...         "EXPLAIN QUERY PLAN SELECT * FROM store WHERE json_extract(value, '$.author') = 'Alice'"
+...     ).fetchall()
+...     print(plan[0][-1])
+[{'title': 'Intro to Python', 'author': 'Alice'}]
+SEARCH store USING INDEX store_author (<expr>=?)
+
+```
+
+- SQLite uses the index only if the expression is written as above. `value ->> 'author'`, for
+  example, is a different expression.
+- The index is saved in the database, so it is enough to create it once, with a store that can
+  write. SQLite keeps it up to date on every write, which makes writes a little slower.
+- One index covers one field. A `filter` on several fields can use the index of one of them.
+- `PickleSQLiteStore` cannot be indexed this way, because SQLite cannot read inside its values.
+
+### PostgreSQL
+
+`PostgresStore.filter` compares `value->>'<field>'` with the expected value cast to text, so the
+corresponding index is an expression index on `value->>'<field>'` (note the double parentheses).
+Replace `store` with the name of your table:
+
+```python
+from persista.store import PostgresStore
+
+with PostgresStore("postgresql://user:pass@localhost/dbname") as store:
+    store.connection.execute(
+        "CREATE INDEX IF NOT EXISTS store_author ON store ((value->>'author'))"
+    )
+    store.filter(author="Alice")
+```
+
+:warning: Unlike the SQLite example, this one is not verified: the tests of `persista` do not
+check that PostgreSQL uses this index for the query of `filter`, and its speed was not measured.
+The PostgreSQL planner chooses a plan from the statistics of the table (it often reads a small
+table sequentially), so check the plan on your data with
+`EXPLAIN SELECT * FROM store WHERE value->>'author' = 'Alice'`.
 
 ## Embedded and Server-Backed Stores
 
@@ -352,7 +383,7 @@ also expose async methods, backed by a thread pool.
 
 ```
 
-`SQLiteStore` and `TypedSQLiteStore`'s async methods behave like their sync counterparts:
+`SQLiteStore`'s async methods behave like their sync counterparts:
 
 ```pycon
 >>> import asyncio
@@ -373,8 +404,8 @@ also expose async methods, backed by a thread pool.
 
 ```
 
-`RedisStore`/`PickleRedisStore` and `PostgresStore`/`TypedPostgresStore` follow the same
-pattern, connecting to a running Redis or PostgreSQL server:
+`RedisStore`/`PickleRedisStore` and `PostgresStore` follow the same pattern, connecting to a
+running Redis or PostgreSQL server:
 
 ```python
 import asyncio
@@ -472,11 +503,11 @@ class from that URI:
 
 ```
 
-`read_only` is honored by the SQLite, DuckDB, and LMDB stores (and their `Typed`/`Pickle`
-variants); it's accepted but ignored everywhere else. `to_uri`/`from_uri` do not preserve
-constructor options like `value_schema` (typed stores) or `table` (Postgres stores) -- `from_uri`
-always reconstructs with the defaults. `InMemoryStore` and `NullStore` always round-trip to a
-fresh, empty store since they carry no reconnection information.
+`read_only` is honored by the SQLite, DuckDB, and LMDB stores (and their `Pickle` variants);
+it's accepted but ignored everywhere else. `to_uri`/`from_uri` do not preserve constructor
+options like `table` (Postgres stores) -- `from_uri` always reconstructs with the defaults.
+`InMemoryStore` and `NullStore` always round-trip to a fresh, empty store since they carry no
+reconnection information.
 
 If you don't know the concrete store class ahead of time, `store_from_uri` dispatches on the
 URI's scheme to the right class automatically:
@@ -494,9 +525,8 @@ True
 
 ```
 
-Store classes that share a scheme with another class (`TypedPostgresStore` and `PostgresStore`
-both use `postgresql://`, `PickleRedisStore` and `RedisStore` both use `redis://`) aren't
-reachable through the dispatcher -- call `TheClass.from_uri(uri)` directly for those.
+`PickleRedisStore` shares the `redis://` scheme with `RedisStore`, so it isn't reachable through
+the dispatcher -- call `PickleRedisStore.from_uri(uri)` directly.
 
 Use `register_scheme` to register a custom store class (or override a built-in one) under a
 given scheme:
@@ -545,15 +575,15 @@ arbitrary code. Only use it with a configuration from a trusted source.
 
 ## Choosing a Store
 
-| Store           | Backend                    | Persisted | Typed columns  | Pickle values   | Async             |
-| --------------- | -------------------------- | --------- | -------------- | --------------- | ----------------- |
-| `InMemoryStore` | Python `dict`              | No        | No             | N/A             | Yes               |
-| `SQLiteStore`   | SQLite                     | Yes       | Yes (`Typed…`) | No              | Yes               |
-| `DuckDBStore`   | DuckDB                     | Yes       | Yes (`Typed…`) | No              | Yes (thread pool) |
-| `LmdbStore`     | LMDB                       | Yes       | No             | Yes (`Pickle…`) | Yes (thread pool) |
-| `RedisStore`    | Redis                      | Yes       | No             | Yes (`Pickle…`) | Yes               |
-| `PostgresStore` | PostgreSQL                 | Yes       | Yes (`Typed…`) | No              | Yes               |
-| `NullStore`     | None (discards everything) | No        | No             | N/A             | Yes               |
+| Store           | Backend                    | Persisted | Pickle values   | Async             |
+| --------------- | -------------------------- | --------- | --------------- | ----------------- |
+| `InMemoryStore` | Python `dict`              | No        | N/A             | Yes               |
+| `SQLiteStore`   | SQLite                     | Yes       | Yes (`Pickle…`) | Yes               |
+| `DuckDBStore`   | DuckDB                     | Yes       | No              | Yes (thread pool) |
+| `LmdbStore`     | LMDB                       | Yes       | Yes (`Pickle…`) | Yes (thread pool) |
+| `RedisStore`    | Redis                      | Yes       | Yes (`Pickle…`) | Yes               |
+| `PostgresStore` | PostgreSQL                 | Yes       | No              | Yes               |
+| `NullStore`     | None (discards everything) | No        | N/A             | Yes               |
 
 Use `InMemoryStore` for tests and prototyping, `SQLiteStore`/`DuckDBStore` for local
 single-process persistence without a server, and `RedisStore`/`PostgresStore` when data needs to

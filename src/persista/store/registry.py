@@ -8,14 +8,14 @@ __all__ = ["register_scheme", "store_from_uri"]
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from persista.store.duckdb import DuckDBStore, TypedDuckDBStore
+from persista.store.duckdb import DuckDBStore
 from persista.store.file import JsonFileStore, PickleFileStore
 from persista.store.in_memory import InMemoryStore
 from persista.store.lmdb import LmdbStore, PickleLmdbStore
 from persista.store.null import NullStore
 from persista.store.postgres import PostgresStore
 from persista.store.redis import RedisStore
-from persista.store.sqlite import PickleSQLiteStore, SQLiteStore, TypedSQLiteStore
+from persista.store.sqlite import PickleSQLiteStore, SQLiteStore
 
 if TYPE_CHECKING:
     from persista.store.base import BaseStore
@@ -27,9 +27,7 @@ _SCHEMES: dict[str, type[BaseStore]] = {
     "file+pickle": PickleFileStore,
     "sqlite": SQLiteStore,
     "sqlite+pickle": PickleSQLiteStore,
-    "sqlite+typed": TypedSQLiteStore,
     "duckdb": DuckDBStore,
-    "duckdb+typed": TypedDuckDBStore,
     "lmdb": LmdbStore,
     "lmdb+pickle": PickleLmdbStore,
     "postgresql": PostgresStore,
@@ -66,12 +64,11 @@ def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
 
     Dispatches on ``uri``'s scheme to the matching store class's
     :meth:`~persista.store.base.BaseStore.from_uri`. The returned
-    store supports both sync and async access. Store classes whose
-    scheme is shared with another class (``TypedPostgresStore`` reuses
-    ``PostgresStore``'s native ``postgresql://`` scheme,
-    ``PickleRedisStore`` reuses ``RedisStore``'s native ``redis://``
-    scheme) aren't reachable through this dispatcher -- call
-    ``TheClass.from_uri(uri)`` directly for those.
+    store supports both sync and async access. A store class whose
+    scheme is shared with another class (``PickleRedisStore`` reuses
+    ``RedisStore``'s native ``redis://`` scheme) isn't reachable
+    through this dispatcher -- call ``PickleRedisStore.from_uri(uri)``
+    directly.
 
     Args:
         uri: A URI produced by some ``BaseStore`` subclass's

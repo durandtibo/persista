@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# start_postgres.sh - Start a local Postgres server for PostgresStore/TypedPostgresStore integration tests
+# start_postgres.sh - Start a local Postgres server for PostgresStore integration tests
 #
 # Description:
 #   Starts a Postgres server on localhost so that

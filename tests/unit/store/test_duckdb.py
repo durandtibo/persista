@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.store import DuckDBStore, TypedDuckDBStore
+from persista.store import DuckDBStore
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -25,24 +25,14 @@ def store_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("store")
 
 
-@pytest.fixture(scope="module", params=[DuckDBStore, TypedDuckDBStore], ids=["json", "typed"])
-def store_cls(request: pytest.FixtureRequest) -> type[BaseDuckDBStore]:
-    return request.param
+@pytest.fixture(scope="module")
+def store_cls() -> type[BaseDuckDBStore]:
+    return DuckDBStore
 
 
 @pytest.fixture
 def store(store_cls: type[BaseDuckDBStore]) -> Generator[BaseDuckDBStore, None, None]:
     with store_cls(":memory:") as store:
-        yield store
-
-
-@pytest.fixture
-def typed_store() -> Generator[TypedDuckDBStore, None, None]:
-    """In-memory store with a typed schema."""
-    with TypedDuckDBStore(
-        ":memory:",
-        value_schema={"author": "VARCHAR", "year": "INTEGER", "category": "VARCHAR"},
-    ) as store:
         yield store
 
 
@@ -57,9 +47,9 @@ def store_read_only(
         yield store
 
 
-#####################################################
-#     Tests for DuckDBStore / TypedDuckDBStore     #
-#####################################################
+#################################
+#     Tests for DuckDBStore     #
+#################################
 
 
 # --- constructor ---
@@ -863,192 +853,6 @@ async def test_async_context_manager_reentry_on_open_store_does_not_reset(
             assert reentered is store
             assert not store.closed
             assert await store.acount() == 1
-
-
-##########################################################
-#     TypedDuckDBStore-specific schema behavior          #
-##########################################################
-
-# DuckDBStore always stores every value field as JSON. TypedDuckDBStore
-# additionally supports a `value_schema`, which promotes named fields to
-# native typed columns while unlisted fields still fall back to a JSON
-# `extra` overflow column. These tests cover that schema-specific behavior,
-# which has no equivalent on the plain (schema-less) DuckDBStore.
-
-
-def test_init_no_schema_stores_everything_in_extra() -> None:
-    with TypedDuckDBStore(":memory:") as store:
-        store.set("1", {"author": "Alice"})
-        assert set(store.get_columns_info().keys()) == {"_KEY_", "extra"}
-
-
-def test_init_with_schema_creates_typed_columns(typed_store: TypedDuckDBStore) -> None:
-    columns = typed_store.get_columns_info()
-    assert set(columns.keys()) == {"_KEY_", "author", "year", "category", "extra"}
-
-
-def test_init_schema_with_reserved_key_column_raises() -> None:
-    with pytest.raises(ValueError, match="reserved key column name"):
-        TypedDuckDBStore(":memory:", value_schema={"_KEY_": "VARCHAR"})
-
-
-def test_init_schema_rejects_malicious_field_name() -> None:
-    """A schema field name is interpolated directly into CREATE TABLE
-    and filter SQL, so it must be validated up front to prevent SQL
-    injection through a caller-supplied ``value_schema``."""
-    with pytest.raises(ValueError, match="Invalid filter field name"):
-        TypedDuckDBStore(":memory:", value_schema={"x); DROP TABLE store;--": "VARCHAR"})
-
-
-def test_init_schema_rejects_malicious_column_type() -> None:
-    with pytest.raises(ValueError, match="Invalid column type"):
-        TypedDuckDBStore(":memory:", value_schema={"author": "VARCHAR); DROP TABLE store;--"})
-
-
-def test_schema_field_named_after_sql_reserved_word_round_trips() -> None:
-    """A value_schema field name that happens to be a SQL reserved word
-    (e.g. "order") must still produce valid CREATE TABLE/INSERT/filter
-    SQL, since it is a valid identifier and only rejected by
-    validate_field_name() for shape, not for being a keyword."""
-    with TypedDuckDBStore(
-        ":memory:", value_schema={"order": "INTEGER", "group": "VARCHAR"}
-    ) as store:
-        store.set("1", {"order": 5, "group": "a", "title": "Intro to Python"})
-        assert store.get("1") == {"order": 5, "group": "a", "title": "Intro to Python"}
-        assert store.filter(order=5) == [{"order": 5, "group": "a", "title": "Intro to Python"}]
-
-
-def test_value_field_named_key_does_not_collide_with_primary_key() -> None:
-    """A value field literally named 'key' must not collide with the
-    store's primary key column, and should be stored/retrieved via the
-    extra JSON overflow column."""
-    with TypedDuckDBStore(":memory:") as store:
-        store.set("1", {"key": "not-the-primary-key"})
-        assert store.get("1") == {"key": "not-the-primary-key"}
-        assert store.filter(key="not-the-primary-key") == [{"key": "not-the-primary-key"}]
-
-
-def test_init_with_schema_file_backed(store_path: Path) -> None:
-    path = store_path / "with_schema.duckdb"
-    schema = {"author": "VARCHAR", "year": "INTEGER"}
-    with TypedDuckDBStore(path, value_schema=schema) as store:
-        store.set("1", {"author": "Alice", "year": 2022})
-        assert store.get("1")["year"] == 2022
-
-
-def test_set_on_conflict_merge_with_typed_schema(typed_store: TypedDuckDBStore) -> None:
-    typed_store.set("1", {"author": "Alice", "year": 2022})
-    typed_store.set("1", {"category": "Programming"}, on_conflict="merge")
-    assert typed_store.get("1") == {"author": "Alice", "year": 2022, "category": "Programming"}
-
-
-def test_get_round_trips_typed_schema_fields(
-    typed_store: TypedDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    assert typed_store.get("1") == items["1"]
-
-
-def test_get_round_trips_extra_field(typed_store: TypedDuckDBStore) -> None:
-    typed_store.set("1", {"author": "Alice", "publisher": "O'Reilly"})
-    assert typed_store.get("1")["publisher"] == "O'Reilly"
-
-
-def test_filter_single_typed_field(
-    typed_store: TypedDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
-    assert len(result) == 2
-
-
-def test_filter_multiple_typed_fields(
-    typed_store: TypedDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter(author="Alice", category="Programming")
-    assert len(result) == 2
-
-
-def test_filter_items_single_typed_field(
-    typed_store: TypedDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter_items(author="Alice")
-    assert result == {"1": items["1"], "2": items["2"]}
-
-
-def test_filter_extra_field(typed_store: TypedDuckDBStore) -> None:
-    typed_store.set_many(
-        {
-            "1": {"author": "Alice", "publisher": "O'Reilly"},
-            "2": {"author": "Bob", "publisher": "Manning"},
-        }
-    )
-    result = typed_store.filter(publisher="O'Reilly")
-    assert len(result) == 1
-    assert result[0]["author"] == "Alice"
-
-
-def test_filter_mixed_schema_and_extra_fields(typed_store: TypedDuckDBStore) -> None:
-    typed_store.set_many(
-        {
-            "1": {"author": "Alice", "publisher": "O'Reilly"},
-            "2": {"author": "Alice", "publisher": "Manning"},
-        }
-    )
-    result = typed_store.filter(author="Alice", publisher="O'Reilly")
-    assert len(result) == 1
-    assert result[0]["publisher"] == "O'Reilly"
-
-
-def test_filter_integer_typed_column(
-    typed_store: TypedDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter(year=2022)
-    assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
-
-
-def test_filter_integer_typed_column_no_match(
-    typed_store: TypedDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    assert typed_store.filter(year=9999) == []
-
-
-def test_filter_rejects_malicious_field_name_typed(
-    typed_store: TypedDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    """A non-schema field name is interpolated into the SQL (only the
-    value is bound), so anything but a plain identifier must be rejected
-    to prevent SQL injection."""
-    typed_store.set_many(items)
-    with pytest.raises(ValueError, match="Invalid filter field name"):
-        typed_store.filter(**{"x') OR 1=1 OR ('": "nonmatching"})
-
-
-def test_get_columns_info_typed_store_has_schema_columns(typed_store: TypedDuckDBStore) -> None:
-    columns = typed_store.get_columns_info()
-    assert "author" in columns
-    assert "year" in columns
-    assert "category" in columns
-
-
-def test_get_columns_info_has_extra_column(typed_store: TypedDuckDBStore) -> None:
-    assert "extra" in typed_store.get_columns_info()
-
-
-def test_iter_batches_with_typed_schema(
-    typed_store: TypedDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    for batch in typed_store.iter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
 
 
 # --- to_uri / from_uri ---
