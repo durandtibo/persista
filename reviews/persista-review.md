@@ -1,5 +1,7 @@
 # Code Review: `src/persista`
 
+<!-- markdownlint-disable MD029 -- the findings are numbered across the sections -->
+
 Scope: the full `persista` package (~14k lines across 89 modules) — key-value
 stores (in-memory, file, sqlite, postgres, redis, lmdb, duckdb), the `Cache`
 layer, the `record`/`record.store`/`record.analysis` subpackages, the HTTP
