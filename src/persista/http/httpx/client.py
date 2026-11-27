@@ -35,8 +35,8 @@ def _prepare_cache_lookup(
     url: str,
     kwargs: dict[str, Any],
 ) -> tuple[httpx.Request, str] | None:
-    """Build the request and the cache key of a call, if its response can
-    be cached.
+    """Build the request and the cache key of a call, if its response
+    can be cached.
 
     A response cannot be cached if the request is authenticated (an
     ``auth`` of the client or of the call, or credentials in the URL),
