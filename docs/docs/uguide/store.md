@@ -510,6 +510,39 @@ with store_from_uri("mycustom://...") as store:
     ...
 ```
 
+## Building a Store from a Configuration
+
+`persista` has no factory classes. To choose a store in a configuration file, describe it with a
+`dict` and build it with `resolve_object` from
+[`coola.factory`](https://github.com/durandtibo/coola) (`coola` is a dependency of `persista`).
+The `_target_` key is the fully qualified name of the class, and the other keys are the arguments of
+its constructor:
+
+```pycon
+>>> from coola.factory import resolve_object
+>>> from persista.store import BaseStore
+>>> config = {"_target_": "persista.store.SQLiteStore", "database": ":memory:"}
+>>> with resolve_object(config, cls=BaseStore) as store:
+...     store.set("1", {"title": "Intro to Python"})
+...     print(type(store).__name__)
+...     print(store.get("1"))
+SQLiteStore
+{'title': 'Intro to Python'}
+
+```
+
+- Each call with a `dict` builds a new store. An object that is already an instance of `cls` is
+  returned as it is, so a function can accept either a store or its configuration.
+- `resolve_object` raises `TypeError` if the `dict` has no `_target_` key, or if the result is not an
+  instance of `cls`. Like the constructor, it does not open the store.
+- Only the outer `dict` is built: a configuration nested in one of its values is passed to the
+  constructor as a plain `dict`. Build the inner object first, as shown for
+  [a cache](cache.md#building-a-cache-from-a-configuration) and
+  [a record store](record.md#building-a-record-store-from-a-configuration).
+
+:warning: `resolve_object` imports and calls whatever `_target_` names, so a configuration can run
+arbitrary code. Only use it with a configuration from a trusted source.
+
 ## Choosing a Store
 
 | Store           | Backend                    | Persisted | Typed columns  | Pickle values   | Async             |

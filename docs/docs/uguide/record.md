@@ -165,16 +165,46 @@ Record(id='1', metadata={'author': 'Alice'})
 Every store also exposes `a`-prefixed asynchronous methods (`aget`, `aset_many`, `afilter`, ...),
 mirroring `BaseStore`'s async API.
 
-`resolve_record_store` resolves a `BaseRecordStore` from either an existing instance or an
-`objectory` factory configuration dict, the same way `persista.store.resolve` works for
-key-value stores:
+### Building a Record Store from a Configuration
+
+`persista` has no factory classes. To describe a record store in a configuration, use
+`resolve_object` from [`coola.factory`](https://github.com/durandtibo/coola): the `_target_` key is
+the fully qualified name of the class, and the other keys are the arguments of its constructor.
+`resolve_object` does not build a configuration nested in another one, so build the store first and
+pass it to the `RecordStore`:
 
 ```pycon
->>> from persista.record.store import InMemoryRecordStore, resolve_record_store
->>> store = resolve_record_store(InMemoryRecordStore())
->>> store = resolve_record_store({"_target_": "persista.record.store.InMemoryRecordStore"})
+>>> from coola.factory import resolve_object
+>>> from persista.record import Record
+>>> from persista.record.store import BaseRecordStore
+>>> from persista.store import BaseStore
+>>> config = {
+...     "_target_": "persista.record.store.RecordStore",
+...     "store": {"_target_": "persista.store.SQLiteStore", "database": ":memory:"},
+... }
+>>> store = resolve_object(config["store"], cls=BaseStore)
+>>> with resolve_object({**config, "store": store}, cls=BaseRecordStore) as record_store:
+...     record_store.set_many([Record(id="1", metadata={"author": "Alice"})])
+...     record_store.get("1")
+Record(id='1', metadata={'author': 'Alice'})
 
 ```
+
+A ready-to-use backend has no nested configuration, and needs a single call:
+
+```pycon
+>>> from coola.factory import resolve_object
+>>> from persista.record.store import BaseRecordStore
+>>> config = {"_target_": "persista.record.store.SQLiteRecordStore", "database": ":memory:"}
+>>> record_store = resolve_object(config, cls=BaseRecordStore)
+>>> type(record_store).__name__
+'SQLiteRecordStore'
+
+```
+
+Only use `resolve_object` with a configuration from a trusted source, because it imports and calls
+whatever `_target_` names. See
+[building a store from a configuration](store.md#building-a-store-from-a-configuration).
 
 ## Analyzing a Corpus of Records
 
