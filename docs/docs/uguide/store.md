@@ -17,6 +17,8 @@ under string keys, regardless of the backend used to persist them:
 - `BaseStore`: a single abstract interface that supports both synchronous methods (`get`, `set`,
   ...) and their asynchronous, `a`-prefixed counterparts (`aget`, `aset`, ...) on the same
   instance
+- `Codec`, `JsonCodec` and `PickleCodec`: how a value is turned into what a store keeps (see
+  [values and codecs](#values-and-codecs))
 
 Both modes expose the same set of operations:
 
@@ -26,7 +28,7 @@ Both modes expose the same set of operations:
 - `filter`/`afilter`: retrieve values matching field conditions
 - `delete`/`adelete`, `delete_many`/`adelete_many`: remove values
 - `clear`/`aclear`: remove all values
-- `contains_many`/`acontains_many`: check which keys exist
+- `contains`/`acontains`, `contains_many`/`acontains_many`: check which keys exist
 - `keys`/`akeys`, `values`/`avalues`, `iter_batches`/`aiter_batches`: iterate over the store's
   content
 - `count`/`acount`: number of entries
@@ -41,8 +43,8 @@ same store instance.
 
 ### In-Memory Store
 
-`InMemoryStore` keeps data in a plain Python `dict`. It requires no setup and is a good default
-for tests and prototyping:
+`InMemoryStore` keeps data in process memory. It requires no setup and is a good default for tests
+and prototyping. Closing it discards its content:
 
 ```pycon
 >>> from persista.store import InMemoryStore
@@ -60,6 +62,57 @@ Constructing a store does not connect to the underlying backend -- every method 
 `open()`/`aopen()` explicitly or by using it as a context manager, as above. Every store supports
 the context manager protocol, which calls `open()` on entry and `close()` automatically on exit --
 prefer it over calling `open()`/`close()` manually so the underlying resources are always released.
+
+## Values and Codecs
+
+A key is a `str`, and a value is a `dict`. `InMemoryStore` does not keep the object that you give
+it: it keeps the _payload_ that its codec builds from the value, and decodes a new object from it on
+each read. So mutating a value that you passed to the store, or that the store returned, never
+changes the stored value, and a value is read back as `codec.decode(codec.encode(value))`.
+
+The codec is chosen with the `codec` argument:
+
+| Codec                 | Accepted values                          | Read back as                                  |
+| --------------------- | ---------------------------------------- | --------------------------------------------- |
+| `JsonCodec` (default) | what JSON can represent without any loss | JSON types: a tuple comes back as a list      |
+| `PickleCodec`         | any `dict` that can be pickled           | the same types, including sets, `bytes`, etc. |
+
+`JsonCodec` widens some types: a tuple (also a named tuple) is read back as a list, and an instance
+of a subclass of `str`, `int`, `float`, `list` or `dict` (for example a `str` enum) as an instance
+of the built-in type. It rejects, at any depth, what would be lost or is not portable, and nothing is
+written:
+
+| Value                                                      | Error        |
+| ---------------------------------------------------------- | ------------ |
+| a `dict` key that is not a `str`, such as `1` or `None`    | `TypeError`  |
+| an object that JSON cannot represent, such as a `set`      | `TypeError`  |
+| `NaN` or infinity                                          | `ValueError` |
+| a string with a lone surrogate, which is not valid Unicode | `ValueError` |
+| a value that contains itself                               | `ValueError` |
+
+```pycon
+>>> from persista.store import InMemoryStore, PickleCodec
+>>> with InMemoryStore() as store:
+...     store.set("1", {"point": (1, 2)})
+...     print(store.get("1"))
+...     store.set("2", {1: "one"})
+Traceback (most recent call last):
+    ...
+TypeError: dict keys must be str, not int: 1
+>>> with InMemoryStore(codec=PickleCodec()) as store:
+...     store.set("1", {"point": (1, 2), 1: "one"})
+...     print(store.get("1"))
+{'point': (1, 2), 1: 'one'}
+
+```
+
+:warning: Decoding a `pickle` payload can execute arbitrary code. Only use `PickleCodec` with data
+from trusted sources.
+
+Only `InMemoryStore` takes a codec for now (`NullStore` always uses `JsonCodec`, to check the
+values it discards). The persistent stores encode the values themselves, as described in their
+sections: their `Pickle` variants use `pickle`, and the others use JSON, without all the checks
+above. For example, they turn an `int` key of a value into a `str` instead of rejecting it.
 
 ### Setting Multiple Values
 
@@ -95,8 +148,8 @@ match the given keyword arguments:
 
 ### Handling Conflicts
 
-Every write method accepts an `on_conflict` argument controlling what happens when a key already
-exists:
+Every write method accepts a keyword-only `on_conflict` argument controlling what happens when a
+key already exists:
 
 - `"overwrite"` (default): replace the existing value
 - `"raise"`: raise a `KeyError`, leaving the existing value unchanged
@@ -128,6 +181,34 @@ exists:
 ...     print(store.count())
 1
 0
+
+```
+
+### Errors
+
+`InMemoryStore`, `NullStore` and the [custom stores](#writing-a-custom-store) check the state of
+the store and the arguments before doing anything, also when there is nothing to do (for example
+`get_many([])`):
+
+| Situation                                       | Error          |
+| ----------------------------------------------- | -------------- |
+| any operation on a closed store                 | `RuntimeError` |
+| a key that is not a `str`                       | `TypeError`    |
+| a single `str` where a list of keys is expected | `TypeError`    |
+| an invalid `on_conflict` or `batch_size`        | `ValueError`   |
+
+The other stores also raise `RuntimeError` when a closed store is used, and `ValueError` for an
+invalid `on_conflict` or `batch_size`, but some of their methods accept an empty input without these
+checks (`set_batches` and `aset_batches` check them on every store). They do not all reject a key
+that is not a `str`.
+
+```pycon
+>>> from persista.store import InMemoryStore
+>>> store = InMemoryStore()
+>>> store.get_many([])
+Traceback (most recent call last):
+    ...
+RuntimeError: InMemoryStore is not open; call open()/aopen() or use it as a context manager.
 
 ```
 
@@ -367,7 +448,10 @@ The same store instance can be used from both sync and async code -- there is no
 class. Async methods are available on every store, including `InMemoryStore`, `SQLiteStore`
 (async methods use the `aiosqlite` extra when installed, falling back to a thread otherwise),
 `RedisStore`, and `PostgresStore` (requires the `psycopg` extra); `DuckDBStore` and `LmdbStore`
-also expose async methods, backed by a thread pool.
+also expose async methods, backed by a thread pool. The async methods of `InMemoryStore` run in a
+worker thread of the store, one call at a time, so calls that wait for the store do not fill the
+default executor of your application. Cancelling an async call that already runs in a thread does not
+stop it.
 
 ```pycon
 >>> import asyncio
@@ -488,6 +572,96 @@ in mini-batches, which is useful when the source data does not fit comfortably i
 
 ```
 
+With `InMemoryStore`, a key that is present during a whole iteration is yielded exactly once, even
+if you write or delete keys during the iteration (for example, you can delete each batch after
+processing it), and a batch can be smaller than `batch_size`. A custom store must give the same
+guarantee in `_iter_batches`, and closing it, or an `InMemoryStore`, during an iteration raises
+`RuntimeError`. The SQLite and DuckDB stores do not give this guarantee yet: deleting keys while
+iterating over them can skip other keys.
+
+## Writing a Custom Store
+
+`BaseStore` implements the public methods once: it checks that the store is open, validates the
+arguments, applies the codec, resolves the conflicts, filters, and derives the async methods. A new
+backend implements `to_uri`, `from_uri`, and the _primitives_, which are called with the store open,
+with validated and non-empty arguments, and with encoded payloads (`str` or `bytes`):
+
+| Primitive                   | Role                                                             |
+| --------------------------- | ---------------------------------------------------------------- |
+| `_open()`, `_close()`       | connect and release; `_close` is also called if `_open` raises   |
+| `_get_many(keys)`           | return the payloads of the keys that exist                       |
+| `_put_many(items)`          | add or replace payloads                                          |
+| `_update(keys, plan)`       | atomically read the existing keys, call `plan`, write its result |
+| `_delete_many(keys)`        | delete keys, ignoring the missing ones                           |
+| `_clear()`, `_count()`      | delete everything, count the keys                                |
+| `_iter_batches(batch_size)` | yield the payloads in batches                                    |
+
+`_contains_many` and `_filter_candidates` have a default that you can replace by a faster one.
+`_filter_candidates` may yield more pairs than the ones that match, never fewer: the base applies the
+filter to the decoded values.
+
+```pycon
+>>> from persista.store import BaseStore
+>>> class DictStore(BaseStore):
+...     def __init__(self, *, codec=None):
+...         super().__init__(codec=codec)
+...         self._data = {}
+...
+...     def to_uri(self):
+...         return "dict://"
+...
+...     @classmethod
+...     def from_uri(cls, uri, *, read_only=False):
+...         return cls()
+...
+...     def _open(self):
+...         pass
+...
+...     def _close(self):
+...         pass
+...
+...     def _get_many(self, keys):
+...         return {key: self._data[key] for key in keys if key in self._data}
+...
+...     def _put_many(self, items):
+...         self._data.update(items)
+...
+...     def _update(self, keys, plan):
+...         self._data.update(plan(self._get_many(keys)))
+...
+...     def _delete_many(self, keys):
+...         for key in keys:
+...             self._data.pop(key, None)
+...
+...     def _clear(self):
+...         self._data.clear()
+...
+...     def _count(self):
+...         return len(self._data)
+...
+...     def _iter_batches(self, batch_size):
+...         keys = list(self._data)
+...         for start in range(0, len(keys), batch_size):
+...             if batch := self._get_many(keys[start : start + batch_size]):
+...                 yield batch
+>>> with DictStore() as store:
+...     store.set("1", {"title": "Intro to Python", "views": 1})
+...     store.set("1", {"views": 2}, on_conflict="merge")
+...     print(store.filter(views=2))
+[{'title': 'Intro to Python', 'views': 2}]
+
+```
+
+- By default a backend is considered not thread-safe: the base holds one lock per instance around the
+  primitives (for an iteration, while one batch is read), which makes `_update` above atomic against
+  the other calls on the same instance, and runs the async calls in one worker thread of the store.
+  Data shared with other instances or processes needs a transaction of the backend in `_update`. A
+  thread-safe backend sets the class attribute `_thread_safe = True`: no lock is taken, and the async
+  calls use the default executor.
+- Each data primitive has an async twin (`_aget_many`, `_aput_many`, `_aupdate`, ...) which runs
+  the sync one in a thread. A backend with a native async driver replaces the twins, and releases the
+  resources that only they use in `_aclose()`.
+
 ## Store URIs
 
 Every store implements `to_uri()`, which returns a URI identifying where its data lives, and the
@@ -589,7 +763,8 @@ Use `InMemoryStore` for tests and prototyping, `SQLiteStore`/`DuckDBStore` for l
 single-process persistence without a server, and `RedisStore`/`PostgresStore` when data needs to
 be shared across processes or machines. `NullStore` never actually stores anything -- every
 `get`/`aget` is a miss -- which is useful for plugging into `Cache` to disable caching entirely
-without changing any calling code.
+without changing any calling code. It uses `JsonCodec`, so the cached values must be representable
+in JSON.
 
 ## API Reference
 

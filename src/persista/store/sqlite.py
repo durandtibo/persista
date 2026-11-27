@@ -18,7 +18,7 @@ from coola.display import MultilineDisplayMixin
 from coola.utils.path import sanitize_path
 
 from persista.store.async_close import close_async_connection_from_sync
-from persista.store.base import BaseStore
+from persista.store.unmigrated import UnmigratedStore
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
     aresolve_conflicts,
@@ -88,7 +88,7 @@ def _next_or_stop(iterator: Iterator[Any]) -> Any:
         return _STOP_ITERATION
 
 
-class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
+class BaseSQLiteStore(UnmigratedStore, MultilineDisplayMixin):
     r"""Define a base class for SQLite-backed key-value stores.
 
     A single ``store`` table backs every value; the primary key
@@ -430,16 +430,18 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             by_key.update((row[0], self._row_to_value(row)) for row in rows)
         return [by_key.get(key) for key in keys]
 
-    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
+    def set(
+        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
+    ) -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
 
     async def aset(
-        self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         await self.aset_many({key: value}, on_conflict=on_conflict)
 
     def set_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         self._check_open()
         if not items:
@@ -459,12 +461,12 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
             self._set_many(to_write)
 
     async def aset_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         if not items:
             return
         if not is_aiosqlite_available():
-            await asyncio.to_thread(self.set_many, items, on_conflict)
+            await asyncio.to_thread(self.set_many, items, on_conflict=on_conflict)
             return
         on_conflict = normalize_on_conflict(on_conflict)
         if on_conflict == "overwrite":

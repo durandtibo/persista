@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-import threading
-from collections.abc import Generator, Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.store import InMemoryStore
+from persista.store import InMemoryStore, JsonCodec, PickleCodec
+from persista.store.plan import build_plan
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+if TYPE_CHECKING:
+    from collections.abc import Callable, Generator
+
+    from persista.store import Codec
+    from persista.store.types import Payload
+
+PAYLOADS: dict[str, Payload] = {"1": '{"a": 1}', "2": '{"a": 2}', "3": '{"a": 3}'}
 
 
 @pytest.fixture
@@ -19,983 +22,359 @@ def store() -> Generator[InMemoryStore, None, None]:
         yield store
 
 
+@pytest.fixture
+def filled_store(store: InMemoryStore) -> InMemoryStore:
+    store._put_many(PAYLOADS)
+    return store
+
+
 ###################################
 #     Tests for InMemoryStore     #
 ###################################
 
 
-def test_data(store: InMemoryStore) -> None:
-    assert store.data == {}
+def test_in_memory_store_default_codec() -> None:
+    assert isinstance(InMemoryStore()._codec, JsonCodec)
 
 
-def test_add_data(store: InMemoryStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.data == {"1": {"text": "hello"}}
+def test_in_memory_store_custom_codec() -> None:
+    codec = PickleCodec()
+    assert InMemoryStore(codec=codec)._codec is codec
 
 
-# --- repr/str ---
+def test_in_memory_store_codec_is_keyword_only() -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        InMemoryStore(PickleCodec())
 
 
-def test_repr(store: InMemoryStore) -> None:
-    assert repr(store).startswith("InMemoryStore(")
+def test_in_memory_store_is_not_thread_safe() -> None:
+    assert not InMemoryStore._thread_safe
 
 
-def test_str(store: InMemoryStore) -> None:
-    assert str(store).startswith("InMemoryStore(")
+def test_in_memory_store_has_no_data_property(store: InMemoryStore) -> None:
+    # The property exposed the internal dict.
+    assert not hasattr(store, "data")
 
 
-def test_repr_after_close_does_not_raise(store: InMemoryStore) -> None:
+# --- repr / str ---
+
+
+def test_repr(filled_store: InMemoryStore) -> None:
+    assert repr(filled_store) == "InMemoryStore(closed=False, count='3')"
+
+
+def test_str(filled_store: InMemoryStore) -> None:
+    assert str(filled_store) == "InMemoryStore(closed=False, count=3)"
+
+
+def test_repr_before_open() -> None:
+    assert repr(InMemoryStore()) == "InMemoryStore(closed=True)"
+
+
+def test_str_before_open() -> None:
+    assert str(InMemoryStore()) == "InMemoryStore(closed=True)"
+
+
+def test_repr_after_close(store: InMemoryStore) -> None:
     store.close()
-    assert repr(store).startswith("InMemoryStore(")
+    assert repr(store) == "InMemoryStore(closed=True)"
 
 
-def test_str_after_close_does_not_raise(store: InMemoryStore) -> None:
-    store.close()
-    assert str(store).startswith("InMemoryStore(")
+# --- URI ---
 
 
-def test_repr_before_open_does_not_raise() -> None:
-    store = InMemoryStore()
-    assert repr(store).startswith("InMemoryStore(")
-
-
-def test_str_before_open_does_not_raise() -> None:
-    store = InMemoryStore()
-    assert str(store).startswith("InMemoryStore(")
-
-
-# --- set ---
-
-
-def test_set_increases_count(store: InMemoryStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.count() == 1
-
-
-def test_set_stores_value(store: InMemoryStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.get("1") == {"text": "hello"}
-
-
-def test_set_default_overwrites_existing(store: InMemoryStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"})
-    assert store.count() == 1
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_on_conflict_raise(store: InMemoryStore) -> None:
-    store.set("1", {"text": "original"})
-    with pytest.raises(KeyError, match=r"1"):
-        store.set("1", {"text": "updated"}, on_conflict="raise")
-    assert store.get("1") == {"text": "original"}
-
-
-def test_set_on_conflict_skip(store: InMemoryStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"}, on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-
-
-def test_set_on_conflict_overwrite(store: InMemoryStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"}, on_conflict="overwrite")
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_on_conflict_merge(store: InMemoryStore) -> None:
-    store.set("1", {"text": "original", "author": "Alice"})
-    store.set("1", {"text": "updated"}, on_conflict="merge")
-    assert store.get("1") == {"text": "updated", "author": "Alice"}
-
-
-def test_set_on_conflict_new_key_is_unaffected(store: InMemoryStore) -> None:
-    store.set("1", {"text": "hello"}, on_conflict="raise")
-    assert store.get("1") == {"text": "hello"}
-
-
-def test_set_on_conflict_invalid_raises(store: InMemoryStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        store.set("1", {"text": "hello"}, on_conflict="bogus")
-
-
-def test_set_does_not_alias_input(store: InMemoryStore) -> None:
-    value = {"text": "hello"}
-    store.set("1", value)
-    value["text"] = "mutated"
-    assert store.get("1") == {"text": "hello"}
-
-
-# --- set_many ---
-
-
-def test_set_many_increases_count(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.count() == len(items)
-
-
-def test_set_many_empty_is_no_op(store: InMemoryStore) -> None:
-    store.set_many({})
-    assert store.count() == 0
-
-
-def test_set_many_default_overwrites_existing(store: InMemoryStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}})
-    assert store.count() == 1
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_many_on_conflict_raise(store: InMemoryStore) -> None:
-    store.set_many({"1": {"text": "original"}, "2": {"text": "other"}})
-    with pytest.raises(KeyError, match=r"1"):
-        store.set_many({"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise")
-    # nothing from the conflicting batch should have been written
-    assert store.get("1") == {"text": "original"}
-    assert store.get("3") is None
-
-
-def test_set_many_on_conflict_skip(store: InMemoryStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "new"}
-
-
-def test_set_many_on_conflict_overwrite(store: InMemoryStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="overwrite")
-    assert store.get("1") == {"text": "updated"}
-    assert store.get("2") == {"text": "new"}
-
-
-def test_set_many_on_conflict_merge(store: InMemoryStore) -> None:
-    store.set_many({"1": {"text": "original", "author": "Alice"}})
-    store.set_many({"1": {"text": "updated"}}, on_conflict="merge")
-    assert store.get("1") == {"text": "updated", "author": "Alice"}
-
-
-def test_set_many_on_conflict_invalid_raises(store: InMemoryStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")
-
-
-def test_set_many_does_not_alias_input(store: InMemoryStore) -> None:
-    value = {"text": "hello"}
-    store.set_many({"1": value})
-    value["text"] = "mutated"
-    assert store.get("1") == {"text": "hello"}
-
-
-# --- set_batches ---
-
-
-def test_set_batches_empty_is_no_op(store: InMemoryStore) -> None:
-    store.set_batches([])
-    assert store.count() == 0
-
-
-def test_set_batches_writes_all_pairs(store: InMemoryStore) -> None:
-    store.set_batches([("1", {"v": 1}), ("2", {"v": 2}), ("3", {"v": 3})], batch_size=2)
-    assert store.count() == 3
-    assert store.get("2") == {"v": 2}
-
-
-def test_set_batches_consumes_a_generator(store: InMemoryStore) -> None:
-    def gen() -> Iterator[tuple[str, dict[str, int]]]:
-        for i in range(5):
-            yield str(i), {"v": i}
-
-    store.set_batches(gen(), batch_size=2)
-    assert store.count() == 5
-
-
-def test_set_batches_default_overwrites_existing(store: InMemoryStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set_batches([("1", {"text": "updated"})])
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_batches_on_conflict_raise_stops_at_offending_batch(store: InMemoryStore) -> None:
-    store.set("2", {"text": "original"})
-    with pytest.raises(KeyError, match=r"2"):
-        store.set_batches(
-            [("1", {"text": "a"}), ("2", {"text": "b"}), ("3", {"text": "c"})],
-            batch_size=2,
-            on_conflict="raise",
-        )
-    # first batch (keys 1 and 2) failed entirely, so "1" was never written
-    assert store.get("1") is None
-    # the conflicting key keeps its original value
-    assert store.get("2") == {"text": "original"}
-    # the third item was never reached because the second batch raised
-    assert store.get("3") is None
-
-
-def test_set_batches_on_conflict_skip(store: InMemoryStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set_batches([("1", {"text": "updated"}), ("2", {"text": "new"})], on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "new"}
-
-
-# --- get ---
-
-
-def test_get_existing_value(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.get("1") == items["1"]
-
-
-def test_get_missing_key_returns_none(store: InMemoryStore) -> None:
-    assert store.get("nonexistent") is None
-
-
-def test_get_returns_a_copy(store: InMemoryStore) -> None:
-    store.set("1", {"tags": ["a"]})
-    value = store.get("1")
-    value["tags"].append("b")
-    assert store.get("1") == {"tags": ["a"]}
-
-
-# --- get_many ---
-
-
-def test_get_many_returns_correct_length(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert len(store.get_many(["1", "2", "99"])) == 3
-
-
-def test_get_many_returns_none_for_missing(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.get_many(["1", "99", "2"])
-    assert result[1] is None
-
-
-def test_get_many_preserves_order(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.get_many(["3", "1", "2"])
-    assert result == [items["3"], items["1"], items["2"]]
-
-
-def test_get_many_empty_list_returns_empty_list(store: InMemoryStore) -> None:
-    assert store.get_many([]) == []
-
-
-# --- filter ---
-
-
-def test_filter_no_args_returns_all(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert len(store.filter()) == len(items)
-
-
-def test_filter_single_field(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
-    assert len(result) == 2
-
-
-def test_filter_multiple_fields(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(author="Alice", category="Programming")
-    assert len(result) == 2
-
-
-def test_filter_no_match_returns_empty(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter(author="Charlie") == []
-
-
-def test_filter_preserves_full_value(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.filter(author="Bob", category="History")
-    expected = [v for v in items.values() if v["author"] == "Bob"]
-    assert sorted(result, key=lambda v: v["title"]) == sorted(expected, key=lambda v: v["title"])
-
-
-def test_filter_empty_store_returns_empty(store: InMemoryStore) -> None:
-    assert store.filter(author="Alice") == []
-
-
-def test_filter_returns_copies(store: InMemoryStore) -> None:
-    store.set("1", {"tags": ["a"]})
-    result = store.filter()
-    result[0]["tags"].append("b")
-    assert store.get("1") == {"tags": ["a"]}
-
-
-# --- delete ---
-
-
-def test_delete_removes_value(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete("1")
-    assert store.count() == len(items) - 1
-    assert store.get("1") is None
-
-
-def test_delete_nonexistent_is_silent(store: InMemoryStore) -> None:
-    store.delete("nonexistent")
-
-
-# --- delete_many ---
-
-
-def test_delete_many_removes_values(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete_many(["1", "3"])
-    assert store.count() == len(items) - 2
-    assert store.get("1") is None
-    assert store.get("3") is None
-
-
-def test_delete_many_preserves_other_values(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many(["1", "3"])
-    assert store.get("2") is not None
-    assert store.get("4") is not None
-
-
-def test_delete_many_empty_list_is_no_op(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many([])
-    assert store.count() == len(items)
-
-
-def test_delete_many_nonexistent_keys_are_silent(store: InMemoryStore) -> None:
-    store.delete_many(["99", "100"])
-
-
-def test_delete_many_single_key(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete_many(["2"])
-    assert store.count() == len(items) - 1
-    assert store.get("2") is None
-
-
-# --- contains ---
-
-
-def test_contains_true_when_key_present(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.contains("1")
-
-
-def test_contains_false_when_key_missing(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert not store.contains("99")
-
-
-def test_contains_false_when_store_empty(store: InMemoryStore) -> None:
-    assert not store.contains("1")
-
-
-# --- contains_many ---
-
-
-def test_contains_many_all_found(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
-
-
-def test_contains_many_all_missing(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["99", "100"]) == [False, False]
-
-
-def test_contains_many_mixed(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
-
-
-def test_contains_many_preserves_order(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.contains_many(["3", "99", "1", "42", "2"]) == [True, False, True, False, True]
-
-
-def test_contains_many_empty_input_returns_empty_lists(store: InMemoryStore) -> None:
-    assert store.contains_many([]) == []
-
-
-def test_contains_many_empty_store_returns_all_missing(store: InMemoryStore) -> None:
-    assert store.contains_many(["1", "2"]) == [False, False]
-
-
-def test_contains_many_returns_list_of_bools(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.contains_many(["1", "99"])
-    assert isinstance(result, list)
-    assert all(isinstance(flag, bool) for flag in result)
-
-
-# --- keys ---
-
-
-def test_keys_empty_store_yields_nothing(store: InMemoryStore) -> None:
-    assert list(store.keys()) == []
-
-
-def test_keys_returns_all_keys(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert sorted(store.keys()) == sorted(items.keys())
-
-
-def test_keys_is_lazy_not_exhausted_on_creation(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    """Calling keys() should not itself execute the query eagerly;
-    deleting a key after creating the generator but before the first
-    next() call should still be reflected, confirming the query executes
-    lazily."""
-    gen = store.keys()
-    store.set_many(items)
-    store.delete("1")
-    assert sorted(gen) == sorted(k for k in items if k != "1")
-
-
-# --- values ---
-
-
-def test_values_empty_store_yields_nothing(store: InMemoryStore) -> None:
-    assert list(store.values()) == []
-
-
-def test_values_returns_all_values(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = list(store.values())
-    assert len(result) == len(items)
-    assert {v["title"] for v in result} == {v["title"] for v in items.values()}
-
-
-def test_values_is_lazy_generator(store: InMemoryStore) -> None:
-    assert isinstance(store.values(), Iterator)
-
-
-# --- iter_batches ---
-
-
-def test_iter_batches_empty_store_yields_nothing(store: InMemoryStore) -> None:
-    assert list(store.iter_batches()) == []
-
-
-def test_iter_batches_returns_generator(store: InMemoryStore) -> None:
-    result = store.iter_batches()
-    assert isinstance(result, Iterator)
-
-
-def test_iter_batches_default_batch_size(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches())
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-def test_iter_batches_yields_correct_batch_sizes(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=2))
-    assert [len(b) for b in batches] == [2, 2]
-
-
-def test_iter_batches_last_batch_may_be_smaller(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=3))
-    assert [len(b) for b in batches] == [3, 1]
-
-
-def test_iter_batches_batch_size_larger_than_store(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=100))
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-def test_iter_batches_batch_size_one(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=1))
-    assert [len(b) for b in batches] == [1, 1, 1, 1]
-
-
-def test_iter_batches_returns_all_key_value_pairs(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    for batch in store.iter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
-
-
-def test_iter_batches_batches_are_dicts(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=2))
-    assert all(isinstance(batch, dict) for batch in batches)
-
-
-def test_iter_batches_zero_batch_size_raises(store: InMemoryStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        list(store.iter_batches(batch_size=0))
-
-
-def test_iter_batches_negative_batch_size_raises(store: InMemoryStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        list(store.iter_batches(batch_size=-1))
-
-
-def test_iter_batches_error_raised_before_any_query(store: InMemoryStore) -> None:
-    """The ValueError should be raised eagerly on the first call to
-    next(), not silently swallowed by generator laziness."""
-    gen = store.iter_batches(batch_size=0)
-    with pytest.raises(ValueError, match="batch_size"):
-        next(gen)
-
-
-def test_iter_batches_does_not_mutate_store(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    list(store.iter_batches(batch_size=2))
-    assert store.count() == len(items)
-
-
-def test_iter_batches_survives_concurrent_mutation(store: InMemoryStore) -> None:
-    """iter_batches snapshots the store up front, so a set() call
-    interleaved between batches must not raise "dictionary changed size
-    during iteration"."""
-    for i in range(5):
-        store.set(str(i), {"a": i})
-    gen = store.iter_batches(batch_size=2)
-    first = next(gen)
-    store.set("new", {"a": 99})
-    remaining = list(gen)
-    assert len(first) == 2
-    assert sum(len(batch) for batch in remaining) == 3
-    assert store.count() == 6
-
-
-# --- count ---
-
-
-def test_count_empty_store(store: InMemoryStore) -> None:
-    assert store.count() == 0
-
-
-def test_count_after_set_many(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.count() == len(items)
-
-
-# --- close ---
-
-
-def test_open_while_already_open_is_no_op(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.open()
-    assert not store.closed
-    assert store.count() == len(items)
-
-
-def test_close_discards_values(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.close()
-    store.open()
-    assert store.count() == 0
-
-
-def test_close_is_idempotent(store: InMemoryStore) -> None:
-    store.close()
-    store.close()  # should not raise
-
-
-def test_get_before_open_raises() -> None:
-    store = InMemoryStore()
-    with pytest.raises(RuntimeError, match="not open"):
-        store.get("1")
-
-
-def test_close_returns_none(store: InMemoryStore) -> None:
-    assert store.close() is None
-
-
-def test_get_after_close_returns_none(store: InMemoryStore) -> None:
-    store.set("1", {"text": "hello"})
-    store.close()
-    store.open()
-    assert store.get("1") is None
-
-
-def test_set_after_close_is_usable_again(store: InMemoryStore) -> None:
-    store.close()
-    store.open()
-    store.set("1", {"text": "hello"})
-    assert store.get("1") == {"text": "hello"}
-    assert store.count() == 1
-
-
-# --- closed ---
-
-
-def test_closed_false_before_close(store: InMemoryStore) -> None:
-    assert not store.closed
-
-
-def test_closed_true_after_close(store: InMemoryStore) -> None:
-    store.close()
-    assert store.closed
-
-
-# --- context manager ---
-
-
-def test_context_manager_returns_self() -> None:
-    with InMemoryStore() as store:
-        assert isinstance(store, InMemoryStore)
-
-
-def test_context_manager_closes_on_normal_exit() -> None:
-    with InMemoryStore() as store:
-        store.set("1", {"text": "hello"})
-        assert store.count() == 1
-
-    # Closing an in-memory store discards its values.
-    assert store.closed
-
-
-def test_context_manager_closes_on_exception() -> None:
-    msg = "boom"
-    with pytest.raises(ValueError, match="boom"), InMemoryStore() as store:
-        raise ValueError(msg)
-
-    assert store.closed
-
-
-def test_context_manager_usable_for_reads_and_writes() -> None:
-    with InMemoryStore() as store:
-        store.set_many(
-            {
-                "1": {"text": "hello", "author": "Alice"},
-                "2": {"text": "world", "author": "Bob"},
-            }
-        )
-        assert store.count() == 2
-        assert store.filter(author="Alice")[0]["text"] == "hello"
-        store.delete("1")
-        assert store.count() == 1
-
-
-# --- clear ---
-
-
-def test_clear_removes_all_values(store: InMemoryStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.clear()
-    assert store.count() == 0
-    assert store.data == {}
-
-
-def test_clear_empty_store_is_no_op(store: InMemoryStore) -> None:
-    store.clear()
-    assert store.count() == 0
-
-
-def test_clear_returns_none(store: InMemoryStore) -> None:
-    assert store.clear() is None
-
-
-def test_clear_then_set_works(store: InMemoryStore) -> None:
-    store.set("1", {"text": "hello"})
-    store.clear()
-    store.set("2", {"text": "world"})
-    assert store.count() == 1
-    assert store.get("2") == {"text": "world"}
-
-
-def test_context_manager_multiple_open_close() -> None:
-    in_memory_store = InMemoryStore()
-    for i in range(3):
-        with in_memory_store as store:
-            assert not store.closed
-            assert store.count() == 0
-            store.set(str(i), {"text": "hello"})
-            assert store.count() == 1
-        assert store.closed
-
-
-def test_context_manager_reopen_resets_closed() -> None:
-    """Regression test: reopening via `with` must reset `closed` to
-    False, matching every other store backend."""
-    store = InMemoryStore()
-    store.close()
-    assert store.closed
-    with store:
-        assert not store.closed
-    assert store.closed
-
-
-# --- to_uri/from_uri ---
-
-
-def test_to_uri_returns_memory_scheme(store: InMemoryStore) -> None:
+def test_to_uri(store: InMemoryStore) -> None:
     assert store.to_uri() == "memory://"
 
 
-def test_from_uri_returns_empty_store() -> None:
-    store = InMemoryStore.from_uri("memory://")
-    store.open()
+def test_from_uri_returns_closed_store() -> None:
+    assert InMemoryStore.from_uri("memory://").closed
+
+
+def test_from_uri_does_not_carry_data(filled_store: InMemoryStore) -> None:
+    with InMemoryStore.from_uri(filled_store.to_uri()) as restored:
+        assert restored.count() == 0
+
+
+# --- lifecycle ---
+
+
+def test_close_discards_values(filled_store: InMemoryStore) -> None:
+    filled_store.close()
+    filled_store.open()
+    assert filled_store.count() == 0
+
+
+async def test_aclose_discards_values(filled_store: InMemoryStore) -> None:
+    await filled_store.aclose()
+    await filled_store.aopen()
+    assert filled_store._data == {}
+    await filled_store.aclose()
+
+
+def test_open_while_open_keeps_values(filled_store: InMemoryStore) -> None:
+    filled_store.open()
+    assert filled_store.count() == 3
+
+
+def test__open(filled_store: InMemoryStore) -> None:
+    filled_store._open()
+    assert filled_store._data == {}
+
+
+def test__close(filled_store: InMemoryStore) -> None:
+    filled_store._close()
+    assert filled_store._data == {}
+
+
+def test__close_without_open() -> None:
+    store = InMemoryStore()
+    store._close()
+    assert store._data == {}
+
+
+# --- primitives ---
+
+
+def test__get_many(filled_store: InMemoryStore) -> None:
+    assert filled_store._get_many(["2", "missing", "1", "2"]) == {
+        "2": '{"a": 2}',
+        "1": '{"a": 1}',
+    }
+
+
+def test__get_many_empty_store(store: InMemoryStore) -> None:
+    assert store._get_many(["1"]) == {}
+
+
+def test__put_many(filled_store: InMemoryStore) -> None:
+    filled_store._put_many({"1": "{}", "4": '{"a": 4}'})
+    assert filled_store._data == {**PAYLOADS, "1": "{}", "4": '{"a": 4}'}
+
+
+def test__put_many_does_not_alias_input(store: InMemoryStore) -> None:
+    items: dict[str, Payload] = {"1": "{}"}
+    store._put_many(items)
+    items["2"] = "{}"
+    assert store._data == {"1": "{}"}
+
+
+def test__update(filled_store: InMemoryStore) -> None:
+    plan = build_plan({"1": '{"b": 1}', "4": "{}"}, "merge", JsonCodec())
+    filled_store._update(["1", "4"], plan)
+    assert filled_store._data == {**PAYLOADS, "1": '{"a": 1, "b": 1}', "4": "{}"}
+
+
+def test__update_gives_existing_payloads_to_plan(filled_store: InMemoryStore) -> None:
+    received: list[dict[str, Payload]] = []
+
+    def plan(existing: dict[str, Payload]) -> dict[str, Payload]:
+        received.append(existing)
+        return {}
+
+    filled_store._update(["1", "4"], plan)
+    assert received == [{"1": '{"a": 1}'}]
+
+
+def test__update_plan_raises_writes_nothing(filled_store: InMemoryStore) -> None:
+    plan = build_plan({"4": "{}", "1": "{}"}, "raise", JsonCodec())
+    with pytest.raises(KeyError, match=r"already exist"):
+        filled_store._update(["4", "1"], plan)
+    assert filled_store._data == PAYLOADS
+
+
+def test__delete_many(filled_store: InMemoryStore) -> None:
+    filled_store._delete_many(["1", "missing", "1", "3"])
+    assert filled_store._data == {"2": '{"a": 2}'}
+
+
+def test__clear(filled_store: InMemoryStore) -> None:
+    filled_store._clear()
+    assert filled_store._data == {}
+
+
+@pytest.mark.parametrize(("items", "expected"), [({}, 0), (PAYLOADS, 3)])
+def test__count(store: InMemoryStore, items: dict[str, Payload], expected: int) -> None:
+    store._put_many(items)
+    assert store._count() == expected
+
+
+def test__contains_many(filled_store: InMemoryStore) -> None:
+    assert filled_store._contains_many(["1", "missing", "1", "2"]) == {"1", "2"}
+
+
+@pytest.mark.parametrize(
+    ("batch_size", "expected"),
+    [
+        (1, [{"1": '{"a": 1}'}, {"2": '{"a": 2}'}, {"3": '{"a": 3}'}]),
+        (2, [{"1": '{"a": 1}', "2": '{"a": 2}'}, {"3": '{"a": 3}'}]),
+        (3, [PAYLOADS]),
+        (10, [PAYLOADS]),
+    ],
+)
+def test__iter_batches(
+    filled_store: InMemoryStore, batch_size: int, expected: list[dict[str, Payload]]
+) -> None:
+    assert list(filled_store._iter_batches(batch_size)) == expected
+
+
+def test__iter_batches_empty_store(store: InMemoryStore) -> None:
+    assert list(store._iter_batches(2)) == []
+
+
+def test__iter_batches_does_not_yield_new_keys(filled_store: InMemoryStore) -> None:
+    iterator = filled_store._iter_batches(2)
+    next(iterator)
+    filled_store._put_many({"4": "{}"})
+    assert list(iterator) == [{"3": '{"a": 3}'}]
+
+
+def test__iter_batches_yields_current_payload(filled_store: InMemoryStore) -> None:
+    iterator = filled_store._iter_batches(2)
+    next(iterator)
+    filled_store._put_many({"3": "{}"})
+    assert list(iterator) == [{"3": "{}"}]
+
+
+def test__iter_batches_skips_deleted_keys(filled_store: InMemoryStore) -> None:
+    iterator = filled_store._iter_batches(1)
+    next(iterator)
+    filled_store._delete_many(["2"])
+    assert list(iterator) == [{"3": '{"a": 3}'}]
+
+
+def test__iter_batches_deleting_yielded_keys_visits_every_key(
+    filled_store: InMemoryStore,
+) -> None:
+    keys = []
+    for batch in filled_store._iter_batches(1):
+        keys.extend(batch)
+        filled_store._delete_many(list(batch))
+    assert keys == ["1", "2", "3"]
+
+
+def test__get_repr_kwargs(filled_store: InMemoryStore) -> None:
+    assert filled_store._get_repr_kwargs() == {"closed": False, "count": "3"}
+
+
+def test__get_repr_kwargs_closed() -> None:
+    assert InMemoryStore()._get_repr_kwargs() == {"closed": True}
+
+
+# --- isolation: mutating a value never changes the stored value ---
+
+
+@pytest.mark.parametrize("codec", [JsonCodec(), PickleCodec()], ids=["json", "pickle"])
+@pytest.mark.parametrize(
+    "read",
+    [
+        pytest.param(lambda s: s.get("1"), id="get"),
+        pytest.param(lambda s: s.get_many(["1"])[0], id="get_many"),
+        pytest.param(lambda s: s.filter()[0], id="filter"),
+        pytest.param(lambda s: s.filter(n=1)[0], id="filter_field"),
+        pytest.param(lambda s: next(iter(s.values())), id="values"),
+        pytest.param(lambda s: next(iter(s.iter_batches()))["1"], id="iter_batches"),
+    ],
+)
+def test_mutating_a_returned_value_does_not_change_the_store(
+    codec: Codec, read: Callable[[InMemoryStore], dict[str, Any]]
+) -> None:
+    with InMemoryStore(codec=codec) as store:
+        store.set("1", {"n": 1, "tags": ["a"]})
+        read(store)["tags"].append("b")
+        assert store.get("1") == {"n": 1, "tags": ["a"]}
+
+
+async def test_mutating_an_async_iterated_value_does_not_change_the_store(
+    store: InMemoryStore,
+) -> None:
+    store.set("1", {"tags": ["a"]})
+    async for value in store.avalues():
+        value["tags"].append("b")
+    assert store.get("1") == {"tags": ["a"]}
+
+
+@pytest.mark.parametrize("on_conflict", ["raise", "skip", "overwrite", "merge"])
+def test_mutating_a_written_value_does_not_change_the_store(
+    store: InMemoryStore, on_conflict: str
+) -> None:
+    value = {"tags": ["a"]}
+    store.set("1", value, on_conflict=on_conflict)
+    value["tags"].append("b")
+    assert store.get("1") == {"tags": ["a"]}
+
+
+# --- round trip: the same as the other stores with the same codec ---
+
+
+def test_json_round_trip_turns_tuple_into_list(store: InMemoryStore) -> None:
+    store.set("1", {"point": (1, 2)})
+    assert store.get("1") == {"point": [1, 2]}
+
+
+def test_json_codec_non_str_value_key_raises(store: InMemoryStore) -> None:
+    with pytest.raises(TypeError, match=r"keys must be str"):
+        store.set("1", {1: "int", "1": "str"})
     assert store.count() == 0
 
 
-def test_to_uri_from_uri_does_not_carry_data(
-    store: InMemoryStore, items: dict[str, dict[str, Any]]
+@pytest.mark.parametrize("number", [float("nan"), float("inf")])
+def test_json_codec_non_finite_float_raises(store: InMemoryStore, number: float) -> None:
+    with pytest.raises(ValueError, match=r"not JSON compliant"):
+        store.set("1", {"n": number})
+    assert store.count() == 0
+
+
+def test_json_codec_lone_surrogate_raises(store: InMemoryStore) -> None:
+    with pytest.raises(ValueError, match=r"lone surrogate"):
+        store.set("1", {"text": chr(0xD800)})
+    assert store.count() == 0
+
+
+def test_pickle_codec_round_trip_keeps_types() -> None:
+    value = {"point": (1, 2), "tags": {"a"}, 1: "int", "1": "str"}
+    with InMemoryStore(codec=PickleCodec()) as store:
+        store.set("1", value)
+        assert store.get("1") == value
+
+
+# --- closed store and invalid arguments, with empty inputs ---
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda s: s.get_many([]), id="get_many"),
+        pytest.param(lambda s: s.delete_many([]), id="delete_many"),
+        pytest.param(lambda s: s.contains_many([]), id="contains_many"),
+        pytest.param(lambda s: s.set_many({}), id="set_many"),
+        pytest.param(lambda s: s.set_batches([]), id="set_batches"),
+    ],
+)
+def test_closed_store_with_empty_input_raises(
+    operation: Callable[[InMemoryStore], Any],
 ) -> None:
-    store.set_many(items)
-    reloaded = InMemoryStore.from_uri(store.to_uri())
-    reloaded.open()
-    assert reloaded.count() == 0
+    with pytest.raises(RuntimeError, match=r"InMemoryStore is not open"):
+        operation(InMemoryStore())
 
 
-# --- async (via ThreadedAsyncStoreMixin) ---
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda s: s.aget_many([]), id="aget_many"),
+        pytest.param(lambda s: s.adelete_many([]), id="adelete_many"),
+        pytest.param(lambda s: s.aset_batches([]), id="aset_batches"),
+    ],
+)
+async def test_closed_store_with_empty_input_raises_async(
+    operation: Callable[[InMemoryStore], Any],
+) -> None:
+    with pytest.raises(RuntimeError, match=r"InMemoryStore is not open"):
+        await operation(InMemoryStore())
 
 
-# --- aget / aset ---
-
-
-async def test_in_memory_store_aget_aset_round_trip(store: InMemoryStore) -> None:
-    await store.aset("1", {"text": "hello"})
-    assert await store.aget("1") == {"text": "hello"}
-
-
-# --- aset_many ---
-
-
-async def test_in_memory_store_aset_many_on_conflict_merge(store: InMemoryStore) -> None:
-    await store.aset("1", {"a": 1})
-    await store.aset_many({"1": {"b": 2}}, on_conflict="merge")
-    assert await store.aget("1") == {"a": 1, "b": 2}
-
-
-# --- afilter ---
-
-
-async def test_in_memory_store_afilter(store: InMemoryStore) -> None:
-    await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
-    assert await store.afilter(author="Alice") == [{"author": "Alice"}]
-
-
-# --- acount / aclear ---
-
-
-async def test_in_memory_store_acount_and_aclear(store: InMemoryStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    assert await store.acount() == 2
-    await store.aclear()
-    assert await store.acount() == 0
-
-
-# --- akeys ---
-
-
-async def test_in_memory_store_akeys(store: InMemoryStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    assert sorted([key async for key in store.akeys()]) == ["1", "2"]
-
-
-# --- aclose ---
-
-
-async def test_in_memory_store_aclose_clears_data() -> None:
-    store = InMemoryStore()
-    await store.aopen()
-    await store.aset("1", {"a": 1})
-    await store.aclose()
-    assert store.closed
-
-
-# --- avalues ---
-
-
-async def test_in_memory_store_avalues_iterates_all(store: InMemoryStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
-    values = [v async for v in store.avalues(batch_size=2)]
-    assert sorted(v["a"] for v in values) == [1, 2, 3]
-
-
-# --- aset_batches ---
-
-
-async def test_in_memory_store_aset_batches(store: InMemoryStore) -> None:
-    await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})], batch_size=1)
-    assert await store.acount() == 2
-
-
-# --- adelete_many ---
-
-
-async def test_in_memory_store_adelete_many(store: InMemoryStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
-    await store.adelete_many(["1", "2"])
-    assert sorted([key async for key in store.akeys()]) == ["3"]
-
-
-# --- acontains_many ---
-
-
-async def test_in_memory_store_acontains_many(store: InMemoryStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    assert await store.acontains_many(["1", "2", "3"]) == [True, True, False]
-
-
-# --- context manager ---
-
-
-async def test_in_memory_store_async_context_manager_returns_self() -> None:
-    async with InMemoryStore() as store:
-        assert isinstance(store, InMemoryStore)
-
-
-async def test_in_memory_store_async_context_manager_closes_on_normal_exit() -> None:
-    async with InMemoryStore() as store:
-        await store.aset("1", {"text": "hello"})
-        assert await store.acount() == 1
-
-    assert store.closed
-
-
-async def test_in_memory_store_async_context_manager_closes_on_exception() -> None:
-    msg = "boom"
-    with pytest.raises(ValueError, match="boom"):
-        async with InMemoryStore() as store:
-            raise ValueError(msg)
-
-    assert store.closed
-
-
-# --- aiter_batches ---
-
-
-async def test_in_memory_store_aiter_batches_yields_correct_batch_sizes(
+def test_set_batches_invalid_on_conflict_with_empty_input_raises(
     store: InMemoryStore,
 ) -> None:
-    await store.aset_many({str(i): {"a": i} for i in range(5)})
-    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
-    assert [len(batch) for batch in batches] == [2, 2, 1]
-
-
-# --- aset / aget edge cases ---
-
-
-async def test_in_memory_store_aset_does_not_alias_input(store: InMemoryStore) -> None:
-    value = {"text": "hello"}
-    await store.aset("1", value)
-    value["text"] = "mutated"
-    assert await store.aget("1") == {"text": "hello"}
-
-
-async def test_in_memory_store_aget_returns_a_copy(store: InMemoryStore) -> None:
-    await store.aset("1", {"tags": ["a"]})
-    value = await store.aget("1")
-    value["tags"].append("b")
-    assert await store.aget("1") == {"tags": ["a"]}
-
-
-async def test_in_memory_store_aiter_batches_zero_batch_size_raises(store: InMemoryStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        _ = [batch async for batch in store.aiter_batches(batch_size=0)]
-
-
-async def test_in_memory_store_aiter_batches_negative_batch_size_raises(
-    store: InMemoryStore,
-) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        _ = [batch async for batch in store.aiter_batches(batch_size=-1)]
-
-
-# --- concurrency ---
-
-
-def test_concurrent_set_many_merge_does_not_lose_updates(store: InMemoryStore) -> None:
-    """Many threads each merge a distinct field into the same key.
-
-    The store's lock must serialize the check-then-act merge sequence,
-    or concurrent writers reading the same stale base value would
-    clobber each other's fields (a lost update).
-    """
-    store.set("k", {})
-    n_threads = 16
-    barrier = threading.Barrier(n_threads)
-
-    def merge_one(i: int) -> None:
-        barrier.wait()
-        store.set("k", {f"field_{i}": i}, on_conflict="merge")
-
-    threads = [threading.Thread(target=merge_one, args=(i,)) for i in range(n_threads)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    result = store.get("k")
-    assert result == {f"field_{i}": i for i in range(n_threads)}
-
-
-def test_concurrent_set_on_conflict_raise_never_corrupts_value(store: InMemoryStore) -> None:
-    """When many threads race to create the same key with
-    on_conflict="raise", exactly one write must win and the stored value
-    must be a single writer's value, not a mix."""
-    n_threads = 16
-    barrier = threading.Barrier(n_threads)
-    successes: list[int] = []
-    lock = threading.Lock()
-
-    def create_one(i: int) -> None:
-        barrier.wait()
-        try:
-            store.set("k", {"writer": i}, on_conflict="raise")
-        except KeyError:
-            return
-        with lock:
-            successes.append(i)
-
-    threads = [threading.Thread(target=create_one, args=(i,)) for i in range(n_threads)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    assert len(successes) == 1
-    assert store.get("k") == {"writer": successes[0]}
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        store.set_batches([], on_conflict="bogus")

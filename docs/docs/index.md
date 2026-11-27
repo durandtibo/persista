@@ -104,6 +104,8 @@ synchronous and `a`-prefixed asynchronous methods on every store:
   `set_many`/`aset_many`, `delete`/`adelete`, `filter`/`afilter`, iteration
 - Backends: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`
 - Pickle-backed variants (`PickleSQLiteStore`, `PickleLmdbStore`, ...) for non-dict values
+- Codecs for `InMemoryStore`: JSON by default, which rejects the values that would lose data, or
+  `pickle` (`InMemoryStore(codec=PickleCodec())`) to keep Python types
 - Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`, `"merge"`)
 
 [Learn more →](uguide/store.md)

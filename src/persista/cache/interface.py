@@ -38,6 +38,10 @@ _state: dict[str, Cache] = {"cache": _make_default_cache()}
 def get_cache() -> Cache:
     """Return the shared default cache.
 
+    Unless it was replaced with :func:`set_cache`, it keeps its entries
+    in memory with the :class:`~persista.store.PickleCodec`, so it
+    caches any value that can be pickled.
+
     Returns:
         The shared default :class:`~persista.cache.cache.Cache`
         instance, used by :func:`cached` when no explicit cache is

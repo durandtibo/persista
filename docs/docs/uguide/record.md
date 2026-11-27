@@ -138,6 +138,11 @@ each method has an `a`-prefixed asynchronous twin (`aget`, `aset_many`, `afilter
 - `keys`, `values`, `iter_batches`, `count`: iterate over the records and count them
 - `open`, `close`, `closed`: manage the underlying store
 
+The metadata of a record is stored as a value of the underlying store, so the
+[codec of the store](store.md#values-and-codecs) decides which metadata it accepts. For example,
+`RecordStore(InMemoryStore())` only accepts metadata that JSON can represent, and returns a tuple
+as a list; use `RecordStore(InMemoryStore(codec=PickleCodec()))` to keep Python types.
+
 A [store URI](store.md#store-uris) belongs to the underlying store: use
 `record_store.store.to_uri()`, and `RecordStore(store_from_uri(uri))` to reconnect.
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import enum
 import logging
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -15,10 +17,19 @@ from persista.store.validation import (
     ON_CONFLICT_VALUES,
     check_is_closed,
     check_is_open,
+    validate_key,
+    validate_keys,
     validate_table_name,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
 logger = logging.getLogger(__name__)
+
+
+class StrKey(enum.StrEnum):
+    USER = "user"
 
 
 ################################
@@ -113,6 +124,75 @@ def test_validate_batch_size_negative(batch_size: int) -> None:
 
 def test_validate_batch_size_returns_none() -> None:
     assert validate_batch_size(1) is None
+
+
+################################
+#     Tests for validate_key   #
+################################
+
+
+@pytest.mark.parametrize("key", ["", "a", "user:1", "é", "A key"])
+def test_validate_key(key: str) -> None:
+    assert validate_key(key) is key
+
+
+def test_validate_key_converts_str_subclass() -> None:
+    key = validate_key(StrKey.USER)
+    assert (type(key), key) == (str, "user")
+
+
+@pytest.mark.parametrize("key", [1, 1.5, True, None, b"a", ("a",)])
+def test_validate_key_not_a_str_raises(key: object) -> None:
+    with pytest.raises(TypeError, match=r"A key must be a str, not"):
+        validate_key(key)
+
+
+#################################
+#     Tests for validate_keys   #
+#################################
+
+
+@pytest.mark.parametrize(
+    ("keys", "expected"),
+    [
+        pytest.param([], [], id="empty"),
+        pytest.param(["a"], ["a"], id="single"),
+        pytest.param(["b", "a", "b"], ["b", "a", "b"], id="duplicates"),
+        pytest.param(("a", "b"), ["a", "b"], id="tuple"),
+        pytest.param({"a": 1, "b": 2}, ["a", "b"], id="mapping"),
+    ],
+)
+def test_validate_keys(keys: Iterable[str], expected: list[str]) -> None:
+    assert validate_keys(keys) == expected
+
+
+def test_validate_keys_consumes_a_generator_once() -> None:
+    assert validate_keys(key for key in ["a", "b"]) == ["a", "b"]
+
+
+def test_validate_keys_returns_new_list() -> None:
+    keys = ["a"]
+    assert validate_keys(keys) is not keys
+
+
+def test_validate_keys_converts_str_subclass() -> None:
+    assert [type(key) for key in validate_keys(["a", StrKey.USER])] == [str, str]
+
+
+def test_validate_keys_does_not_mutate_input() -> None:
+    keys = [StrKey.USER]
+    validate_keys(keys)
+    assert type(keys[0]) is StrKey
+
+
+def test_validate_keys_single_str_raises() -> None:
+    with pytest.raises(TypeError, match=r"not a single str: 'ab'"):
+        validate_keys("ab")
+
+
+def test_validate_keys_non_str_key_raises() -> None:
+    with pytest.raises(TypeError, match=r"A key must be a str, not int: 1"):
+        validate_keys(["a", 1])
 
 
 ###############################

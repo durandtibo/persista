@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Generator, Iterator
+import logging
+from typing import TYPE_CHECKING
 
 import pytest
 
-from persista.store import NullStore
+from persista.store import JsonCodec, NullStore
+from persista.store.plan import build_plan
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+if TYPE_CHECKING:
+    from collections.abc import Callable, Generator
 
 
 @pytest.fixture
@@ -22,399 +23,181 @@ def store() -> Generator[NullStore, None, None]:
 ###############################
 
 
-# --- repr/str ---
+def test_null_store_codec(store: NullStore) -> None:
+    assert isinstance(store._codec, JsonCodec)
+
+
+def test_null_store_is_thread_safe() -> None:
+    assert NullStore._thread_safe
+
+
+# --- repr / str ---
 
 
 def test_repr(store: NullStore) -> None:
-    assert repr(store).startswith("NullStore(")
+    assert repr(store) == "NullStore(count='0')"
 
 
 def test_str(store: NullStore) -> None:
-    assert str(store).startswith("NullStore(")
+    assert str(store) == "NullStore(count=0)"
 
 
-def test_repr_after_close_does_not_raise(store: NullStore) -> None:
-    store.close()
-    assert repr(store).startswith("NullStore(")
+def test_repr_before_open() -> None:
+    assert repr(NullStore()) == "NullStore(count='0')"
 
 
-def test_str_after_close_does_not_raise(store: NullStore) -> None:
-    store.close()
-    assert str(store).startswith("NullStore(")
+# --- URI ---
 
 
-def test_repr_before_open_does_not_raise() -> None:
-    store = NullStore()
-    assert repr(store).startswith("NullStore(")
-
-
-def test_str_before_open_does_not_raise() -> None:
-    store = NullStore()
-    assert str(store).startswith("NullStore(")
-
-
-# --- set / get ---
-
-
-def test_set_then_get_is_a_miss(store: NullStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.get("1") is None
-
-
-def test_set_does_not_increase_count(store: NullStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.count() == 0
-
-
-def test_get_missing_key_returns_none(store: NullStore) -> None:
-    assert store.get("nonexistent") is None
-
-
-def test_set_on_conflict_bogus_does_not_raise(store: NullStore) -> None:
-    store.set("1", {"text": "hello"}, on_conflict="bogus")
-
-
-# --- set_many / get_many ---
-
-
-def test_set_many_does_not_increase_count(store: NullStore) -> None:
-    store.set_many({"1": {"text": "hello"}, "2": {"text": "world"}})
-    assert store.count() == 0
-
-
-def test_get_many_returns_none_for_every_key(store: NullStore) -> None:
-    store.set_many({"1": {"text": "hello"}})
-    assert store.get_many(["1", "2"]) == [None, None]
-
-
-def test_get_many_preserves_length(store: NullStore) -> None:
-    assert store.get_many(["1", "2", "3"]) == [None, None, None]
-
-
-def test_get_many_empty_list_returns_empty_list(store: NullStore) -> None:
-    assert store.get_many([]) == []
-
-
-# --- set_batches ---
-
-
-def test_set_batches_does_not_increase_count(store: NullStore) -> None:
-    store.set_batches([("1", {"v": 1}), ("2", {"v": 2})])
-    assert store.count() == 0
-
-
-# --- filter ---
-
-
-def test_filter_no_args_returns_empty(store: NullStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.filter() == []
-
-
-def test_filter_with_args_returns_empty(store: NullStore) -> None:
-    store.set("1", {"author": "Alice"})
-    assert store.filter(author="Alice") == []
-
-
-# --- delete / delete_many ---
-
-
-def test_delete_is_silent(store: NullStore) -> None:
-    store.delete("1")
-
-
-def test_delete_many_is_silent(store: NullStore) -> None:
-    store.delete_many(["1", "2"])
-
-
-# --- contains ---
-
-
-def test_contains_always_false(store: NullStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert not store.contains("1")
-
-
-# --- contains_many ---
-
-
-def test_contains_many_all_missing(store: NullStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.contains_many(["1", "2"]) == [False, False]
-
-
-def test_contains_many_empty_input_returns_empty_lists(store: NullStore) -> None:
-    assert store.contains_many([]) == []
-
-
-# --- keys ---
-
-
-def test_keys_yields_nothing(store: NullStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert list(store.keys()) == []
-
-
-# --- values ---
-
-
-def test_values_yields_nothing(store: NullStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert list(store.values()) == []
-
-
-# --- iter_batches ---
-
-
-def test_iter_batches_yields_nothing(store: NullStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert list(store.iter_batches()) == []
-
-
-def test_iter_batches_returns_generator(store: NullStore) -> None:
-    assert isinstance(store.iter_batches(), Iterator)
-
-
-# --- count ---
-
-
-def test_count_is_always_zero(store: NullStore) -> None:
-    assert store.count() == 0
-    store.set("1", {"text": "hello"})
-    assert store.count() == 0
-
-
-# --- close / closed ---
-
-
-def test_close_is_idempotent(store: NullStore) -> None:
-    store.close()
-    store.close()
-
-
-def test_open_is_idempotent(store: NullStore) -> None:
-    store.open()  # already open; should not raise
-    assert not store.closed
-
-
-async def test_aopen_is_idempotent(store: NullStore) -> None:
-    await store.aopen()  # already open; should not raise
-    assert not store.closed
-
-
-def test_get_before_open_raises() -> None:
-    store = NullStore()
-    with pytest.raises(RuntimeError, match="not open"):
-        store.get("1")
-
-
-def test_close_returns_none(store: NullStore) -> None:
-    assert store.close() is None
-
-
-def test_closed_false_before_close(store: NullStore) -> None:
-    assert not store.closed
-
-
-def test_closed_true_after_close(store: NullStore) -> None:
-    store.close()
-    assert store.closed
-
-
-# --- clear ---
-
-
-def test_clear_returns_none(store: NullStore) -> None:
-    assert store.clear() is None
-
-
-# --- context manager ---
-
-
-def test_context_manager_returns_self() -> None:
-    with NullStore() as store:
-        assert isinstance(store, NullStore)
-
-
-def test_context_manager_closes_on_exception() -> None:
-    msg = "boom"
-    with pytest.raises(ValueError, match="boom"), NullStore() as store:
-        raise ValueError(msg)
-
-    assert store.closed
-
-
-def test_context_manager_reopen_resets_closed() -> None:
-    """Regression test: reopening via `with` must reset `closed` to
-    False, matching every other store backend."""
-    store = NullStore()
-    store.close()
-    assert store.closed
-    with store:
-        assert not store.closed
-    assert store.closed
-
-
-# --- to_uri / from_uri ---
-
-
-def test_to_uri_returns_null_scheme(store: NullStore) -> None:
+def test_to_uri(store: NullStore) -> None:
     assert store.to_uri() == "null://"
 
 
-def test_from_uri_returns_new_store() -> None:
-    store = NullStore.from_uri("null://")
-    store.open()
+def test_from_uri_returns_closed_store() -> None:
+    assert NullStore.from_uri("null://").closed
+
+
+# --- everything written is forgotten ---
+
+
+@pytest.mark.parametrize("on_conflict", ["raise", "skip", "overwrite", "merge"])
+def test_set_is_forgotten(store: NullStore, on_conflict: str) -> None:
+    store.set("1", {"a": 1}, on_conflict=on_conflict)
+    assert store.get("1") is None
+
+
+def test_set_twice_with_raise_does_not_raise(store: NullStore) -> None:
+    store.set("1", {"a": 1}, on_conflict="raise")
+    store.set("1", {"a": 1}, on_conflict="raise")
     assert store.count() == 0
-    assert not store.closed
 
 
-# --- async ---
-
-
-async def test_null_store_aget_always_none(store: NullStore) -> None:
+async def test_aset_is_forgotten(store: NullStore) -> None:
     await store.aset("1", {"a": 1})
     assert await store.aget("1") is None
 
 
-async def test_null_store_aset_does_not_increase_count(store: NullStore) -> None:
-    await store.aset("1", {"text": "hello"})
-    assert await store.acount() == 0
-
-
-async def test_null_store_aget_missing_key_returns_none(store: NullStore) -> None:
-    assert await store.aget("nonexistent") is None
-
-
-async def test_null_store_aset_many_does_not_increase_count(store: NullStore) -> None:
-    await store.aset_many({"1": {"text": "hello"}, "2": {"text": "world"}})
-    assert await store.acount() == 0
-
-
-async def test_null_store_aget_many_preserves_length(store: NullStore) -> None:
-    assert await store.aget_many(["1", "2", "3"]) == [None, None, None]
-
-
-async def test_null_store_aget_many_empty_list_returns_empty_list(store: NullStore) -> None:
-    assert await store.aget_many([]) == []
-
-
-async def test_null_store_aset_batches_does_not_increase_count(store: NullStore) -> None:
-    await store.aset_batches([("1", {"v": 1}), ("2", {"v": 2})])
-    assert await store.acount() == 0
-
-
-async def test_null_store_afilter_no_args_returns_empty(store: NullStore) -> None:
-    await store.aset("1", {"text": "hello"})
-    assert await store.afilter() == []
-
-
-async def test_null_store_acontains_always_false(store: NullStore) -> None:
+async def test_async_calls_start_no_worker_thread(store: NullStore) -> None:
     await store.aset("1", {"a": 1})
-    assert await store.acontains("1") is False
+    assert store._executor is None
 
 
-async def test_null_store_acount_always_zero(store: NullStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    assert await store.acount() == 0
+def test_iteration_yields_nothing(store: NullStore) -> None:
+    store.set("1", {"a": 1})
+    assert list(store.iter_batches()) == []
 
 
-async def test_null_store_acontains_many_empty_input_returns_empty_lists(store: NullStore) -> None:
-    assert await store.acontains_many([]) == []
+async def test_async_iteration_yields_nothing(store: NullStore) -> None:
+    assert [key async for key in store.akeys()] == []
 
 
-async def test_null_store_akeys_empty(store: NullStore) -> None:
-    keys = [key async for key in store.akeys()]
-    assert keys == []
+def test_filter_returns_nothing(store: NullStore) -> None:
+    store.set("1", {"a": 1})
+    assert store.filter(a=1) == []
 
 
-async def test_null_store_akeys_yields_nothing_after_aset(store: NullStore) -> None:
-    await store.aset("1", {"text": "hello"})
-    keys = [key async for key in store.akeys()]
-    assert keys == []
+def test_contains_many_returns_false(store: NullStore) -> None:
+    store.set("1", {"a": 1})
+    assert store.contains_many(["1", "2"]) == [False, False]
 
 
-async def test_null_store_avalues_yields_nothing(store: NullStore) -> None:
-    await store.aset("1", {"text": "hello"})
-    values = [value async for value in store.avalues()]
-    assert values == []
+# --- the arguments are checked ---
 
 
-async def test_null_store_aiter_batches_empty(store: NullStore) -> None:
-    batches = [batch async for batch in store.aiter_batches()]
-    assert batches == []
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda s: s.set("1", {}, on_conflict="bogus"), id="set"),
+        pytest.param(lambda s: s.set_many({}, on_conflict="bogus"), id="set_many"),
+    ],
+)
+def test_invalid_on_conflict_raises(
+    store: NullStore, operation: Callable[[NullStore], None]
+) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        operation(store)
 
 
-async def test_null_store_aiter_batches_yields_nothing_after_aset(store: NullStore) -> None:
-    await store.aset("1", {"text": "hello"})
-    batches = [batch async for batch in store.aiter_batches()]
-    assert batches == []
+async def test_aset_invalid_on_conflict_raises(store: NullStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        await store.aset("1", {}, on_conflict="bogus")
 
 
-async def test_null_store_afilter_always_empty(store: NullStore) -> None:
-    await store.aset("1", {"a": 1})
-    assert await store.afilter(a=1) == []
+def test_set_non_json_value_raises(store: NullStore) -> None:
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        store.set("1", {"a": object()})
 
 
-async def test_null_store_aget_many_returns_none_for_every_key(store: NullStore) -> None:
-    await store.aset("1", {"a": 1})
-    assert await store.aget_many(["1", "2"]) == [None, None]
+def test_get_non_str_key_raises(store: NullStore) -> None:
+    with pytest.raises(TypeError, match=r"A key must be a str"):
+        store.get(1)
 
 
-async def test_null_store_adelete_is_silent(store: NullStore) -> None:
-    assert await store.adelete("1") is None
+def test_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"NullStore is not open"):
+        NullStore().get("1")
 
 
-async def test_null_store_adelete_many_is_silent(store: NullStore) -> None:
-    assert await store.adelete_many(["1", "2"]) is None
+# --- primitives ---
 
 
-async def test_null_store_aclear_returns_none(store: NullStore) -> None:
-    assert await store.aclear() is None
+def test__open(store: NullStore) -> None:
+    store._open()
+    assert store._count() == 0
 
 
-async def test_null_store_acontains_many_all_missing(store: NullStore) -> None:
-    await store.aset("1", {"a": 1})
-    assert await store.acontains_many(["1", "2"]) == [False, False]
+def test__close(store: NullStore) -> None:
+    store._close()
+    assert store._count() == 0
 
 
-async def test_null_store_aiter_batches_returns_async_iterator(store: NullStore) -> None:
-    assert isinstance(store.aiter_batches(), AsyncIterator)
+def test__get_many(store: NullStore) -> None:
+    assert store._get_many(["1"]) == {}
 
 
-async def test_null_store_async_context_manager() -> None:
-    async with NullStore() as store:
-        assert not store.closed
-    assert store.closed
+def test__put_many(store: NullStore, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.DEBUG, logger="persista.store.null"):
+        store._put_many({"1": "{}", "2": "{}"})
+    assert "Discarding 2 key-value pair(s)" in caplog.text
 
 
-async def test_null_store_aset_on_conflict_bogus_does_not_raise(store: NullStore) -> None:
-    await store.aset("1", {"text": "hello"}, on_conflict="bogus")
+def test__update_calls_plan_without_existing_keys(store: NullStore) -> None:
+    received: list[dict] = []
+
+    def plan(existing: dict) -> dict:
+        received.append(existing)
+        return {"1": "{}"}
+
+    store._update(["1"], plan)
+    assert received == [{}]
 
 
-async def test_null_store_aclose_returns_none(store: NullStore) -> None:
-    assert await store.aclose() is None
+def test__update_with_raise_plan(store: NullStore) -> None:
+    store._update(["1"], build_plan({"1": "{}"}, "raise", JsonCodec()))
+    assert store._get_many(["1"]) == {}
 
 
-async def test_null_store_aclose_is_idempotent(store: NullStore) -> None:
-    await store.aclose()
-    await store.aclose()
+def test__delete_many(store: NullStore) -> None:
+    store._delete_many(["1"])
+    assert store._count() == 0
 
 
-async def test_null_store_closed_false_before_aclose(store: NullStore) -> None:
-    assert not store.closed
+def test__clear(store: NullStore) -> None:
+    store._clear()
+    assert store._count() == 0
 
 
-async def test_null_store_closed_true_after_aclose(store: NullStore) -> None:
-    await store.aclose()
-    assert store.closed
+def test__count(store: NullStore) -> None:
+    assert store._count() == 0
 
 
-async def test_null_store_async_context_manager_closes_on_exception() -> None:
-    msg = "boom"
-    store = NullStore()
-    with pytest.raises(ValueError, match="boom"):
-        async with store:
-            raise ValueError(msg)
+def test__iter_batches(store: NullStore) -> None:
+    assert list(store._iter_batches(2)) == []
 
-    assert store.closed
+
+def test__contains_many(store: NullStore) -> None:
+    assert store._contains_many(["1"]) == set()
+
+
+def test__get_repr_kwargs(store: NullStore) -> None:
+    assert store._get_repr_kwargs() == {"count": "0"}

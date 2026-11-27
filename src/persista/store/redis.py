@@ -15,7 +15,7 @@ from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.async_close import close_async_connection_from_sync
-from persista.store.base import BaseStore
+from persista.store.unmigrated import UnmigratedStore
 from persista.store.validation import (
     aresolve_conflicts,
     normalize_on_conflict,
@@ -39,7 +39,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 _KEYS_SET = "__keys__"
 
 
-class BaseRedisStore(BaseStore, MultilineDisplayMixin):
+class BaseRedisStore(UnmigratedStore, MultilineDisplayMixin):
     r"""Define a base class for Redis-backed key-value stores.
 
     A Redis set at ``__keys__`` tracks the keys currently in the
@@ -204,11 +204,13 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
         values = await client.mget(keys)
         return [self._decode(value) if value is not None else None for value in values]
 
-    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
+    def set(
+        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
+    ) -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
 
     async def aset(
-        self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         await self.aset_many({key: value}, on_conflict=on_conflict)
 
@@ -227,7 +229,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
             cls._check_no_reserved_key(_KEYS_SET)
 
     def set_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         self._check_open()
         if not items:
@@ -262,7 +264,7 @@ class BaseRedisStore(BaseStore, MultilineDisplayMixin):
                     return
 
     async def aset_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         if not items:
             return

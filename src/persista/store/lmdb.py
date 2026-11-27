@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
-from persista.store.base import BaseStore
 from persista.store.threaded import ThreadedAsyncStoreMixin
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
@@ -38,7 +37,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 _DEFAULT_MAP_SIZE = 1024**3  # 1 GiB
 
 
-class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
+class BaseLmdbStore(ThreadedAsyncStoreMixin, MultilineDisplayMixin):
     r"""Define a base class for LMDB-backed key-value stores.
 
     LMDB is an embedded, memory-mapped key-value store backed by a
@@ -150,11 +149,13 @@ class BaseLmdbStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
             raws = [txn.get(self._key_bytes(key)) for key in keys]
         return [self._decode(raw) if raw is not None else None for raw in raws]
 
-    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
+    def set(
+        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
+    ) -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
 
     def set_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         self._check_open()
         if not items:

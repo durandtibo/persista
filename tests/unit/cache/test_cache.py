@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from persista.cache.cache import MISSING, Cache
+from persista.store.codec import PickleCodec
 from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
@@ -31,6 +32,59 @@ def fake_time(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 def test_init_default_store() -> None:
     cache = Cache()
     assert isinstance(cache._store, InMemoryStore)
+
+
+def test_init_default_store_uses_pickle_codec() -> None:
+    assert isinstance(Cache()._store._codec, PickleCodec)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param((1, 2), id="tuple"),
+        pytest.param({1, 2}, id="set"),
+        pytest.param(b"data", id="bytes"),
+        pytest.param({1: "int", "1": "str"}, id="non_str_keys"),
+        pytest.param(float("inf"), id="infinity"),
+        pytest.param(complex(1, 2), id="object"),
+    ],
+)
+def test_default_store_keeps_type_of_value(value: object) -> None:
+    with Cache() as cache:
+        cache.set("key", value)
+        result = cache.get("key")
+    assert (type(result), result) == (type(value), value)
+
+
+async def test_default_store_keeps_type_of_value_async() -> None:
+    async with Cache() as cache:
+        await cache.aset("key", (1, {2}))
+        assert await cache.aget("key") == (1, {2})
+
+
+def test_default_store_returns_a_copy() -> None:
+    value = [1]
+    with Cache() as cache:
+        cache.set("key", value)
+        cache.get("key").append(2)
+        assert cache.get("key") == [1]
+
+
+def test_memoize_default_store_keeps_type_of_result_on_hit() -> None:
+    with Cache() as cache:
+
+        @cache.memoize()
+        def pair() -> tuple[int, int]:
+            return (1, 2)
+
+        pair()
+        assert pair() == (1, 2)
+
+
+def test_json_store_returns_tuple_as_list() -> None:
+    with Cache(store=InMemoryStore()) as cache:
+        cache.set("key", (1, 2))
+        assert cache.get("key") == [1, 2]
 
 
 def test_init_custom_store() -> None:

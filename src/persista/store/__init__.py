@@ -10,12 +10,15 @@ __all__ = [
     "BaseRedisStore",
     "BaseSQLiteStore",
     "BaseStore",
+    "Codec",
     "DuckDBStore",
     "InMemoryStore",
+    "JsonCodec",
     "JsonFileStore",
     "LmdbStore",
     "NullStore",
     "OnConflict",
+    "PickleCodec",
     "PickleFileStore",
     "PickleLmdbStore",
     "PickleRedisStore",
@@ -33,6 +36,7 @@ __all__ = [
 ]
 
 from persista.store.base import BaseStore
+from persista.store.codec import Codec, JsonCodec, PickleCodec
 from persista.store.duckdb import BaseDuckDBStore, DuckDBStore
 from persista.store.file import BaseFileStore, JsonFileStore, PickleFileStore
 from persista.store.in_memory import InMemoryStore
