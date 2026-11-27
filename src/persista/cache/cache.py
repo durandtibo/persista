@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from coola.display import MultilineDisplayMixin
 
-from persista.cache.utils import make_key
+from persista.cache.utils import make_call_key
 from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
@@ -1054,18 +1054,19 @@ class Cache(MultilineDisplayMixin):
 
         Works on both sync and async functions (``async def``).
 
-        The cache key is derived from the decorated function's
-        qualified name (``__qualname__``) and call arguments, via
-        :func:`~persista.cache.utils.make_key`, so calls with equal
-        arguments share a cached result. Call arguments must be
-        serializable with ``strategy``, unless
-        ``ignore_non_serializable`` is set; the return value must
-        additionally be JSON-serializable if the backing store
-        serializes values (see the class docstring). Because the key
-        is based on ``__qualname__`` rather than object identity, two
-        distinct functions defined with the same qualified name (e.g.
-        two calls to the same factory returning a closure) share
-        their cache entries.
+        The cache key is derived from the decorated function's module
+        and qualified name (``__module__`` and ``__qualname__``) and
+        call arguments, via
+        :func:`~persista.cache.utils.make_call_key`, so calls with
+        equal arguments share a cached result. Call arguments must be
+        serializable with ``strategy`` (see
+        ``ignore_non_serializable`` for the only exception); the
+        return value must additionally be JSON-serializable if the
+        backing store serializes values (see the class docstring).
+        Because the key is based on names rather than object
+        identity, two distinct functions defined with the same module
+        and qualified name (e.g. two calls to the same factory
+        returning a closure) share their cache entries.
 
         Args:
             ttl: The time-to-live, in seconds, applied to cached
@@ -1073,10 +1074,12 @@ class Cache(MultilineDisplayMixin):
             strategy: The serialization strategy used to compute the
                 cache key. Either ``"json"`` or ``"pickle"``. See
                 :func:`~persista.cache.utils.make_key`.
-            ignore_non_serializable: If ``True``, positional arguments
-                and keyword argument values that are not serializable
-                with ``strategy`` are dropped before computing the
-                key, instead of raising an error.
+            ignore_non_serializable: If ``True``, the values of keyword
+                arguments that are not serializable with
+                ``strategy`` are left out of the key, instead of
+                raising an error. Positional arguments are never left
+                out: a call with a positional argument that cannot be
+                serialized (such as ``self`` of a method) raises.
 
         Returns:
             A decorator that wraps a function with caching.
@@ -1109,8 +1112,8 @@ class Cache(MultilineDisplayMixin):
 
                 @functools.wraps(func)
                 async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                    key = make_key(
-                        getattr(func, "__qualname__", repr(func)),
+                    key = make_call_key(
+                        func,
                         args,
                         kwargs,
                         strategy=strategy,
@@ -1124,8 +1127,8 @@ class Cache(MultilineDisplayMixin):
 
             @functools.wraps(func)
             def wrapper(*args: Any, **kwargs: Any) -> T:
-                key = make_key(
-                    getattr(func, "__qualname__", repr(func)),
+                key = make_call_key(
+                    func,
                     args,
                     kwargs,
                     strategy=strategy,
@@ -1151,18 +1154,19 @@ class Cache(MultilineDisplayMixin):
         coroutine function, since the backing store is only
         accessible through ``await``.
 
-        The cache key is derived from the decorated function's
-        qualified name (``__qualname__``) and call arguments, via
-        :func:`~persista.cache.utils.make_key`, so calls with equal
-        arguments share a cached result. Call arguments must be
-        serializable with ``strategy``, unless
-        ``ignore_non_serializable`` is set; the return value must
-        additionally be JSON-serializable if the backing store
-        serializes values (see the class docstring). Because the key
-        is based on ``__qualname__`` rather than object identity, two
-        distinct functions defined with the same qualified name (e.g.
-        two calls to the same factory returning a closure) share
-        their cache entries.
+        The cache key is derived from the decorated function's module
+        and qualified name (``__module__`` and ``__qualname__``) and
+        call arguments, via
+        :func:`~persista.cache.utils.make_call_key`, so calls with
+        equal arguments share a cached result. Call arguments must be
+        serializable with ``strategy`` (see
+        ``ignore_non_serializable`` for the only exception); the
+        return value must additionally be JSON-serializable if the
+        backing store serializes values (see the class docstring).
+        Because the key is based on names rather than object
+        identity, two distinct functions defined with the same module
+        and qualified name (e.g. two calls to the same factory
+        returning a closure) share their cache entries.
 
         Args:
             ttl: The time-to-live, in seconds, applied to cached
@@ -1170,10 +1174,12 @@ class Cache(MultilineDisplayMixin):
             strategy: The serialization strategy used to compute the
                 cache key. Either ``"json"`` or ``"pickle"``. See
                 :func:`~persista.cache.utils.make_key`.
-            ignore_non_serializable: If ``True``, positional arguments
-                and keyword argument values that are not serializable
-                with ``strategy`` are dropped before computing the
-                key, instead of raising an error.
+            ignore_non_serializable: If ``True``, the values of keyword
+                arguments that are not serializable with
+                ``strategy`` are left out of the key, instead of
+                raising an error. Positional arguments are never left
+                out: a call with a positional argument that cannot be
+                serialized (such as ``self`` of a method) raises.
 
         Returns:
             A decorator that wraps a sync or async function with
@@ -1210,8 +1216,8 @@ class Cache(MultilineDisplayMixin):
         ) -> Callable[..., Awaitable[T]]:
             @functools.wraps(func)
             async def wrapper(*args: Any, **kwargs: Any) -> Any:
-                key = make_key(
-                    getattr(func, "__qualname__", repr(func)),
+                key = make_call_key(
+                    func,
                     args,
                     kwargs,
                     strategy=strategy,

@@ -16,7 +16,7 @@ from persista.cache.interface import (
 from persista.cache.utils import make_key
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Coroutine, Iterator
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ def test_cached_uses_shared_default_cache() -> None:
         return x * 2
 
     func(1)
-    key = make_key(func.__qualname__, (1,), {}, strategy="json")
+    key = make_key(f"{__name__}:{func.__qualname__}", (1,), {}, strategy="json")
     assert get_cache().contains(key)
 
 
@@ -223,13 +223,92 @@ def test_cached_ignore_non_serializable() -> None:
     calls = []
 
     @cached(strategy="json", ignore_non_serializable=True)
-    def func(x: int, _obj: object) -> int:
+    def func(x: int, _obj: object = None) -> int:
         calls.append(x)
         return x * 2
 
-    assert func(1, object()) == 2
-    assert func(1, object()) == 2  # different object, but shares the cache entry
+    assert func(1, _obj=object()) == 2
+    assert func(1, _obj=object()) == 2  # different object, but shares the cache entry
     assert calls == [1]
+
+
+def test_cached_ignore_non_serializable_positional_argument_raises() -> None:
+    @cached(ignore_non_serializable=True)
+    def func(first: object, second: object) -> str:
+        return f"{type(first).__name__}-{type(second).__name__}"
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        func(threading.Lock(), 1)
+
+
+def test_cached_ignore_non_serializable_self_raises() -> None:
+    class Loader:
+        @cached(ignore_non_serializable=True)
+        def load(self, x: int) -> int:
+            return x
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        Loader().load(1)
+
+
+def test_cached_same_qualname_different_modules() -> None:
+    def make_func(module: str) -> Callable[[int], str]:
+        def load(_x: int) -> str:
+            return module
+
+        load.__module__ = module
+        return cached()(load)
+
+    first = make_func("first")
+    second = make_func("second")
+    first(1)
+    assert second(1) == "second"
+
+
+async def test_cached_ignore_non_serializable_async() -> None:
+    calls = []
+
+    @cached(strategy="json", ignore_non_serializable=True)
+    async def func(x: int, _obj: object = None) -> int:
+        calls.append(x)
+        return x * 2
+
+    assert await func(1, _obj=object()) == 2
+    assert await func(1, _obj=object()) == 2  # different object, but shares the cache entry
+    assert calls == [1]
+
+
+async def test_cached_ignore_non_serializable_positional_argument_raises_async() -> None:
+    @cached(ignore_non_serializable=True)
+    async def func(first: object, second: object) -> str:
+        return f"{type(first).__name__}-{type(second).__name__}"
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        await func(threading.Lock(), 1)
+
+
+async def test_cached_ignore_non_serializable_self_raises_async() -> None:
+    class Loader:
+        @cached(ignore_non_serializable=True)
+        async def load(self, x: int) -> int:
+            return x
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        await Loader().load(1)
+
+
+async def test_cached_same_qualname_different_modules_async() -> None:
+    def make_func(module: str) -> Callable[[int], Coroutine[None, None, str]]:
+        async def load(_x: int) -> str:
+            return module
+
+        load.__module__ = module
+        return cached()(load)
+
+    first = make_func("first")
+    second = make_func("second")
+    await first(1)
+    assert await second(1) == "second"
 
 
 ######################################
@@ -325,13 +404,46 @@ async def test_async_cached_ignore_non_serializable() -> None:
     calls = []
 
     @async_cached(strategy="json", ignore_non_serializable=True)
-    async def func(x: int, _obj: object) -> int:
+    async def func(x: int, _obj: object = None) -> int:
         calls.append(x)
         return x * 2
 
-    assert await func(1, object()) == 2
-    assert await func(1, object()) == 2  # different object, shares the cache entry
+    assert await func(1, _obj=object()) == 2
+    assert await func(1, _obj=object()) == 2  # different object, but shares the cache entry
     assert calls == [1]
+
+
+async def test_async_cached_ignore_non_serializable_positional_argument_raises() -> None:
+    @async_cached(ignore_non_serializable=True)
+    async def func(first: object, second: object) -> str:
+        return f"{type(first).__name__}-{type(second).__name__}"
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        await func(threading.Lock(), 1)
+
+
+async def test_async_cached_ignore_non_serializable_self_raises() -> None:
+    class Loader:
+        @async_cached(ignore_non_serializable=True)
+        async def load(self, x: int) -> int:
+            return x
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        await Loader().load(1)
+
+
+async def test_async_cached_same_qualname_different_modules() -> None:
+    def make_func(module: str) -> Callable[[int], Coroutine[None, None, str]]:
+        async def load(_x: int) -> str:
+            return module
+
+        load.__module__ = module
+        return async_cached()(load)
+
+    first = make_func("first")
+    second = make_func("second")
+    await first(1)
+    assert await second(1) == "second"
 
 
 async def test_async_cached_uses_shared_default_cache() -> None:
@@ -340,7 +452,7 @@ async def test_async_cached_uses_shared_default_cache() -> None:
         return x * 2
 
     await func(1)
-    key = make_key(func.__qualname__, (1,), {}, strategy="json")
+    key = make_key(f"{__name__}:{func.__qualname__}", (1,), {}, strategy="json")
     assert await get_cache().acontains(key)
 
 
