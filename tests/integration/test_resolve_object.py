@@ -84,7 +84,8 @@ def make_record_store_config() -> dict[str, Any]:
 
 @pytest.mark.parametrize(("name", "kwargs"), LOCAL_STORES)
 def test_resolve_object_local_store_class(name: str, kwargs: dict[str, Any]) -> None:
-    """Test that a configuration builds the local store that it names."""
+    """Test that a configuration builds the local store that it
+    names."""
     store = resolve_object({"_target_": f"persista.store.{name}", **kwargs}, cls=BaseStore)
     assert type(store).__name__ == name
 
@@ -246,8 +247,8 @@ def test_resolve_object_record_store_nested_store() -> None:
 
 
 def test_resolve_object_record_store_nested_config_is_not_built() -> None:
-    """Test that a nested configuration is not built, so the record store
-    cannot be opened."""
+    """Test that a nested configuration is not built, so the record
+    store cannot be opened."""
     record_store = resolve_object(make_record_store_config(), cls=RecordStore)
     with pytest.raises(AttributeError, match=r"'dict' object has no attribute 'open'"):
         record_store.open()
