@@ -17,7 +17,7 @@ from persista.http.httpx.method import (
 )
 from persista.utils.imports import check_httpx, is_httpx_available
 
-if is_httpx_available():  # pragma: no cover
+if TYPE_CHECKING or is_httpx_available():  # pragma: no cover
     import httpx
 
 if TYPE_CHECKING:

@@ -22,11 +22,11 @@ __all__ = [
 import asyncio
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from persista.utils.imports import check_httpx, is_httpx_available
 
-if is_httpx_available():  # pragma: no cover
+if TYPE_CHECKING or is_httpx_available():  # pragma: no cover
     import httpx
 
 logger: logging.Logger = logging.getLogger(__name__)

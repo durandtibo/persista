@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
     from persista.store.types import OnConflict
 
-if is_redis_available():  # pragma: no cover
+if TYPE_CHECKING or is_redis_available():  # pragma: no cover
     import redis
     import redis.asyncio as aredis
 

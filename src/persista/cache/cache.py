@@ -1038,7 +1038,8 @@ class Cache(MultilineDisplayMixin):
         hit, value = await self._aget(key)
         if hit:
             return value
-        result = fn(*args, **kwargs)
+        # Whether the result is awaitable is only known at runtime.
+        result: Any = fn(*args, **kwargs)
         value = await result if inspect.isawaitable(result) else result
         await self.aset(key, value, ttl=ttl)
         return value

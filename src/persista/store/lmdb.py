@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
     from persista.store.types import OnConflict
 
-if is_lmdb_available():  # pragma: no cover
+if TYPE_CHECKING or is_lmdb_available():  # pragma: no cover
     import lmdb
 
 logger: logging.Logger = logging.getLogger(__name__)
