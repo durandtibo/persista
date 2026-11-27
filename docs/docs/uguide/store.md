@@ -3,8 +3,8 @@
 :book: This page describes the `persista.store` package, which provides a uniform key-value
 store interface backed by several storage engines. This page explains the `BaseStore` interface
 (which supports both synchronous and asynchronous usage) and how to use the concrete store
-implementations: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`,
-`PostgresStore`, and how to store Python objects with `pickle`.
+implementations: `InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`,
+`RedisStore`, `PostgresStore`, and how to store Python objects with `pickle`.
 
 **Prerequisites:** You'll need to know a bit of Python.
 For a refresher, see the [Python tutorial](https://docs.python.org/tutorial/).
@@ -109,11 +109,11 @@ TypeError: dict keys must be str, not int: 1
 :warning: Decoding a `pickle` payload can execute arbitrary code. Only use `PickleCodec` with data
 from trusted sources.
 
-`InMemoryStore`, `SQLiteStore` and `DuckDBStore` take a codec (`NullStore` always uses
-`JsonCodec`, to check the values it discards). The other stores encode the values themselves, as
-described in their sections: their `Pickle` variants use `pickle`, and the others use JSON, without
-all the checks above. For example, they turn an `int` key of a value into a `str` instead of
-rejecting it.
+`InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore` and `LmdbStore` take a codec
+(`NullStore` always uses `JsonCodec`, to check the values it discards). `RedisStore` and
+`PostgresStore` encode the values themselves, as described in their sections: `PickleRedisStore`
+uses `pickle`, and the others use JSON, without all the checks above. For example, they turn an
+`int` key of a value into a `str` instead of rejecting it.
 
 ### Setting Multiple Values
 
@@ -187,16 +187,17 @@ key already exists:
 
 ### Errors
 
-`InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `NullStore` and the
+`InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `NullStore` and the
 [custom stores](#writing-a-custom-store) check the state of the store and the arguments before doing
 anything, also when there is nothing to do (for example `get_many([])`):
 
-| Situation                                       | Error          |
-| ----------------------------------------------- | -------------- |
-| any operation on a closed store                 | `RuntimeError` |
-| a key that is not a `str`                       | `TypeError`    |
-| a single `str` where a list of keys is expected | `TypeError`    |
-| an invalid `on_conflict` or `batch_size`        | `ValueError`   |
+| Situation                                                          | Error          |
+| ------------------------------------------------------------------ | -------------- |
+| any operation on a closed store                                    | `RuntimeError` |
+| a key that is not a `str`                                          | `TypeError`    |
+| a single `str` where a list of keys is expected                    | `TypeError`    |
+| an invalid `on_conflict` or `batch_size`                           | `ValueError`   |
+| a key that the backend cannot keep (see [key limits](#key-limits)) | `ValueError`   |
 
 The other stores also raise `RuntimeError` when a closed store is used, and `ValueError` for an
 invalid `on_conflict` or `batch_size`, but some of their methods accept an empty input without these
@@ -212,6 +213,58 @@ Traceback (most recent call last):
 RuntimeError: InMemoryStore is not open; call open()/aopen() or use it as a context manager.
 
 ```
+
+### Key Limits
+
+A key is a `str`, compared exactly: `"a"` and `"A"` are two keys. Some backends cannot keep every
+string. Their limits apply to them only, and every method that takes a key (reads and deletes
+included) raises `ValueError` for a key outside them, before anything is read or written:
+
+| Store       | Limit                                                                                                            |
+| ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| `LmdbStore` | 1 to 511 UTF-8 bytes, so not the empty string; no lone surrogate                                                 |
+| `FileStore` | the file name, with its extension, has at most 255 characters (see [File Store](#file-store)); no lone surrogate |
+
+## File Store
+
+`FileStore` keeps each value in its own file of a directory. It needs no extra library. With the
+default `JsonCodec`, the files are JSON files (`.json`) that any tool can read; with
+`codec=PickleCodec()`, they are `pickle` files (`.pkl`):
+
+```pycon
+>>> import tempfile
+>>> from persista.store import FileStore
+>>> with tempfile.TemporaryDirectory() as tmpdir, FileStore(tmpdir) as store:
+...     store.set("User:1", {"name": "Alice"})
+...     store.set("user:1", {"name": "Bob"})
+...     print(sorted(path.name for path in store.path.iterdir()))
+...     print(store.get("User:1"))
+['%55ser%3A1.json', 'user%3A1.json']
+{'name': 'Alice'}
+
+```
+
+- **File names.** The name of a file is the percent-encoded key, so a key such as `../a` cannot
+  leave the directory. Upper-case ASCII letters are encoded too, so that two keys never differ only
+  by the case of their file names, which some file systems (the default ones of macOS and Windows)
+  ignore.
+- **Key length.** A file name has at most 255 characters. With `JsonCodec`, this allows 250
+  characters among `a-z`, `0-9` and `_.-~`; an encoded byte takes 3 characters, so only 83
+  upper-case letters or 41 `é`. A file system with a lower limit raises `OSError`.
+- **Writes.** A file is written to a temporary file and then renamed, so a reader never sees a
+  partial value. A write of several keys is atomic per file only.
+- **Concurrency.** `on_conflict="raise"`, `"skip"` and `"merge"` are atomic against the other
+  calls on the same instance only, not against another instance or process that writes the same
+  directory. Use `SQLiteStore` or `LmdbStore` if several processes write the same data.
+- **Other files.** The store only lists, counts and deletes the files whose name is the encoding of
+  a key. The two codecs have different extensions, so their stores ignore each other's files.
+
+:warning: Earlier versions had `JsonFileStore` and `PickleFileStore`, replaced by `FileStore(path)`
+and `FileStore(path, codec=PickleCodec())`. Their files are read if the key has no upper-case ASCII
+letter; the other files are not found. On a file system that ignores case, such a file (for example
+`User.json`) occupies the name of the key `user`: this key reads as missing, and writing it raises
+`ValueError` until the file is removed. There is no migration code: to keep the data, read it with
+the earlier version and write it with the new one, into a new directory.
 
 ## SQL-Backed Stores
 
@@ -446,20 +499,27 @@ with LmdbStore("/tmp/lmdb_store") as store:
     len(store.filter(author="Alice"))  # 2
 ```
 
-Use `PickleLmdbStore` to store arbitrary Python objects (not just JSON-serializable `dict`
-values) using `pickle` instead of JSON:
+- Pass `codec=PickleCodec()` to keep Python types. An environment does not record its codec: reading
+  it with the other codec raises a decoding error.
+- `map_size` (1 GiB by default) is the maximum size of the data. The other keyword arguments are
+  passed to `lmdb.open`, except `readonly` and `create`, which `read_only` replaces.
+- `read_only=True` opens an existing environment without writing to it, and never creates a file or
+  a directory: opening raises `FileNotFoundError` if the data file or the lock file is missing. An
+  environment without a lock file, such as a copy, can be opened with `lock=False` if no process
+  writes it.
+- A write runs in one LMDB write transaction, so a write of several keys is atomic, and
+  `on_conflict="raise"`, `"skip"` and `"merge"` are atomic against the other writers, including
+  other processes. A write waits, without time limit, for the write of another process.
+- :warning: LMDB cannot open the same path twice in one process: opening a second `LmdbStore` of a
+  path raises `lmdb.Error` while the first one is open. Share one store instead.
+- A key has 1 to 511 UTF-8 bytes (see [key limits](#key-limits)).
 
-```python
-from persista.store import PickleLmdbStore
+:warning: Decoding a `pickle` payload can execute arbitrary code. Only use `PickleCodec` with a
+trusted environment.
 
-with PickleLmdbStore("/tmp/lmdb_store") as store:
-    store.set("1", {"title": "Intro to Python", "tags": {"python", "intro"}})
-    store.get("1")  # {'title': 'Intro to Python', 'tags': {'python', 'intro'}}
-```
-
-!!! warning
-`pickle.loads` can execute arbitrary code. Only use `PickleLmdbStore` (and
-`PickleRedisStore`) with data from trusted sources.
+:warning: Earlier versions had `PickleLmdbStore`, replaced by
+`LmdbStore(path, codec=PickleCodec())`, which reads its data. The data of the earlier `LmdbStore` is
+also readable. `map_size` is now a keyword-only argument.
 
 ### Redis
 
@@ -490,17 +550,20 @@ with RedisStore("redis://localhost:6379/0") as store:
 
 Use `PickleRedisStore` to store arbitrary Python objects using `pickle` instead of JSON.
 
+:warning: `pickle.loads` can execute arbitrary code. Only use `PickleRedisStore` with data from
+trusted sources.
+
 ## Async Usage
 
 Every store also exposes `a`-prefixed asynchronous methods (`aget`, `aset`, `acount`, ...) that
 are coroutines (or async iterators), so they must be `await`ed and used from an `async` function.
 The same store instance can be used from both sync and async code -- there is no separate async
 class. Async methods are available on every store, including `RedisStore` and `PostgresStore`,
-which use the async driver of their library. The async methods of `InMemoryStore`, `SQLiteStore` and
-`DuckDBStore` run in a worker thread of the store, one call at a time, so calls that wait for the
-store do not fill the default executor of your application; `LmdbStore` and the file stores run them
-in the default executor. Cancelling an async call that already runs in a thread does not stop it.
-Iterating asynchronously takes one thread hop per batch, so a larger `batch_size` is faster.
+which use the async driver of their library. The async methods of `InMemoryStore`, `FileStore`,
+`SQLiteStore`, `DuckDBStore` and `LmdbStore` run in a worker thread of the store, one call at a time,
+so calls that wait for the store do not fill the default executor of your application. Cancelling an
+async call that already runs in a thread does not stop it. Iterating asynchronously takes one thread
+hop per batch, so a larger `batch_size` is faster.
 
 ```pycon
 >>> import asyncio
@@ -621,12 +684,14 @@ in mini-batches, which is useful when the source data does not fit comfortably i
 
 ```
 
-With `InMemoryStore`, `SQLiteStore` and `DuckDBStore`, a key that is present during a whole
-iteration is yielded exactly once, even if you write or delete keys during the iteration (for
-example, you can delete each batch after processing it). The SQL stores read the keys in order and
-start each batch after the last key of the previous one (keyset pagination). A batch can be smaller
-than `batch_size` with `InMemoryStore`. A custom store must give the same guarantee in
-`_iter_batches`. Closing one of these stores, or a custom store, during an iteration raises
+With `InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore` and `LmdbStore`, a key that is
+present during a whole iteration is yielded exactly once, even if you write or delete keys during the
+iteration (for example, you can delete each batch after processing it). The SQL stores read the keys
+in order and start each batch after the last key of the previous one (keyset pagination).
+`InMemoryStore`, `FileStore` and `LmdbStore` take a snapshot of the keys when the iteration starts,
+so a batch can be smaller than `batch_size`. `keys` and `akeys` do not read the values of
+`FileStore`, `SQLiteStore`, `DuckDBStore` and `LmdbStore`. A custom store must give the same guarantee
+in `_iter_batches`. Closing one of these stores, or a custom store, during an iteration raises
 `RuntimeError`.
 
 ## Writing a Custom Store
@@ -646,9 +711,10 @@ with validated and non-empty arguments, and with encoded payloads (`str` or `byt
 | `_clear()`, `_count()`      | delete everything, count the keys                                |
 | `_iter_batches(batch_size)` | yield the payloads in batches                                    |
 
-`_contains_many` and `_filter_candidates` have a default that you can replace by a faster one.
-`_filter_candidates` may yield more pairs than the ones that match, never fewer: the base applies the
-filter to the decoded values.
+`_contains_many`, `_filter_candidates` and `_iter_key_batches` have a default that you can replace by
+a faster one. `_iter_key_batches(batch_size)` yields lists of keys, for `keys`: by default it reads
+the values with `_iter_batches`. `_filter_candidates` may yield more pairs than the ones that match,
+never fewer: the base applies the filter to the decoded values.
 
 ```pycon
 >>> from persista.store import BaseStore
@@ -708,9 +774,9 @@ filter to the decoded values.
   Data shared with other instances or processes needs a transaction of the backend in `_update`. A
   thread-safe backend sets the class attribute `_thread_safe = True`: no lock is taken, and the async
   calls use the default executor.
-- Each data primitive has an async twin (`_aget_many`, `_aput_many`, `_aupdate`, ...) which runs
-  the sync one in a thread. A backend with a native async driver replaces the twins, and releases the
-  resources that only they use in `_aclose()`.
+- Each data primitive has an async twin (`_aget_many`, `_aput_many`, `_aupdate`,
+  `_aiter_key_batches`, ...) which runs the sync one in a thread. A backend with a native async
+  driver replaces the twins, and releases the resources that only they use in `_aclose()`.
 
 ## Store URIs
 
@@ -727,17 +793,25 @@ class from that URI:
 
 ```
 
-`read_only` is honored by the SQLite, DuckDB, and LMDB stores (and `PickleLmdbStore`); it's
-accepted but ignored everywhere else. `InMemoryStore`, `NullStore` and the `":memory:"` databases of
-the SQL stores always round-trip to a fresh, empty store (with `read_only=True`, the in-memory SQL
-databases raise `ValueError`).
+`read_only` is honored by the SQLite, DuckDB, and LMDB stores; it's accepted but ignored
+everywhere else. `InMemoryStore`, `NullStore` and the `":memory:"` databases of the SQL stores
+always round-trip to a fresh, empty store (with `read_only=True`, the in-memory SQL databases raise
+`ValueError`).
 
 A URI says where the data is, not how the store was configured. The scheme carries the codec of the
-SQL stores (`sqlite`, `sqlite+pickle`, `duckdb`, `duckdb+pickle`), as it does for the file and LMDB
-stores. Other constructor options, such as the `timeout` of `SQLiteStore` or the `table` of
-`PostgresStore`, are not part of the URI. `SQLiteStore.from_uri` and `DuckDBStore.from_uri` accept
-the other keyword arguments of the constructor, to pass them again; the other stores are
-reconstructed with the default options.
+local stores:
+
+| Store         | `JsonCodec` | `PickleCodec`   |
+| ------------- | ----------- | --------------- |
+| `FileStore`   | `file+json` | `file+pickle`   |
+| `SQLiteStore` | `sqlite`    | `sqlite+pickle` |
+| `DuckDBStore` | `duckdb`    | `duckdb+pickle` |
+| `LmdbStore`   | `lmdb`      | `lmdb+pickle`   |
+
+Other constructor options, such as the `timeout` of `SQLiteStore`, the `map_size` of `LmdbStore` or
+the `table` of `PostgresStore`, are not part of the URI. The `from_uri` methods of `FileStore`,
+`SQLiteStore`, `DuckDBStore` and `LmdbStore` accept the other keyword arguments of the constructor,
+to pass them again; the other stores are reconstructed with the default options.
 
 ```pycon
 >>> from persista.store import PickleCodec, SQLiteStore
@@ -753,12 +827,12 @@ If you don't know the concrete store class ahead of time, `store_from_uri` dispa
 URI's scheme to the right class automatically:
 
 ```pycon
->>> from persista.store import JsonFileStore, store_from_uri
->>> with JsonFileStore("data") as store:
+>>> from persista.store import FileStore, store_from_uri
+>>> with FileStore("data") as store:
 ...     store.set("1", {"title": "Intro to Python"})
 ...     uri = store.to_uri()
 >>> with store_from_uri(uri) as reloaded:
-...     print(isinstance(reloaded, JsonFileStore))
+...     print(isinstance(reloaded, FileStore))
 ...     print(reloaded.get("1"))
 True
 {'title': 'Intro to Python'}
@@ -817,18 +891,19 @@ arbitrary code. Only use it with a configuration from a trusted source.
 
 | Store           | Backend                    | Persisted | Pickle values   | Async               |
 | --------------- | -------------------------- | --------- | --------------- | ------------------- |
-| `InMemoryStore` | Python `dict`              | No        | N/A             | Yes                 |
+| `InMemoryStore` | Python `dict`              | No        | Yes (codec)     | Yes (worker thread) |
+| `FileStore`     | One file per value         | Yes       | Yes (codec)     | Yes (worker thread) |
 | `SQLiteStore`   | SQLite                     | Yes       | Yes (codec)     | Yes (worker thread) |
 | `DuckDBStore`   | DuckDB                     | Yes       | Yes (codec)     | Yes (worker thread) |
-| `LmdbStore`     | LMDB                       | Yes       | Yes (`Pickle…`) | Yes (thread pool)   |
+| `LmdbStore`     | LMDB                       | Yes       | Yes (codec)     | Yes (worker thread) |
 | `RedisStore`    | Redis                      | Yes       | Yes (`Pickle…`) | Yes                 |
 | `PostgresStore` | PostgreSQL                 | Yes       | No              | Yes                 |
 | `NullStore`     | None (discards everything) | No        | N/A             | Yes                 |
 
-Use `InMemoryStore` for tests and prototyping, `SQLiteStore`/`DuckDBStore` for local
-persistence without a server (SQLite can be shared by several processes, DuckDB allows one writing
-process), and `RedisStore`/`PostgresStore` when data needs to
-be shared across processes or machines. `NullStore` never actually stores anything -- every
+Use `InMemoryStore` for tests and prototyping, `FileStore` for values that you want to read as files,
+`SQLiteStore`/`DuckDBStore`/`LmdbStore` for local persistence without a server (SQLite can be shared
+by several processes, DuckDB allows one writing process), and `RedisStore`/`PostgresStore` when data
+needs to be shared across processes or machines. `NullStore` never actually stores anything -- every
 `get`/`aget` is a miss -- which is useful for plugging into `Cache` to disable caching entirely
 without changing any calling code. It uses `JsonCodec`, so the cached values must be representable
 in JSON.

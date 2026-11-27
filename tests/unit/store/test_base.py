@@ -143,6 +143,10 @@ class NativeAsyncStore(DictStore):
         self.record("aiter_batches", batch_size)
         yield {"1": '{"native": true}'}
 
+    async def _aiter_key_batches(self, batch_size: int) -> AsyncGenerator[list[str]]:
+        self.record("aiter_key_batches", batch_size)
+        yield ["1"]
+
     async def _afilter_candidates(
         self, fields: Mapping[str, Any]
     ) -> AsyncGenerator[dict[str, Payload]]:
@@ -151,6 +155,14 @@ class NativeAsyncStore(DictStore):
 
     async def _aclose(self) -> None:
         self.record("aclose")
+
+
+class KeysOnlyStore(DictStore):
+    r"""List the keys without reading the values."""
+
+    def _iter_key_batches(self, batch_size: int) -> Iterator[list[str]]:
+        self.record("iter_key_batches", batch_size)
+        yield ["only", "keys"]
 
 
 class NoCountStore(BaseStore):
@@ -1023,6 +1035,31 @@ async def test_base_store_akeys(store: DictStore) -> None:
     assert await collect(store.akeys()) == ["1", "2", "3"]
 
 
+def test_base_store_keys_uses_key_primitive() -> None:
+    store = open_store(KeysOnlyStore)
+    assert list(store.keys()) == ["only", "keys"]
+
+
+async def test_base_store_akeys_uses_key_primitive() -> None:
+    store = open_store(KeysOnlyStore)
+    assert await collect(store.akeys()) == ["only", "keys"]
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda s: list(s.iter_batches()), id="iter_batches"),
+        pytest.param(lambda s: s.filter(), id="filter"),
+    ],
+)
+def test_base_store_values_are_not_read_with_key_primitive(
+    operation: Callable[[BaseStore], Any],
+) -> None:
+    store = open_store(KeysOnlyStore)
+    operation(store)
+    assert [call[0] for call in store.calls] == ["iter_batches"]
+
+
 def test_base_store_iter_batches(store: DictStore) -> None:
     assert list(store.iter_batches(batch_size=2)) == [
         {"1": {"a": 1}, "2": {"a": 2}},
@@ -1253,7 +1290,6 @@ async def test_base_store_aget_many_uses_native_primitive() -> None:
     [
         pytest.param(lambda s: s.aiter_batches(), id="aiter_batches"),
         pytest.param(lambda s: s.avalues(), id="avalues"),
-        pytest.param(lambda s: s.akeys(), id="akeys"),
     ],
 )
 async def test_base_store_aiteration_uses_native_primitive(
@@ -1262,6 +1298,11 @@ async def test_base_store_aiteration_uses_native_primitive(
     store = open_store(NativeAsyncStore)
     await collect(iterate(store))
     assert store.calls[0][0] == "aiter_batches"
+
+
+async def test_base_store_akeys_uses_native_primitive() -> None:
+    store = open_store(NativeAsyncStore)
+    assert await collect(store.akeys()) == ["1"]
 
 
 async def test_base_store_afilter_uses_native_primitive() -> None:
@@ -1278,6 +1319,36 @@ def test_base_store__contains_many(store: DictStore) -> None:
 
 def test_base_store__filter_candidates_yields_every_value(store: DictStore) -> None:
     assert list(store._filter_candidates({"a": 1})) == [store.data]
+
+
+@pytest.mark.parametrize(
+    ("batch_size", "expected"), [(2, [["1", "2"], ["3"]]), (3, [["1", "2", "3"]])]
+)
+def test_base_store__iter_key_batches(
+    store: DictStore, batch_size: int, expected: list[list[str]]
+) -> None:
+    assert list(store._iter_key_batches(batch_size)) == expected
+
+
+def test_base_store__iter_key_batches_empty_store() -> None:
+    with DictStore() as store:
+        assert list(store._iter_key_batches(2)) == []
+
+
+def test_base_store__iter_key_batches_closes_backend_iterator(store: DictStore) -> None:
+    iterator = store._iter_key_batches(1)
+    next(iterator)
+    iterator.close()
+    assert store.closed_iterators == 1
+
+
+def test_base_store__iter_key_batches_of_iterator_without_close() -> None:
+    store = open_store(ListIteratorStore)
+    assert list(store._iter_key_batches(5)) == [["1", "2", "3"]]
+
+
+async def test_base_store__aiter_key_batches(store: DictStore) -> None:
+    assert await collect(store._aiter_key_batches(2)) == [["1", "2"], ["3"]]
 
 
 async def test_base_store__aget_many(store: DictStore) -> None:

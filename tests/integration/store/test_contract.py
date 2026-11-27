@@ -9,9 +9,10 @@ shares is tested in ``test_consistency.py``.
 Some properties are not covered yet, because the filter semantics are
 not final (``True`` and ``1`` still match, and the SQL stores with a JSON
 codec compare in the database, so the filter matrix leaves them out),
-and because the listed backends have no limit on their keys and no
-credentials. The writes of several instances of the same data are tested
-in ``test_sql_concurrency.py``.
+and because the listed backends have no credentials. The writes of
+several instances of the same data are tested in
+``test_sql_concurrency.py`` and ``test_lmdb_concurrency.py``. A file
+store makes no such guarantee.
 """
 
 from __future__ import annotations
@@ -26,13 +27,15 @@ import pytest
 from persista.store import (
     BaseStore,
     DuckDBStore,
+    FileStore,
     InMemoryStore,
     JsonCodec,
+    LmdbStore,
     NullStore,
     PickleCodec,
     SQLiteStore,
 )
-from persista.testing.fixtures import duckdb_available
+from persista.testing.fixtures import duckdb_available, lmdb_available
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator
@@ -120,16 +123,32 @@ BACKENDS: dict[str, Callable[[Codec, Path], BaseStore]] = {
     "sqlite_memory": lambda codec, _path: SQLiteStore(codec=codec),
     "duckdb": lambda codec, path: DuckDBStore(path / "data.duckdb", codec=codec),
     "duckdb_memory": lambda codec, _path: DuckDBStore(codec=codec),
+    "file": lambda codec, path: FileStore(path / "files", codec=codec),
+    "lmdb": lambda codec, path: LmdbStore(path / "lmdb", codec=codec, map_size=2**26),
 }
 
 # The backends that need an optional library, and the mark that skips them.
 MARKS: dict[str, pytest.MarkDecorator] = {
     "duckdb": duckdb_available,
     "duckdb_memory": duckdb_available,
+    "lmdb": lmdb_available,
 }
 
 # The backends whose data outlives the store.
-PERSISTENT = ["sqlite", "duckdb"]
+PERSISTENT = ["sqlite", "duckdb", "file", "lmdb"]
+
+# The backends whose data records the codec that wrote it.
+CODEC_CHECKED = ["sqlite", "duckdb"]
+
+# The backends that have a read-only mode, which rejects the writes.
+READ_ONLY = ["sqlite", "duckdb", "lmdb"]
+
+# The keys that a backend documents it cannot keep.
+SURROGATE_KEY = chr(0xD800)
+REJECTED_KEYS: dict[str, list[str]] = {
+    "file": ["a" * 251, "A" * 84, "x" * 2000, SURROGATE_KEY],
+    "lmdb": ["", "x" * 512, "é" * 256, "x" * 2000, SURROGATE_KEY],
+}
 
 # The backends that apply the filters in SQL with a JSON codec.
 SQL_BACKENDS = ["sqlite", "sqlite_memory", "duckdb", "duckdb_memory"]
@@ -202,14 +221,108 @@ KEYS = [
 ]
 
 
-def test_keys_are_compared_exactly(store: BaseStore) -> None:
-    store.set_many({key: {"index": i} for i, key in enumerate(KEYS)})
-    assert store.get_many(KEYS) == [{"index": i} for i in range(len(KEYS))]
+@pytest.fixture
+def keys(request: pytest.FixtureRequest, unopened_store: BaseStore) -> list[str]:
+    r"""Return the keys of ``KEYS`` that the backend of the store
+    accepts."""
+    del unopened_store
+    backend = request.node.callspec.params["unopened_store"]
+    return [key for key in KEYS if key not in REJECTED_KEYS.get(backend, [])]
 
 
-def test_keys_are_listed_exactly(store: BaseStore) -> None:
-    store.set_many({key: {} for key in KEYS})
-    assert sorted(store.keys()) == sorted(KEYS)
+def test_keys_are_compared_exactly(store: BaseStore, keys: list[str]) -> None:
+    store.set_many({key: {"index": i} for i, key in enumerate(keys)})
+    assert store.get_many(keys) == [{"index": i} for i in range(len(keys))]
+
+
+def test_keys_are_listed_exactly(store: BaseStore, keys: list[str]) -> None:
+    store.set_many({key: {} for key in keys})
+    assert sorted(store.keys()) == sorted(keys)
+
+
+async def test_keys_are_listed_exactly_async(store: BaseStore, keys: list[str]) -> None:
+    await store.aset_many({key: {} for key in keys})
+    assert sorted(await collect(store.akeys())) == sorted(keys)
+
+
+def test_deleting_one_case_of_a_key_keeps_the_other(store: BaseStore) -> None:
+    store.set_many({"a": {"v": 1}, "A": {"v": 2}})
+    store.delete("a")
+    assert store.get_many(["a", "A"]) == [None, {"v": 2}]
+
+
+def rejected_key_params() -> list[Any]:
+    r"""Return one parameter per key that a backend rejects."""
+    return [
+        pytest.param(
+            backend, key, id=f"{backend}-{i}", marks=[MARKS[backend]] if backend in MARKS else []
+        )
+        for backend, rejected in REJECTED_KEYS.items()
+        for i, key in enumerate(rejected)
+    ]
+
+
+KEY_OPERATIONS = [
+    pytest.param(lambda s, k: s.get(k), id="get"),
+    pytest.param(lambda s, k: s.get_many(["a", k]), id="get_many"),
+    pytest.param(lambda s, k: s.contains(k), id="contains"),
+    pytest.param(lambda s, k: s.contains_many(["a", k]), id="contains_many"),
+    pytest.param(lambda s, k: s.set(k, {}), id="set"),
+    pytest.param(lambda s, k: s.set_many({"a": {}, "b": {}, k: {}}), id="set_many"),
+    pytest.param(
+        lambda s, k: s.set_many({"a": {}, "b": {}, k: {}}, on_conflict="raise"),
+        id="set_many_raise",
+    ),
+    pytest.param(
+        lambda s, k: s.set_many({"a": {}, "b": {}, k: {}}, on_conflict="skip"),
+        id="set_many_skip",
+    ),
+    pytest.param(
+        lambda s, k: s.set_many({"a": {}, "b": {}, k: {}}, on_conflict="merge"),
+        id="set_many_merge",
+    ),
+    pytest.param(lambda s, k: s.delete(k), id="delete"),
+    pytest.param(lambda s, k: s.delete_many(["a", k]), id="delete_many"),
+]
+
+ASYNC_KEY_OPERATIONS = [
+    pytest.param(lambda s, k: s.aget(k), id="aget"),
+    pytest.param(lambda s, k: s.aget_many(["a", k]), id="aget_many"),
+    pytest.param(lambda s, k: s.acontains(k), id="acontains"),
+    pytest.param(lambda s, k: s.acontains_many(["a", k]), id="acontains_many"),
+    pytest.param(lambda s, k: s.aset(k, {}), id="aset"),
+    pytest.param(lambda s, k: s.aset_many({"a": {}, "b": {}, k: {}}), id="aset_many"),
+    pytest.param(
+        lambda s, k: s.aset_many({"a": {}, "b": {}, k: {}}, on_conflict="merge"),
+        id="aset_many_merge",
+    ),
+    pytest.param(lambda s, k: s.adelete(k), id="adelete"),
+    pytest.param(lambda s, k: s.adelete_many(["a", k]), id="adelete_many"),
+]
+
+
+@pytest.mark.parametrize(("backend", "key"), rejected_key_params())
+@pytest.mark.parametrize("operation", KEY_OPERATIONS)
+def test_rejected_key_raises_and_changes_nothing(
+    backend: str, key: str, tmp_path: Path, operation: Callable[[BaseStore, str], Any]
+) -> None:
+    with BACKENDS[backend](JsonCodec(), tmp_path) as store:
+        store.set("a", {"v": 1})
+        with pytest.raises(ValueError, match=r"FileStore|LmdbStore"):
+            operation(store, key)
+        assert dict(next(store.iter_batches())) == {"a": {"v": 1}}
+
+
+@pytest.mark.parametrize(("backend", "key"), rejected_key_params())
+@pytest.mark.parametrize("operation", ASYNC_KEY_OPERATIONS)
+async def test_rejected_key_raises_and_changes_nothing_async(
+    backend: str, key: str, tmp_path: Path, operation: Callable[[BaseStore, str], Any]
+) -> None:
+    async with BACKENDS[backend](JsonCodec(), tmp_path) as store:
+        await store.aset("a", {"v": 1})
+        with pytest.raises(ValueError, match=r"FileStore|LmdbStore"):
+            await operation(store, key)
+        assert await store.afilter() == [{"v": 1}]
 
 
 @pytest.mark.parametrize("key", [1, None, b"a", ("a",)])
@@ -549,7 +662,20 @@ def test_read_only_store_reads_the_data(backend: str, codec: Codec, tmp_path: Pa
         assert restored.get("a") == {"v": 1}
 
 
-@pytest.mark.parametrize("backend", backend_params(PERSISTENT))
+@pytest.mark.parametrize("backend", backend_params(READ_ONLY))
+def test_read_only_store_does_not_create_anything(
+    backend: str, codec: Codec, tmp_path: Path
+) -> None:
+    missing = BACKENDS[backend](codec, tmp_path / "missing")
+    restored = missing.from_uri(missing.to_uri(), read_only=True)
+    # Each driver has its own error for a database that does not exist.
+    errors = r"unable to open database|database does not exist|No LMDB environment"
+    with pytest.raises(Exception, match=errors):
+        restored.open()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("backend", backend_params(CODEC_CHECKED))
 def test_open_with_the_other_codec_raises(backend: str, codec: Codec, tmp_path: Path) -> None:
     with BACKENDS[backend](codec, tmp_path):
         pass

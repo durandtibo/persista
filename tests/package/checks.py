@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING
 
 import persista
 from persista.cache import Cache
-from persista.store import InMemoryStore, JsonFileStore, SQLiteStore
+from persista.store import FileStore, InMemoryStore, SQLiteStore
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -243,9 +243,9 @@ def check_store_sqlite() -> None:
         assert store.get("1") == {"name": "Ann"}
 
 
-def check_store_json_file() -> None:
-    r"""Check a round trip through the JSON file store."""
-    with tempfile.TemporaryDirectory() as path, JsonFileStore(path) as store:
+def check_store_file() -> None:
+    r"""Check a round trip through the file store."""
+    with tempfile.TemporaryDirectory() as path, FileStore(path) as store:
         store.set("1", {"name": "Ann"})
         assert store.get("1") == {"name": "Ann"}
 
@@ -296,7 +296,7 @@ CHECKS: tuple[FunctionType, ...] = (
     check_imports_record,
     check_store_in_memory,
     check_store_sqlite,
-    check_store_json_file,
+    check_store_file,
     check_store_duckdb,
     check_store_lmdb,
     check_cache,

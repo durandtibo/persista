@@ -36,10 +36,10 @@ LOCAL_STORES = [
 ]
 
 DIRECTORY_STORES = [
-    pytest.param("JsonFileStore", id="json_file"),
-    pytest.param("PickleFileStore", id="pickle_file"),
-    pytest.param("LmdbStore", id="lmdb", marks=lmdb_available),
-    pytest.param("PickleLmdbStore", id="pickle_lmdb", marks=lmdb_available),
+    pytest.param("FileStore", {}, id="file"),
+    pytest.param("FileStore", {"codec": PickleCodec()}, id="pickle_file"),
+    pytest.param("LmdbStore", {}, id="lmdb", marks=lmdb_available),
+    pytest.param("LmdbStore", {"codec": PickleCodec()}, id="pickle_lmdb", marks=lmdb_available),
 ]
 
 SERVER_STORES = [
@@ -102,19 +102,23 @@ def test_resolve_object_local_store_round_trip(name: str, kwargs: dict[str, Any]
         assert store.get("1") == {"name": "Alice"}
 
 
-@pytest.mark.parametrize("name", DIRECTORY_STORES)
-def test_resolve_object_directory_store_class(name: str, tmp_path: Path) -> None:
+@pytest.mark.parametrize(("name", "kwargs"), DIRECTORY_STORES)
+def test_resolve_object_directory_store_class(
+    name: str, kwargs: dict[str, Any], tmp_path: Path
+) -> None:
     """Test that a configuration builds the path-based store that it
     names."""
-    config = {"_target_": f"persista.store.{name}", "path": tmp_path / "data"}
+    config = {"_target_": f"persista.store.{name}", "path": tmp_path / "data", **kwargs}
     assert type(resolve_object(config, cls=BaseStore)).__name__ == name
 
 
-@pytest.mark.parametrize("name", DIRECTORY_STORES)
-def test_resolve_object_directory_store_round_trip(name: str, tmp_path: Path) -> None:
+@pytest.mark.parametrize(("name", "kwargs"), DIRECTORY_STORES)
+def test_resolve_object_directory_store_round_trip(
+    name: str, kwargs: dict[str, Any], tmp_path: Path
+) -> None:
     """Test that a path-based store built from a configuration stores
     values."""
-    config = {"_target_": f"persista.store.{name}", "path": tmp_path / "data"}
+    config = {"_target_": f"persista.store.{name}", "path": tmp_path / "data", **kwargs}
     with resolve_object(config, cls=BaseStore) as store:
         store.set("1", {"name": "Alice"})
         assert store.get("1") == {"name": "Alice"}
