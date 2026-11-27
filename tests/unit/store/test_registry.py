@@ -6,15 +6,22 @@ import pytest
 
 import persista.store as store_pkg
 from persista.store import (
+    DuckDBStore,
     InMemoryStore,
+    JsonCodec,
     JsonFileStore,
     NullStore,
+    PickleCodec,
+    SQLiteStore,
     register_scheme,
     store_from_uri,
 )
+from persista.testing.fixtures import duckdb_available
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from persista.store import BaseStore, Codec
 
 
 def test_store_from_uri_memory_scheme() -> None:
@@ -34,6 +41,25 @@ def test_store_from_uri_file_json(tmp_path: Path) -> None:
     store = store_from_uri(uri)
     assert isinstance(store, JsonFileStore)
     assert store.get("1") == {"a": 1}
+
+
+@pytest.mark.parametrize(
+    ("cls", "codec"),
+    [
+        pytest.param(SQLiteStore, JsonCodec(), id="sqlite"),
+        pytest.param(SQLiteStore, PickleCodec(), id="sqlite_pickle"),
+        pytest.param(DuckDBStore, JsonCodec(), id="duckdb", marks=duckdb_available),
+        pytest.param(DuckDBStore, PickleCodec(), id="duckdb_pickle", marks=duckdb_available),
+    ],
+)
+def test_store_from_uri_sql_store_keeps_codec(
+    tmp_path: Path, cls: type[BaseStore], codec: Codec
+) -> None:
+    with cls(tmp_path / "data.db", codec=codec) as original:
+        original.set("1", {"a": 1})
+        uri = original.to_uri()
+    with store_from_uri(uri) as store:
+        assert (type(store), type(store._codec), store.get("1")) == (cls, type(codec), {"a": 1})
 
 
 async def test_store_from_uri_result_supports_async_methods() -> None:

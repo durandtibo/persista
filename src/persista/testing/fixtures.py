@@ -6,8 +6,6 @@ r"""Define some pytest fixtures for testing.
 from __future__ import annotations
 
 __all__ = [
-    "aiosqlite_available",
-    "aiosqlite_not_available",
     "duckdb_available",
     "duckdb_not_available",
     "faker_available",
@@ -29,7 +27,6 @@ __all__ = [
 import pytest
 
 from persista.utils.imports import (
-    is_aiosqlite_available,
     is_duckdb_available,
     is_faker_available,
     is_httpx_available,
@@ -38,13 +35,6 @@ from persista.utils.imports import (
     is_redis_available,
     is_requests_available,
     is_urllib3_available,
-)
-
-aiosqlite_available: pytest.MarkDecorator = pytest.mark.skipif(
-    not is_aiosqlite_available(), reason="Requires aiosqlite"
-)
-aiosqlite_not_available: pytest.MarkDecorator = pytest.mark.skipif(
-    is_aiosqlite_available(), reason="Skip if aiosqlite is available"
 )
 
 duckdb_available: pytest.MarkDecorator = pytest.mark.skipif(

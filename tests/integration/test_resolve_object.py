@@ -15,7 +15,7 @@ from coola.factory import resolve_object
 from persista.cache import Cache
 from persista.record import Record
 from persista.record.store import RecordStore
-from persista.store import BaseStore, InMemoryStore, SQLiteStore
+from persista.store import BaseStore, InMemoryStore, PickleCodec, SQLiteStore
 from persista.testing.fixtures import (
     duckdb_available,
     lmdb_available,
@@ -29,7 +29,9 @@ if TYPE_CHECKING:
 LOCAL_STORES = [
     pytest.param("InMemoryStore", {}, id="in_memory"),
     pytest.param("SQLiteStore", {"database": ":memory:"}, id="sqlite"),
-    pytest.param("PickleSQLiteStore", {"database": ":memory:"}, id="pickle_sqlite"),
+    pytest.param(
+        "SQLiteStore", {"database": ":memory:", "codec": PickleCodec()}, id="pickle_sqlite"
+    ),
     pytest.param("DuckDBStore", {"database": ":memory:"}, id="duckdb", marks=duckdb_available),
 ]
 
@@ -139,7 +141,11 @@ def test_resolve_object_store_class_method(tmp_path: Path) -> None:
     path = tmp_path / "data.sqlite"
     with SQLiteStore(path) as store:
         store.set("1", {"name": "Alice"})
-    config = {"_target_": "persista.store.SQLiteStore", "_init_": "from_path", "path": path}
+    config = {
+        "_target_": "persista.store.SQLiteStore",
+        "_init_": "from_uri",
+        "uri": SQLiteStore(path).to_uri(),
+    }
     with resolve_object(config, cls=BaseStore) as reloaded:
         assert reloaded.get("1") == {"name": "Alice"}
 

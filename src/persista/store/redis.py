@@ -58,9 +58,8 @@ class BaseRedisStore(UnmigratedStore, MultilineDisplayMixin):
     Every sync method runs through the eagerly-created ``redis.Redis``
     client; every async (``a``-prefixed) method runs through a
     ``redis.asyncio.Redis`` client, created lazily on first use, since
-    ``redis-py`` bundles both under one package (unlike
-    SQLite/aiosqlite, no ``asyncio.to_thread`` fallback is needed
-    here).
+    ``redis-py`` bundles both under one package (no
+    ``asyncio.to_thread`` fallback is needed here).
 
     Args:
         url: The Redis connection URL passed to

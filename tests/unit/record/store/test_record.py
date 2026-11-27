@@ -8,10 +8,18 @@ import pytest
 
 from persista.record import Record
 from persista.record.store import RecordStore
-from persista.store import BaseStore, InMemoryStore, NullStore, PickleSQLiteStore, SQLiteStore
+from persista.store import BaseStore, InMemoryStore, NullStore, PickleCodec, SQLiteStore
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from persista.store import OnConflict
+
+
+def create_pickle_sqlite_store() -> SQLiteStore:
+    r"""Return an in-memory SQLite store with the pickle codec."""
+    return SQLiteStore(codec=PickleCodec())
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -217,17 +225,19 @@ async def test_afilter_uses_store_afilter_items_when_available() -> None:
 # --- filter parity with the underlying store ---
 
 
-@pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, PickleSQLiteStore])
-def test_filter_matches_store_filter(store_cls: type[BaseStore], records: list[Record]) -> None:
+@pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, create_pickle_sqlite_store])
+def test_filter_matches_store_filter(
+    store_cls: Callable[[], BaseStore], records: list[Record]
+) -> None:
     with RecordStore(store_cls()) as store:
         store.set_many(records)
         result = store.filter(author="Bob")
         assert [dict(record.metadata) for record in result] == store.store.filter(author="Bob")
 
 
-@pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, PickleSQLiteStore])
+@pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, create_pickle_sqlite_store])
 async def test_afilter_matches_store_afilter(
-    store_cls: type[BaseStore], records: list[Record]
+    store_cls: Callable[[], BaseStore], records: list[Record]
 ) -> None:
     async with RecordStore(store_cls()) as store:
         await store.aset_many(records)
@@ -237,7 +247,7 @@ async def test_afilter_matches_store_afilter(
 
 
 def test_filter_pickle_sqlite_store_returns_matching_records(records: list[Record]) -> None:
-    with RecordStore(PickleSQLiteStore()) as store:
+    with RecordStore(create_pickle_sqlite_store()) as store:
         store.set_many(records)
         assert store.filter(author="Bob") == [records[2], records[3]]
 
@@ -245,7 +255,7 @@ def test_filter_pickle_sqlite_store_returns_matching_records(records: list[Recor
 async def test_afilter_pickle_sqlite_store_returns_matching_records(
     records: list[Record],
 ) -> None:
-    async with RecordStore(PickleSQLiteStore()) as store:
+    async with RecordStore(create_pickle_sqlite_store()) as store:
         await store.aset_many(records)
         assert await store.afilter(author="Bob") == [records[2], records[3]]
 
@@ -256,15 +266,19 @@ def test_filter_null_store_returns_empty(records: list[Record]) -> None:
         assert store.filter() == []
 
 
-@pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, PickleSQLiteStore, NullStore])
-def test_filter_closed_store_raises(store_cls: type[BaseStore]) -> None:
+@pytest.mark.parametrize(
+    "store_cls", [InMemoryStore, SQLiteStore, create_pickle_sqlite_store, NullStore]
+)
+def test_filter_closed_store_raises(store_cls: Callable[[], BaseStore]) -> None:
     store = RecordStore(store_cls())
     with pytest.raises(RuntimeError, match=r"not open"):
         store.filter(author="Alice")
 
 
-@pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, PickleSQLiteStore, NullStore])
-async def test_afilter_closed_store_raises(store_cls: type[BaseStore]) -> None:
+@pytest.mark.parametrize(
+    "store_cls", [InMemoryStore, SQLiteStore, create_pickle_sqlite_store, NullStore]
+)
+async def test_afilter_closed_store_raises(store_cls: Callable[[], BaseStore]) -> None:
     store = RecordStore(store_cls())
     with pytest.raises(RuntimeError, match=r"not open"):
         await store.afilter(author="Alice")

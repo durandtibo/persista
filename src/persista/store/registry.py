@@ -15,7 +15,7 @@ from persista.store.lmdb import LmdbStore, PickleLmdbStore
 from persista.store.null import NullStore
 from persista.store.postgres import PostgresStore
 from persista.store.redis import RedisStore
-from persista.store.sqlite import PickleSQLiteStore, SQLiteStore
+from persista.store.sqlite import SQLiteStore
 
 if TYPE_CHECKING:
     from persista.store.base import BaseStore
@@ -26,8 +26,9 @@ _SCHEMES: dict[str, type[BaseStore]] = {
     "file+json": JsonFileStore,
     "file+pickle": PickleFileStore,
     "sqlite": SQLiteStore,
-    "sqlite+pickle": PickleSQLiteStore,
+    "sqlite+pickle": SQLiteStore,
     "duckdb": DuckDBStore,
+    "duckdb+pickle": DuckDBStore,
     "lmdb": LmdbStore,
     "lmdb+pickle": PickleLmdbStore,
     "postgresql": PostgresStore,

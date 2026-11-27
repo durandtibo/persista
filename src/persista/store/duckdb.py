@@ -1,393 +1,87 @@
-r"""Provide a DuckDB-backed implementation of ``BaseStore``, storing
-values as JSON."""
+r"""Provide a DuckDB-backed implementation of ``BaseStore``."""
 
 from __future__ import annotations
 
-__all__ = ["BaseDuckDBStore", "DuckDBStore"]
+__all__ = ["DuckDBStore"]
 
-import asyncio
-import json
+import contextlib
 import logging
 import threading
-from abc import abstractmethod
+import weakref
 from typing import TYPE_CHECKING, Any
 
 from coola.display import MultilineDisplayMixin
+from coola.utils.path import sanitize_path
 
-from persista.store.threaded import ThreadedAsyncStoreMixin
-from persista.store.uri import decode_path_uri, encode_path_uri
-from persista.store.validation import (
-    normalize_on_conflict,
-    resolve_conflicts,
-    validate_batch_size,
-    validate_field_name,
-)
+from persista.store.sql import SQLStore
+from persista.store.validation import validate_field_name
 from persista.utils.imports import check_duckdb, is_duckdb_available
-from persista.utils.path import prepare_store_path
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator, Mapping
+    from collections.abc import Generator, Sequence
     from pathlib import Path
-    from typing import Self
 
-    from persista.store.types import OnConflict
+    from persista.store.codec import Codec
 
 if TYPE_CHECKING or is_duckdb_available():  # pragma: no cover
     import duckdb
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-
-class BaseDuckDBStore(ThreadedAsyncStoreMixin, MultilineDisplayMixin):
-    r"""Define a base class for DuckDB-backed key-value stores.
-
-    Subclasses only need to implement :meth:`_select_columns`,
-    :meth:`_row_to_kv`, :meth:`_set_many`, and :meth:`_filter_expr`,
-    which control how a value is laid out in the table (see
-    :class:`DuckDBStore` for a single JSON column).
-
-    Args:
-        database: Path to the DuckDB file, or ``":memory:"`` for an
-            in-memory database (useful for testing). Matches the
-            ``database`` argument name used by ``duckdb.connect``.
-        **kwargs: Additional keyword arguments to pass to
-            ``duckdb.connect``.
-    """
-
-    #: Name of the column holding the key. Subclasses with a
-    #: different key column name should override this.
-    _key_column: str = "key"
-
-    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
-    _scheme: str = "duckdb"
-
-    def __init__(self, database: Path | str, **kwargs: Any) -> None:
-        check_duckdb()
-        self._database = prepare_store_path(database)
-        self._kwargs = kwargs
-        self._closed = True
-        self._conn: duckdb.DuckDBPyConnection | None = None
-        # DuckDB connections aren't safe for concurrent use from multiple
-        # threads; ThreadedAsyncStoreMixin runs each async call in a worker
-        # thread, so every access to self._conn must be serialized.
-        # Reentrant so set_many can hold it across the whole check-then-act
-        # sequence for on_conflict != "overwrite" (which calls self.get/
-        # self.contains_many, themselves taking the lock).
-        self._lock = threading.RLock()
-
-    def _ensure_schema(self) -> None:
-        """Recreate the store's table schema on a fresh connection.
-
-        Called once from ``__init__`` and again each time the store is
-        reopened via :meth:`__enter__` after being closed. A
-        ``:memory:`` database starts empty every time it is
-        (re)connected to, so this is what makes reopening a closed in-
-        memory store behave like a reset rather than resuming where it
-        left off. The default implementation does nothing; subclasses
-        override it.
-        """
-
-    @abstractmethod
-    def _select_columns(self) -> list[str]:
-        """Return the columns to select to reconstruct a full row.
-
-        The first column must be the key column.
-        """
-
-    @abstractmethod
-    def _row_to_kv(self, row: tuple) -> tuple[str, dict[str, Any]]:
-        """Convert a raw row (as returned by a ``_select_columns()``
-        query) to a ``(key, value)`` pair."""
-
-    @abstractmethod
-    def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
-        """Write key-value pairs to the store, overwriting any existing
-        values for the same keys."""
-
-    @abstractmethod
-    def _filter_expr(self, field: str) -> str:
-        """Build the SQL expression that reads ``field`` from a stored
-        value, for use in a :meth:`filter` ``WHERE`` clause.
-
-        Must validate ``field`` (e.g. via :func:`validate_field_name`)
-        before interpolating it into SQL.
-        """
-
-    def _select_sql(self, where: str = "") -> str:
-        columns = ", ".join(f'"{name}"' for name in self._select_columns())
-        sql = f"SELECT {columns} FROM store"  # noqa: S608
-        if where:
-            sql += f" WHERE {where}"
-        return sql
-
-    def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
-        return list(self.filter_items(**field_filters).values())
-
-    def filter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
-        """Like :meth:`filter`, but keyed by the matching rows' keys.
-
-        This lets callers that need to know *which* key each matching
-        value belongs to (e.g. a record store layered on top) push their
-        filter down into the SQL ``WHERE`` clause instead of pulling
-        every row and filtering in Python.
-        """
-        self._check_open()
-        if not field_filters:
-            with self._lock:
-                rows = self._connection.execute(self._select_sql()).fetchall()
-            return dict(self._row_to_kv(row) for row in rows)
-
-        conditions, values = [], []
-        for field, expected in field_filters.items():
-            expr = self._filter_expr(field)
-            if expected is None:
-                conditions.append(f"{expr} IS NULL")
-            else:
-                conditions.append(f"{expr} = ?")
-                values.append(expected)
-        where = " AND ".join(conditions)
-        with self._lock:
-            rows = self._connection.execute(self._select_sql(where), values).fetchall()
-        return dict(self._row_to_kv(row) for row in rows)
-
-    async def afilter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
-        """Async equivalent of :meth:`filter_items`."""
-        return await asyncio.to_thread(lambda: self.filter_items(**field_filters))
-
-    @property
-    def connection(self) -> duckdb.DuckDBPyConnection:
-        """Return the underlying DuckDB connection.
-
-        This is not part of the regular store API. It is meant for
-        debugging or running specific commands. The store must be open.
-        """
-        return self._connection
-
-    @property
-    def _connection(self) -> duckdb.DuckDBPyConnection:
-        if self._conn is None:
-            msg = f"{type(self).__name__} is not open."
-            raise RuntimeError(msg)
-        return self._conn
-
-    def _check_open(self) -> None:
-        if self._closed:
-            msg = (
-                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
-                "context manager."
-            )
-            raise RuntimeError(msg)
-
-    def open(self) -> None:
-        if not self._closed:
-            return
-        with self._lock:
-            self._conn = duckdb.connect(self._database, **self._kwargs)
-        self._closed = False
-        self._ensure_schema()
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        logger.info("Closing DuckDB at %s", self._database)
-        with self._lock:
-            self._connection.close()
-        self._closed = True
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
-
-    def get(self, key: str) -> dict[str, Any] | None:
-        self._check_open()
-        with self._lock:
-            row = self._connection.execute(
-                self._select_sql(f"{self._key_column} = ?"), [key]
-            ).fetchone()
-        return self._row_to_kv(row)[1] if row else None
-
-    def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
-        self._check_open()
-        if not keys:
-            return []
-        placeholders = ", ".join("?" * len(keys))
-        with self._lock:
-            rows = self._connection.execute(
-                self._select_sql(f"{self._key_column} IN ({placeholders})"), keys
-            ).fetchall()
-        by_key = dict(self._row_to_kv(row) for row in rows)
-        return [by_key.get(key) for key in keys]
-
-    def set(
-        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
-    ) -> None:
-        self.set_many({key: value}, on_conflict=on_conflict)
-
-    def set_many(
-        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
-    ) -> None:
-        self._check_open()
-        if not items:
-            return
-        on_conflict = normalize_on_conflict(on_conflict)
-        if on_conflict == "overwrite":
-            self._set_many(items)
-            return
-
-        with self._lock:
-            to_write = resolve_conflicts(items, on_conflict, self.contains_many, self.get)
-            self._set_many(to_write)
-
-    def delete(self, key: str) -> None:
-        self._check_open()
-        with self._lock:
-            self._connection.execute(
-                f"DELETE FROM store WHERE {self._key_column} = ?",  # noqa: S608
-                [key],
-            )
-
-    def delete_many(self, keys: list[str]) -> None:
-        self._check_open()
-        if not keys:
-            return
-        placeholders = ", ".join("?" * len(keys))
-        with self._lock:
-            self._connection.execute(
-                f"DELETE FROM store WHERE {self._key_column} IN ({placeholders})",  # noqa: S608
-                keys,
-            )
-
-    def clear(self) -> None:
-        self._check_open()
-        with self._lock:
-            self._connection.execute("DELETE FROM store")
-
-    def contains(self, key: str) -> bool:
-        self._check_open()
-        with self._lock:
-            row = self._connection.execute(
-                f"SELECT 1 FROM store WHERE {self._key_column} = ? LIMIT 1",  # noqa: S608
-                [key],
-            ).fetchone()
-        return row is not None
-
-    def contains_many(self, keys: list[str]) -> list[bool]:
-        self._check_open()
-        if not keys:
-            return []
-        placeholders = ", ".join("?" * len(keys))
-        with self._lock:
-            existing = {
-                row[0]
-                for row in self._connection.execute(
-                    f"SELECT {self._key_column} FROM store "  # noqa: S608
-                    f"WHERE {self._key_column} IN ({placeholders})",
-                    keys,
-                ).fetchall()
-            }
-        return [key in existing for key in keys]
-
-    def keys(self) -> Iterator[str]:
-        self._check_open()
-        with self._lock:
-            rows = self._connection.execute(
-                f"SELECT {self._key_column} FROM store"  # noqa: S608
-            ).fetchall()
-        for (key,) in rows:
-            yield key
-
-    def iter_batches(
-        self, batch_size: int = 32
-    ) -> Generator[dict[str, dict[str, Any]], None, None]:
-        validate_batch_size(batch_size)
-        self._check_open()
-        sql = f"{self._select_sql()} ORDER BY {self._key_column} LIMIT ? OFFSET ?"
-        offset = 0
-        while True:
-            with self._lock:
-                rows = self._connection.execute(sql, [batch_size, offset]).fetchall()
-            if not rows:
-                return
-            yield dict(self._row_to_kv(row) for row in rows)
-            if len(rows) < batch_size:
-                return
-            offset += batch_size
-
-    def count(self) -> int:
-        self._check_open()
-        with self._lock:
-            row = self._connection.execute("SELECT COUNT(*) FROM store").fetchone()
-            return row[0] if row else 0
-
-    def get_columns_info(self) -> dict[str, str]:
-        """Return the column names and types of the store's table.
-
-        Returns:
-            A mapping of column name to DuckDB type name.
-
-        Example:
-            ```pycon
-            >>> from persista.store import DuckDBStore
-            >>> with DuckDBStore(":memory:") as store:
-            ...     store.get_columns_info()
-            ...
-            {'key': 'VARCHAR', 'value': 'JSON'}
-
-            ```
-        """
-        self._check_open()
-        with self._lock:
-            rows = self._connection.sql("DESCRIBE store").fetchall()
-        return {row[0]: str(row[1]) for row in rows}
-
-    def show_columns_info(self) -> None:
-        """Print the store's table column names and types to stdout.
-
-        This is a convenience wrapper around :meth:`get_columns_info`
-        for interactive/debugging use. For programmatic access, use
-        :meth:`get_columns_info` instead.
-        """
-        self._check_open()
-        with self._lock:
-            self._connection.sql("DESCRIBE store").show()
-
-    def to_uri(self) -> str:
-        return encode_path_uri(self._scheme, str(self._database))
-
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
-        path = decode_path_uri(uri, expected_scheme=cls._scheme)
-        return cls(path, read_only=read_only)
-
-    def _get_repr_kwargs(self) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {"database": self._database, "closed": self._closed}
-        if not self._closed:
-            kwargs["count"] = f"{self.count():,}"
-        return kwargs | self._kwargs
+# The write lock of each database file that an open store uses, keyed by
+# the device and inode of the file. A lock is dropped once no store holds
+# it.
+_DATABASE_LOCKS: weakref.WeakValueDictionary[tuple[int, int], threading.RLock] = (
+    weakref.WeakValueDictionary()
+)
+_DATABASE_LOCKS_GUARD = threading.Lock()
 
 
-_CREATE_TABLE = """
-    CREATE TABLE IF NOT EXISTS store (
-        key   VARCHAR PRIMARY KEY,
-        value JSON NOT NULL
-    )
-"""
-
-
-class DuckDBStore(BaseDuckDBStore):
+class DuckDBStore(SQLStore, MultilineDisplayMixin):
     """A DuckDB-backed key-value store.
 
     Persists values to a DuckDB database and supports adding,
-    retrieving, filtering, and deleting key-value pairs.  Each value
-    is stored as a JSON column, which provides flexibility for
-    arbitrary value fields without requiring a fixed schema.
+    retrieving, filtering, and deleting key-value pairs. The values are
+    kept in the table ``store``, which has a ``key`` column and a
+    ``value`` column. With the default
+    :class:`~persista.store.JsonCodec`, the ``value`` column holds JSON
+    and :meth:`filter` is applied by the database. With a
+    :class:`~persista.store.PickleCodec`, it holds opaque bytes, which
+    keep Python types, and :meth:`filter` reads every value.
+
+    A store has one connection, used by the sync and the async methods,
+    so they see the same data. The async methods run in a worker thread
+    of the store.
+
+    A write with ``on_conflict`` set to ``"raise"``, ``"skip"`` or
+    ``"merge"`` runs in a transaction. The writes of all the stores of one
+    process that use the same database file wait for each other, so it is
+    atomic against them. DuckDB allows only one process to write to a
+    database. A write made without a store (for example with
+    :attr:`connection`) while a store writes the same rows can make one
+    of them raise ``duckdb.TransactionException``.
+
+    Opening the store creates the database file, its parent directories
+    and the table if they do not exist (unless ``read_only``).
 
     Args:
-        database: Path to the DuckDB file, or ``":memory:"`` for an
-            in-memory database (useful for testing). Matches the
-            ``database`` argument name used by ``duckdb.connect``.
+        database: Path to the DuckDB file, or ``":memory:"`` for a private
+            in-memory database. Matches the ``database`` argument name
+            used by ``duckdb.connect``.
+        codec: The codec of the values, a
+            :class:`~persista.store.JsonCodec` (default) or a
+            :class:`~persista.store.PickleCodec`. Decoding a pickle
+            payload can execute arbitrary code: only use it with a
+            trusted database.
+        read_only: If ``True``, open an existing database read-only. No
+            file or directory is created.
         **kwargs: Additional keyword arguments to pass to
             ``duckdb.connect``.
+
+    Raises:
+        RuntimeError: If the ``duckdb`` package is not installed.
+        ValueError: If the codec is not supported, or if ``read_only`` is
+            used with an in-memory database.
 
     Example:
         ```pycon
@@ -419,30 +113,112 @@ class DuckDBStore(BaseDuckDBStore):
         ```
     """
 
-    def __init__(self, database: Path | str = ":memory:", **kwargs: Any) -> None:
-        super().__init__(database, **kwargs)
+    _scheme = "duckdb"
+    _key_type = "VARCHAR"
 
-    def _ensure_schema(self) -> None:
-        if not self._kwargs.get("read_only", False):
-            with self._lock:
-                self._connection.execute(_CREATE_TABLE)
+    def __init__(
+        self,
+        database: Path | str = ":memory:",
+        *,
+        codec: Codec | None = None,
+        read_only: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        check_duckdb()
+        if database != ":memory:":
+            database = sanitize_path(database)
+        elif read_only:
+            msg = f"read_only needs a database file, not an in-memory database: {database!r}"
+            raise ValueError(msg)
+        super().__init__(database, codec=codec, read_only=read_only, **kwargs)
+        self._conn: duckdb.DuckDBPyConnection | None = None
 
-    def _select_columns(self) -> list[str]:
-        return ["key", "value"]
+    @property
+    def connection(self) -> duckdb.DuckDBPyConnection:
+        """Return the underlying DuckDB connection.
 
-    def _row_to_kv(self, row: tuple) -> tuple[str, dict[str, Any]]:
-        return row[0], json.loads(row[1])
+        This is not part of the regular store API. It is meant for
+        debugging or running specific commands. The store must be open.
 
-    def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
-        if items:
-            with self._lock:
-                self._connection.executemany(
-                    "INSERT OR REPLACE INTO store VALUES (?, ?)",
-                    [(key, json.dumps(value)) for key, value in items.items()],
-                )
+        Raises:
+            RuntimeError: If the store is not open.
+        """
+        if self._conn is None:
+            msg = f"{type(self).__name__} is not open."
+            raise RuntimeError(msg)
+        return self._conn
 
-        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+    def _open(self) -> None:
+        database = self._database
+        if not self._read_only and not isinstance(database, str):
+            database.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = duckdb.connect(database, read_only=self._read_only, **self._kwargs)
+        # An in-memory database belongs to this connection only.
+        if not isinstance(database, str):
+            self._write_lock = _get_database_lock(database)
+        self._init_schema()
+
+    def _close(self) -> None:
+        if self._conn is None:
+            return
+        logger.info("Closing DuckDB at %s", self._database)
+        self._conn.close()
+        self._conn = None
+        self._write_lock = contextlib.nullcontext()
+
+    def _fetch(self, sql: str, params: Sequence[Any] = ()) -> list[tuple[Any, ...]]:
+        return self.connection.execute(sql, params).fetchall()
+
+    def _execute(self, sql: str, params: Sequence[Any] = ()) -> None:
+        self.connection.execute(sql, params)
+
+    def _executemany(self, sql: str, rows: Sequence[Sequence[Any]]) -> None:
+        self.connection.executemany(sql, rows)
+
+    @contextlib.contextmanager
+    def _transaction(self) -> Generator[None, None, None]:
+        connection = self.connection
+        connection.begin()
+        try:
+            yield
+            connection.commit()
+        except BaseException:
+            # DuckDB ends the transaction itself after some errors, and
+            # then rollback fails: keep the first error.
+            with contextlib.suppress(duckdb.Error):
+                connection.rollback()
+            raise
+
+    def _table_columns(self) -> list[tuple[str, str, bool]]:
+        found = self._fetch(
+            "SELECT 1 FROM information_schema.tables WHERE table_catalog = current_database() "
+            "AND table_schema = current_schema() AND lower(table_name) = 'store'"
+        )
+        if not found:
+            return []
+        # The columns of table_info are: cid, name, type, notnull,
+        # dflt_value, pk.
+        return [(row[1], row[2], bool(row[5])) for row in self._fetch("PRAGMA table_info('store')")]
 
     def _filter_expr(self, field: str) -> str:
         validate_field_name(field)
         return f"json_extract_string(value, '$.{field}')"
+
+
+def _get_database_lock(database: Path) -> threading.RLock:
+    r"""Return the write lock of a database file.
+
+    Args:
+        database: The path to an existing database file.
+
+    Returns:
+        The same lock for every path that leads to the same file, as long
+        as a caller holds a reference to it.
+    """
+    stat = database.stat()
+    key = (stat.st_dev, stat.st_ino)
+    with _DATABASE_LOCKS_GUARD:
+        lock = _DATABASE_LOCKS.get(key)
+        if lock is None:
+            lock = _DATABASE_LOCKS[key] = threading.RLock()
+        return lock

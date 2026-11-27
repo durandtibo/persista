@@ -6,7 +6,6 @@ import pytest
 
 from persista.testing import fixtures
 from persista.utils.imports import (
-    is_aiosqlite_available,
     is_duckdb_available,
     is_faker_available,
     is_httpx_available,
@@ -24,7 +23,6 @@ if TYPE_CHECKING:
 # should mirror. ``httpx`` is defined in the module but intentionally not
 # part of ``__all__``, so it is included separately below.
 PAIRS = {
-    "aiosqlite": is_aiosqlite_available,
     "duckdb": is_duckdb_available,
     "faker": is_faker_available,
     "httpx": is_httpx_available,

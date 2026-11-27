@@ -1422,6 +1422,20 @@ def test_base_store__decode_many(store: DictStore) -> None:
     assert store._decode_many(["1", "2"], {"1": '{"a": 1}'}) == [{"a": 1}, None]
 
 
+@pytest.mark.parametrize(
+    ("value", "fields", "expected"),
+    [
+        pytest.param({"a": 1, "b": 2}, {"a": 1}, True, id="match"),
+        pytest.param({"a": 1}, {}, True, id="no_field"),
+        pytest.param({"a": 1}, {"a": 2}, False, id="other_value"),
+        pytest.param({"a": 1}, {"a": 1, "b": 2}, False, id="one_field_differs"),
+        pytest.param({}, {"a": None}, True, id="missing_is_none"),
+    ],
+)
+def test_base_store__matches(value: dict, fields: dict, expected: bool) -> None:
+    assert BaseStore._matches(value, fields) is expected
+
+
 def test_base_store__matching_values(store: DictStore) -> None:
     batch = {"1": '{"a": 1}', "2": '{"a": 2}', "3": "{}"}
     assert store._matching_values(batch, {"a": 2}) == [{"a": 2}]
