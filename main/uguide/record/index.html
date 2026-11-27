@@ -1306,7 +1306,7 @@ UUID <code>id</code> from the metadata itself, so two records with the same meta
 <div class="highlight"><pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">persista.record</span><span class="w"> </span><span class="kn">import</span> <span class="n">Record</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">record</span> <span class="o">=</span> <span class="n">Record</span><span class="o">.</span><span class="n">from_metadata</span><span class="p">({</span><span class="s2">"source"</span><span class="p">:</span> <span class="s2">"cats.txt"</span><span class="p">,</span> <span class="s2">"page"</span><span class="p">:</span> <span class="mi">1</span><span class="p">})</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">record</span><span class="o">.</span><span class="n">metadata</span>
-<span class="go">{'source': 'cats.txt', 'page': 1}</span>
+<span class="go">mappingproxy({'source': 'cats.txt', 'page': 1})</span>
 </code></pre></div>
 <p>A <code>Record</code> can also be constructed directly with an explicit <code>id</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">persista.record</span><span class="w"> </span><span class="kn">import</span> <span class="n">Record</span>
