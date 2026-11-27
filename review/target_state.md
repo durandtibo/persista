@@ -119,7 +119,7 @@ holds the `pytest` marks that skip the tests of a missing optional library.
    (`0.0.4a3`) and the README states that the API is not stable. The release notes list the changes,
    including those of the stored data (section 6).
 3. **No slower on the common paths.** `get`, `get_many`, `set_many` and SQL `filter` on `str` and
-   `int` fields must pass the benchmark gate of section 8.
+   `int` fields must pass the benchmark gate of section 8, apart from the check of D5.
 4. **`CLAUDE.md` applies**: keyword-only options, validation helpers, guarded imports, one pull
    request per change.
 
@@ -294,9 +294,9 @@ class Codec(Protocol):
     def decode(self, payload: str | bytes) -> dict[str, Any]: ...
 ```
 
-`JsonCodec` (default, rejects NaN and infinity) and `PickleCodec`. A codec replaces the classes
-`PickleFileStore`, `PickleSQLiteStore`, `PickleLmdbStore` and `PickleRedisStore`. A SQL store whose
-existing table does not match the codec raises on `open`.
+`JsonCodec` (default; rejects NaN, infinity and, at any depth, non-`str` keys) and `PickleCodec`. A
+codec replaces the classes `PickleFileStore`, `PickleSQLiteStore`, `PickleLmdbStore` and
+`PickleRedisStore`. A SQL store whose existing table does not match the codec raises on `open`.
 
 ### 4.3 Backends
 
@@ -479,7 +479,7 @@ the later steps change less code.
 | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ------------------- |
 | 1    | **Urgent fixes of the HTTP cache and the cache keys**: complete request key, no caching with `auth`, sound cached response, module in the memoize key, no positional drop. | C1, C2, H1-H3              | cache keys          |
 | 2    | **Delete the factories and the `resolve_*` wrappers.**                                                                                                                     | R7                         | yes                 |
-| 3    | **Delete the typed stores**; one `RecordStore`, remove its abstract class and subclasses.                                                                                  | S12, S13, R7               | yes                 |
+| 3    | **Delete the typed stores**; one `RecordStore`, remove its abstract class and subclasses; document the expression index.                                                   | S12, S13, R7               | yes                 |
 | 4    | **`BaseStore` template**: add the primitives, validation, codec and conflict plan to the base, with `InMemoryStore` and `NullStore`; a contract test per property.         | S8, S9, S11                | yes (custom stores) |
 | 5    | **SQLite and DuckDB on the template**: one connection, `BEGIN IMMEDIATE`, keyset iteration; delete `aiosqlite` and `async_close.py` use.                                   | S3, S5-S7, S18             | yes                 |
 | 6    | **`FileStore` and LMDB on the template.**                                                                                                                                  | S10                        | yes (file names)    |
@@ -515,8 +515,8 @@ The conventions of `CLAUDE.md` apply. Each finding gets a regression test that f
   without optional dependencies.
 - **Benchmarks** (`tests/benchmarks/`): add LMDB and DuckDB, async `get`, and a `filter` on 100,000
   rows before step 4. A step that slows `get`, `get_many`, `set_many` or an SQL `filter` by more
-  than 10 % on the median is not merged. The codec adds a copy to `InMemoryStore` reads in place of
-  `deepcopy`; measure it in step 4.
+  than 10 % on the median is not merged, apart from the cost of the key check of `JsonCodec` (D5).
+  The codec adds a copy to `InMemoryStore` reads in place of `deepcopy`; measure it in step 4.
 - Coverage of 100 % of the changed code, and `ruff`, `ty`, `pyright` and `lint-imports` clean.
 
 ## 9. Decisions
@@ -525,12 +525,12 @@ The conventions of `CLAUDE.md` apply. Each finding gets a regression test that f
 
 | #   | Question                              | Status  | Answer or recommendation                                                                                       |
 | --- | ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
-| D1  | Keep the typed stores?                | open    | Recommended: **no** (section 9.2).                                                                             |
-| D2  | Keep native async SQLite?             | open    | Recommended: **no** (section 9.3).                                                                             |
+| D1  | Keep the typed stores?                | decided | **No.** Remove them and document the expression index (section 9.2).                                           |
+| D2  | Keep native async SQLite?             | decided | **No.** Each store that is not thread-safe gets its own worker thread (section 9.3).                           |
 | D3  | Keep the factory classes?             | open    | Recommended: **no**, `resolve_object({"_target_": ...})` builds any object. Check the dependent projects.      |
 | D4  | Keep the store URIs?                  | decided | **Yes**, with their limitations stated (section 4.4).                                                          |
-| D5  | JSON values that change or lose data? | open    | Recommended: **normalise tuples, reject what loses data** (section 9.4).                                       |
-| D6  | File names of `FileStore`?            | open    | Recommended: **escape upper case** (section 9.5).                                                              |
+| D5  | JSON values that change or lose data? | decided | **Normalise tuples and subclasses, reject non-`str` keys, NaN and infinity** (section 9.4).                    |
+| D6  | File names of `FileStore`?            | decided | **Escape upper case** (section 9.5).                                                                           |
 | D7  | A key limit shared by all backends?   | decided | **No.** The limit of one backend does not restrict the others; interchangeability in every case is not a goal. |
 | D8  | Keep `requests` support?              | decided | **Yes** (section 4.8).                                                                                         |
 | D9  | Keep `record.analysis` in `persista`? | open    | Recommended: **yes**, it is small, pure and depends only on `Record`.                                          |
@@ -561,14 +561,16 @@ column. What it gives, on `filter(author=...)` returning 100 of 100,000 rows:
 
 | Option                              | Work                                                                                                                                                                                                                  | Gain and cost                                                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| A. Remove (recommended)             | delete 3 classes; document the expression index                                                                                                                                                                       | one table layout and one SQL path per backend; slower DuckDB filters |
+| A. Remove (chosen)                  | delete 3 classes; document the expression index                                                                                                                                                                       | one table layout and one SQL path per backend; slower DuckDB filters |
 | B. Keep and fix                     | check the existing table against the schema on `open`; quote and reserve names; keep `None` apart from absent; return booleans; validate the types the same way everywhere; handle the schema in URIs (S12, S13, S21) | keeps columns; a schema change still needs a migration by the user   |
 | C. Remove, then add `indexes=(...)` | A, plus one option that creates the expression indexes                                                                                                                                                                | fast SQLite and PostgreSQL filters without a schema; no DuckDB gain  |
 
-Choose B if DuckDB filters or external SQL queries on columns are real uses. Otherwise A, and C only
-when someone needs it.
+**Decision: A.** The slower DuckDB filters and the loss of plain columns for external SQL are
+accepted. Option C stays possible later (section 10).
 
 ### 9.3 D2: native async SQLite
+
+**Decision: remove it.** The slower iteration in small batches is accepted.
 
 `aiosqlite` is not asynchronous I/O: it runs `sqlite3` in a background thread. The choice is between
 its thread and second connection, and a thread around the sync methods. On a file database of 10,000
@@ -607,20 +609,20 @@ DuckDB:
 | a lone surrogate                         | SQLite: same; DuckDB: raises   | consistency              |
 | a set, `bytes`                           | `TypeError`                    | none                     |
 
-| Option                                                                  | Behaviour                                                       | Cost per write                                        |
-| ----------------------------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------- |
-| A. Normalise                                                            | as today, with NaN and infinity rejected; one entry can be lost | none                                                  |
-| B. Normalise tuples and subclasses, reject non-`str` keys (recommended) | nothing is lost; a type may be widened                          | a walk: +0.7 µs small value, +0.5 ms for 1,000 rows   |
-| C. Strict: reject everything that does not come back equal              | a value read equals the value written                           | the same walk; callers must convert tuples themselves |
+| Option                                                             | Behaviour                                                       | Cost per write                                        |
+| ------------------------------------------------------------------ | --------------------------------------------------------------- | ----------------------------------------------------- |
+| A. Normalise                                                       | as today, with NaN and infinity rejected; one entry can be lost | none                                                  |
+| B. Normalise tuples and subclasses, reject non-`str` keys (chosen) | nothing is lost; a type may be widened                          | a walk: +0.7 µs small value, +0.5 ms for 1,000 rows   |
+| C. Strict: reject everything that does not come back equal         | a value read equals the value written                           | the same walk; callers must convert tuples themselves |
 
 The walk is a pure Python prototype. For scale, `set` on an in-memory SQLite takes 4 µs for the
 small value and 268 µs for the 1,000-row value, so B adds about 17% and 180% there, much less
 relative to a write that commits to disk. This would fail the benchmark gate of section 8 for large
 values.
 
-I recommend B because section 1.1 promises that nothing is silently lost; this replaces the earlier
-recommendation to only normalise. Choose A if write speed matters more, and list the lost entry in
-section 1.7.
+**Decision: B**, because section 1.1 promises that nothing is silently lost. `JsonCodec` also rejects
+NaN and infinity. The cost of the check is an accepted exception to the benchmark gate: step 4
+measures and reports it.
 
 ### 9.5 D6: file names of `FileStore`
 
@@ -630,14 +632,15 @@ file of the atomic write adds a suffix). With D7, a length limit is acceptable.
 
 | Option                               | Case bug | Key length        | `keys()` for 10,000 files | File names  | Existing files                     |
 | ------------------------------------ | -------- | ----------------- | ------------------------- | ----------- | ---------------------------------- |
-| A. Escape upper case (recommended)   | fixed    | limited, as today | 54 ms (list the names)    | readable    | readable without upper case in key |
+| A. Escape upper case (chosen)        | fixed    | limited, as today | 54 ms (list the names)    | readable    | readable without upper case in key |
 | B. Hash of the key, key in the file  | fixed    | unlimited         | 476 ms (read every file)  | opaque      | not readable                       |
 | C. A, with a hash for long keys only | fixed    | unlimited         | between the two           | two formats | as A                               |
 
 With A, `User:1` becomes `%55ser%3A1.json`. A probe on sample keys confirms that the names stay
 distinct when the case is ignored and decode to the original keys. Each upper-case letter takes 3
-characters, so such keys have a lower limit. This replaces the earlier recommendation (B), which was
-motivated by the shared key limit that D7 rejects.
+characters, so such keys have a lower limit.
+
+**Decision: A.** The names stay readable, and a limit on the key length is acceptable (D7).
 
 ## 10. Not covered
 
@@ -647,6 +650,7 @@ motivated by the shared key limit that D7 rejects.
   computation of one key.
 - New backends, synchronous replication, encryption.
 - Cache semantics of HTTP (`Cache-Control`, revalidation).
+- An `indexes=` option that creates expression indexes (option C of D1).
 - A public contract test suite in `persista.testing` for third-party stores.
 - The CI workflows and the release process, which this review did not examine.
 
