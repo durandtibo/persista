@@ -472,6 +472,38 @@ TypeError: Object of type lock is not JSON serializable...
 
 ```
 
+## Building a Cache from a Configuration
+
+`persista` has no factory classes. To describe a cache in a configuration, use `resolve_object` from
+[`coola.factory`](https://github.com/durandtibo/coola): the `_target_` key is the fully qualified
+name of the class, and the other keys are the arguments of its constructor.
+`resolve_object` does not build a configuration nested in another one, so build the store first and
+pass it to the cache:
+
+```pycon
+>>> from coola.factory import resolve_object
+>>> from persista.cache import Cache
+>>> from persista.store import BaseStore
+>>> config = {
+...     "_target_": "persista.cache.Cache",
+...     "store": {"_target_": "persista.store.SQLiteStore", "database": ":memory:"},
+...     "default_ttl": 60,
+... }
+>>> store = resolve_object(config["store"], cls=BaseStore)
+>>> with resolve_object({**config, "store": store}, cls=Cache) as cache:
+...     cache.set("greeting", "hello")
+...     print(cache.get("greeting"))
+...     print(cache.default_ttl)
+hello
+60
+
+```
+
+A configuration without a `store` key builds a cache with a new `InMemoryStore`, and needs a single
+call: `resolve_object({"_target_": "persista.cache.Cache"}, cls=Cache)`. Only use `resolve_object`
+with a configuration from a trusted source, because it imports and calls whatever `_target_` names.
+See [building a store from a configuration](store.md#building-a-store-from-a-configuration).
+
 ## API Reference
 
 See the [reference documentation](../refs/cache.md) for the full API.
