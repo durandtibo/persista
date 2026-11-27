@@ -1,33 +1,29 @@
-r"""Provide LMDB-backed implementations of ``BaseStore``."""
+r"""Provide an LMDB-backed implementation of ``BaseStore``."""
 
 from __future__ import annotations
 
-__all__ = ["BaseLmdbStore", "LmdbStore", "PickleLmdbStore"]
+__all__ = ["LmdbStore"]
 
-import json
+import contextlib
 import logging
-import pickle
-from abc import abstractmethod
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
+from coola.utils.path import sanitize_path
 
-from persista.store.threaded import ThreadedAsyncStoreMixin
-from persista.store.uri import decode_path_uri, encode_path_uri
-from persista.store.validation import (
-    normalize_on_conflict,
-    validate_batch_size,
-)
+from persista.store.base import BaseStore
+from persista.store.uri import codec_uri_scheme, decode_codec_uri, encode_path_uri
 from persista.utils.imports import check_lmdb, is_lmdb_available
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterator, Mapping
+    from collections.abc import Iterator
     from os import PathLike
+    from pathlib import Path
     from typing import Self
 
-    from persista.store.types import OnConflict
+    from persista.store.codec import Codec
+    from persista.store.types import Payload, Plan
 
 if TYPE_CHECKING or is_lmdb_available():  # pragma: no cover
     import lmdb
@@ -36,271 +32,69 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 _DEFAULT_MAP_SIZE = 1024**3  # 1 GiB
 
+# The URI scheme for each codec name.
+_SCHEMES: dict[str, str] = {"json": "lmdb", "pickle": "lmdb+pickle"}
 
-class BaseLmdbStore(ThreadedAsyncStoreMixin, MultilineDisplayMixin):
-    r"""Define a base class for LMDB-backed key-value stores.
-
-    LMDB is an embedded, memory-mapped key-value store backed by a
-    single-directory environment on disk, so unlike Redis this store
-    needs no separate server process and no explicit tracking of keys:
-    the environment's own B+tree already provides ordered iteration,
-    membership checks, and a cheap entry count. :meth:`filter` is
-    still implemented client-side by scanning every value in the
-    store, since LMDB has no query language for matching on the
-    content of a value.
-
-    Subclasses only need to implement :meth:`_encode` and
-    :meth:`_decode`, which control how a value is serialized to and
-    from what is stored in LMDB (see :class:`LmdbStore` for a JSON
-    encoding and :class:`PickleLmdbStore` for a pickle encoding).
-
-    Args:
-        path: The directory where the LMDB environment is stored.
-            Created automatically if it does not already exist.
-        map_size: The maximum size in bytes of the memory map, i.e.
-            the upper bound on the total size of the environment
-            (keys and values combined). Passed to ``lmdb.open``.
-        **kwargs: Additional keyword arguments to pass to
-            ``lmdb.open``.
-    """
-
-    #: URI scheme used by :meth:`to_uri`/:meth:`from_uri`.
-    _scheme: str = "lmdb"
-
-    def __init__(
-        self, path: str | PathLike[str], map_size: int = _DEFAULT_MAP_SIZE, **kwargs: Any
-    ) -> None:
-        check_lmdb()
-        self._path = str(path)
-        self._map_size = map_size
-        self._kwargs = kwargs
-        self._closed = True
-        self._env: lmdb.Environment | None = None
-
-    @abstractmethod
-    def _encode(self, value: dict[str, Any]) -> bytes:
-        """Serialize a value to what gets stored in LMDB."""
-
-    @abstractmethod
-    def _decode(self, raw: bytes) -> dict[str, Any]:
-        """Deserialize a value read back from LMDB."""
-
-    @staticmethod
-    def _key_bytes(key: str) -> bytes:
-        return key.encode()
-
-    @staticmethod
-    def _key_str(key: bytes) -> str:
-        return key.decode()
-
-    @property
-    def environment(self) -> lmdb.Environment:
-        """Return the underlying LMDB environment.
-
-        This is not part of the regular store API. It is meant for
-        debugging or running specific commands. The store must be open.
-        """
-        return self._environment
-
-    @property
-    def _environment(self) -> lmdb.Environment:
-        if self._env is None:
-            msg = f"{type(self).__name__} is not open."
-            raise RuntimeError(msg)
-        return self._env
-
-    def _check_open(self) -> None:
-        if self._closed:
-            msg = (
-                f"{type(self).__name__} is not open; call open()/aopen() or use it as a "
-                "context manager."
-            )
-            raise RuntimeError(msg)
-
-    def open(self) -> None:
-        if not self._closed:
-            return
-        Path(self._path).mkdir(parents=True, exist_ok=True)
-        self._env = lmdb.open(self._path, map_size=self._map_size, **self._kwargs)
-        self._closed = False
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        logger.info("Closing LMDB environment at %s", self._path)
-        self._environment.close()
-        self._closed = True
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
-
-    def get(self, key: str) -> dict[str, Any] | None:
-        self._check_open()
-        with self._environment.begin() as txn:
-            raw = txn.get(self._key_bytes(key))
-        return self._decode(raw) if raw is not None else None
-
-    def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
-        self._check_open()
-        if not keys:
-            return []
-        with self._environment.begin() as txn:
-            raws = [txn.get(self._key_bytes(key)) for key in keys]
-        return [self._decode(raw) if raw is not None else None for raw in raws]
-
-    def set(
-        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
-    ) -> None:
-        self.set_many({key: value}, on_conflict=on_conflict)
-
-    def set_many(
-        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
-    ) -> None:
-        self._check_open()
-        if not items:
-            return
-        on_conflict = normalize_on_conflict(on_conflict)
-        if on_conflict == "overwrite":
-            self._set_many(items)
-            return
-
-        # Resolved and written within a single write transaction (LMDB
-        # serializes writers), so the check-then-write isn't racy against
-        # other writers the way separate contains_many()/get()/_set_many()
-        # calls would be.
-        keys = list(items)
-        with self._environment.begin(write=True) as txn:
-            conflicts = {key for key in keys if txn.get(self._key_bytes(key)) is not None}
-            if conflicts and on_conflict == "raise":
-                msg = f"Key(s) already exist in the store: {sorted(conflicts)}"
-                raise KeyError(msg)
-            for key, value in items.items():
-                to_write = value
-                if key in conflicts:
-                    if on_conflict == "skip":
-                        continue
-                    raw = txn.get(self._key_bytes(key))
-                    to_write = {**(self._decode(raw) if raw is not None else {}), **value}
-                txn.put(self._key_bytes(key), self._encode(to_write))
-        logger.debug("Added/replaced %d key-value pair(s)", len(items))
-
-    def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
-        if items:
-            with self._environment.begin(write=True) as txn:
-                for key, value in items.items():
-                    txn.put(self._key_bytes(key), self._encode(value))
-        logger.debug("Added/replaced %d key-value pair(s)", len(items))
-
-    def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
-        self._check_open()
-        return [
-            value
-            for value in self.values()
-            if all(value.get(name) == expected for name, expected in field_filters.items())
-        ]
-
-    def delete(self, key: str) -> None:
-        self._check_open()
-        with self._environment.begin(write=True) as txn:
-            txn.delete(self._key_bytes(key))
-
-    def delete_many(self, keys: list[str]) -> None:
-        self._check_open()
-        if not keys:
-            return
-        with self._environment.begin(write=True) as txn:
-            for key in keys:
-                txn.delete(self._key_bytes(key))
-
-    def clear(self) -> None:
-        self._check_open()
-        with self._environment.begin(write=True) as txn:
-            db = self._environment.open_db()
-            txn.drop(db, delete=False)
-
-    def contains(self, key: str) -> bool:
-        self._check_open()
-        with self._environment.begin() as txn:
-            return txn.get(self._key_bytes(key)) is not None
-
-    def contains_many(self, keys: list[str]) -> list[bool]:
-        self._check_open()
-        if not keys:
-            return []
-        with self._environment.begin() as txn:
-            return [txn.get(self._key_bytes(key)) is not None for key in keys]
-
-    def keys(self) -> Iterator[str]:
-        self._check_open()
-        # The full key list is materialized (and the transaction/cursor
-        # closed) before anything is yielded, rather than holding a live
-        # LMDB transaction open across yields: py-lmdb transactions are
-        # thread-affine, and ThreadedAsyncStoreMixin.akeys() resumes this
-        # generator via asyncio.to_thread(), which offers no guarantee that
-        # the same worker thread services every call.
-        with self._environment.begin() as txn, txn.cursor() as cursor:
-            all_keys = [self._key_str(key) for key in cursor.iternext(values=False)]
-        yield from all_keys
-
-    def iter_batches(
-        self, batch_size: int = 32
-    ) -> Generator[dict[str, dict[str, Any]], None, None]:
-        validate_batch_size(batch_size)
-        self._check_open()
-        # Only the (cheap) key list is materialized upfront; each batch's
-        # values are decoded from a fresh, short-lived read transaction
-        # opened when that batch is pulled, so the whole store's values
-        # are never held in memory at once and no transaction is kept
-        # open across yields (see keys() for why that matters for async
-        # callers).
-        with self._environment.begin() as txn, txn.cursor() as cursor:
-            all_keys = [self._key_str(key) for key in cursor.iternext(values=False)]
-        for batch_keys in batchify(all_keys, size=batch_size):
-            with self._environment.begin() as txn:
-                raws = [(key, txn.get(self._key_bytes(key))) for key in batch_keys]
-            yield {key: self._decode(raw) for key, raw in raws if raw is not None}
-
-    def count(self) -> int:
-        self._check_open()
-        with self._environment.begin() as txn:
-            return txn.stat()["entries"]
-
-    def to_uri(self) -> str:
-        return encode_path_uri(self._scheme, self._path)
-
-    @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
-        path = decode_path_uri(uri, expected_scheme=cls._scheme)
-        return cls(path, readonly=read_only)
-
-    def _get_repr_kwargs(self) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {"path": self._path, "closed": self._closed}
-        if not self._closed:
-            kwargs["count"] = f"{self.count():,}"
-        return kwargs | self._kwargs
+# The longest key, in bytes, that LMDB accepts as it is usually built.
+_MAX_KEY_SIZE = 511
 
 
-class LmdbStore(BaseLmdbStore):
-    """An LMDB-backed key-value store.
+class LmdbStore(BaseStore, MultilineDisplayMixin):
+    r"""An LMDB-backed key-value store.
 
-    Persists values to an LMDB environment and supports adding,
-    retrieving, filtering, and deleting key-value pairs. Each value
-    is stored as a JSON-encoded string, which provides flexibility
-    for arbitrary value fields without requiring a fixed schema and
-    can be read back by any LMDB client regardless of language. This
-    means only JSON-compatible value fields (str, int, float, bool,
-    None, list, dict) are supported; use :class:`PickleLmdbStore` if
-    you need to persist arbitrary Python objects.
+    LMDB is an embedded, memory-mapped key-value database kept in a
+    directory, so unlike Redis this store needs no server process. A
+    value is kept as the payload of the codec: with the default
+    :class:`~persista.store.JsonCodec`, as UTF-8 JSON that any LMDB
+    client can read; with a :class:`~persista.store.PickleCodec`, as
+    opaque bytes that keep Python types. :meth:`filter` reads and decodes
+    every value, since LMDB cannot query inside the values.
+
+    A key has 1 to 511 bytes once encoded in UTF-8, and must be valid
+    Unicode (no lone surrogate). Every method that takes a key raises
+    ``ValueError`` for another key, such as the empty string, before
+    anything is read or written.
+
+    A write runs in one LMDB write transaction, so a write of several
+    keys is atomic, and a write with ``on_conflict`` set to ``"raise"``,
+    ``"skip"`` or ``"merge"`` is atomic against the other writers of the
+    environment, including other processes. A write waits, without time
+    limit, for the write transaction of another process.
+
+    An environment does not record its codec: reading it with the other
+    codec raises a decoding error, so open it with the codec that wrote
+    it.
+
+    LMDB cannot open the same path twice in one process: opening a second
+    store of a path raises ``lmdb.Error`` while the first one is open.
+    Share one store instead.
+
+    The async methods run in a worker thread of the store.
 
     Args:
-        path: The directory where the LMDB environment is stored.
-            Created automatically if it does not already exist.
-        map_size: The maximum size in bytes of the memory map, i.e.
-            the upper bound on the total size of the environment
-            (keys and values combined). Passed to ``lmdb.open``.
+        path: The directory of the LMDB environment. Opening the store
+            creates it, with its parents, if it does not exist (unless
+            ``read_only``).
+        codec: The codec of the values, a
+            :class:`~persista.store.JsonCodec` (default) or a
+            :class:`~persista.store.PickleCodec`. Decoding a pickle
+            payload can execute arbitrary code: only use it with a
+            trusted environment.
+        map_size: The maximum size in bytes of the memory map, i.e. the
+            upper bound on the total size of the environment (keys and
+            values combined). Passed to ``lmdb.open``.
+        read_only: If ``True``, open an existing environment read-only.
+            No file or directory is created: opening raises
+            ``FileNotFoundError`` if the data file or the lock file is
+            missing. An environment without a lock file (e.g. a copy) can
+            be opened with ``lock=False``, if no process writes it.
         **kwargs: Additional keyword arguments to pass to
             ``lmdb.open``.
+
+    Raises:
+        RuntimeError: If the ``lmdb`` package is not installed.
+        ValueError: If the codec is not supported, or if ``readonly`` or
+            ``create`` is given (use ``read_only``).
 
     Example:
         ```pycon
@@ -327,54 +121,309 @@ class LmdbStore(BaseLmdbStore):
         2
 
         ```
-    """
 
-    def _encode(self, value: dict[str, Any]) -> bytes:
-        return json.dumps(value).encode()
+        A pickle codec keeps Python types, and a read-only store reads an
+        existing environment:
 
-    def _decode(self, raw: bytes) -> dict[str, Any]:
-        return json.loads(raw)
-
-
-class PickleLmdbStore(BaseLmdbStore):
-    """An LMDB-backed key-value store that serializes values with
-    ``pickle`` instead of JSON.
-
-    Unlike :class:`LmdbStore`, this store can persist arbitrary
-    Python objects within a value's fields (tuples, sets, custom
-    classes, etc.), not just JSON-compatible types. The tradeoff is
-    that values are opaque binary blobs from outside Python (not
-    human-readable, not inspectable from non-Python LMDB clients),
-    and, since :func:`pickle.loads` can execute arbitrary code, this
-    store must never be pointed at an LMDB environment that isn't
-    fully trusted.
-
-    Args:
-        path: The directory where the LMDB environment is stored.
-            Created automatically if it does not already exist.
-        map_size: The maximum size in bytes of the memory map, i.e.
-            the upper bound on the total size of the environment
-            (keys and values combined). Passed to ``lmdb.open``.
-        **kwargs: Additional keyword arguments to pass to
-            ``lmdb.open``.
-
-    Example:
         ```pycon
         >>> import tempfile
-        >>> from persista.store import PickleLmdbStore
-        >>> with tempfile.TemporaryDirectory() as tmpdir, PickleLmdbStore(tmpdir) as store:
-        ...     store.set("1", {"title": "Intro to Python", "tags": ("python", "intro")})
-        ...     store.get("1")
+        >>> from persista.store import LmdbStore, PickleCodec
+        >>> with tempfile.TemporaryDirectory() as tmpdir:
+        ...     with LmdbStore(tmpdir, codec=PickleCodec()) as store:
+        ...         store.set("1", {"tags": {"python"}})
+        ...     with LmdbStore(tmpdir, codec=PickleCodec(), read_only=True) as store:
+        ...         store.get("1")
         ...
-        {'title': 'Intro to Python', 'tags': ('python', 'intro')}
+        {'tags': {'python'}}
 
         ```
     """
 
-    _scheme = "lmdb+pickle"
+    def __init__(
+        self,
+        path: str | PathLike[str],
+        *,
+        codec: Codec | None = None,
+        map_size: int = _DEFAULT_MAP_SIZE,
+        read_only: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        check_lmdb()
+        managed = sorted({"create", "readonly"} & kwargs.keys())
+        if managed:
+            msg = f"Use read_only: LmdbStore does not accept {managed}"
+            raise ValueError(msg)
+        super().__init__(codec=codec)
+        self._scheme = codec_uri_scheme(self._codec, _SCHEMES)
+        self._path = sanitize_path(path)
+        self._map_size = map_size
+        self._read_only = read_only
+        self._kwargs = kwargs
+        self._env: lmdb.Environment | None = None
 
-    def _encode(self, value: dict[str, Any]) -> bytes:
-        return pickle.dumps(value)
+    @property
+    def path(self) -> Path:
+        r"""The path of the LMDB environment."""
+        return self._path
 
-    def _decode(self, raw: bytes) -> dict[str, Any]:
-        return pickle.loads(raw)  # noqa: S301
+    @property
+    def environment(self) -> lmdb.Environment:
+        r"""Return the underlying LMDB environment.
+
+        This is not part of the regular store API. It is meant for
+        debugging or running specific commands. The store must be open.
+
+        Raises:
+            RuntimeError: If the store is not open.
+        """
+        if self._env is None:
+            msg = f"{type(self).__name__} is not open."
+            raise RuntimeError(msg)
+        return self._env
+
+    def to_uri(self) -> str:
+        return encode_path_uri(self._scheme, str(self._path))
+
+    @classmethod
+    def from_uri(cls, uri: str, *, read_only: bool = False, **kwargs: Any) -> Self:
+        r"""Reconstruct a store from a URI produced by :meth:`to_uri`.
+
+        The scheme of the URI gives the codec. The other arguments of the
+        constructor, such as ``map_size``, are not part of the URI: pass
+        them again.
+
+        Args:
+            uri: A URI produced by :meth:`to_uri`.
+            read_only: Whether to open the environment read-only.
+            **kwargs: The other keyword arguments of the constructor. A
+                ``codec`` must have the name of the codec of the scheme.
+
+        Returns:
+            A new store instance, not opened.
+
+        Raises:
+            ValueError: If the scheme of ``uri`` is not one of this class,
+                or if ``codec`` does not match it.
+        """
+        path, codec = decode_codec_uri(uri, schemes=_SCHEMES, codec=kwargs.pop("codec", None))
+        return cls(path, codec=codec, read_only=read_only, **kwargs)
+
+    ######################
+    #     Primitives     #
+    ######################
+
+    def _open(self) -> None:
+        kwargs: dict[str, Any] = dict(self._kwargs)
+        if self._read_only:
+            _check_environment_files(
+                self._path, subdir=kwargs.get("subdir", True), lock=kwargs.get("lock", True)
+            )
+            kwargs |= {"readonly": True, "create": False}
+        elif kwargs.get("subdir", True):
+            self._path.mkdir(parents=True, exist_ok=True)
+        else:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._env = lmdb.open(str(self._path), map_size=self._map_size, **kwargs)
+
+    def _close(self) -> None:
+        if self._env is None:
+            return
+        logger.info("Closing LMDB environment at %s", self._path)
+        self._env.close()
+        self._env = None
+
+    def _get_many(self, keys: list[str]) -> dict[str, Payload]:
+        # The shortest path for the most frequent read.
+        if len(keys) == 1:
+            key = keys[0]
+            raw_key = _encode_key(key)
+            with self.environment.begin() as txn:
+                payload = txn.get(raw_key)
+            return {} if payload is None else {key: payload}
+        # Every key is checked before the first one is read.
+        raw_keys = _encode_keys(keys)
+        with self.environment.begin() as txn:
+            return {
+                key: payload
+                for key, payload in zip(keys, map(txn.get, raw_keys), strict=True)
+                if payload is not None
+            }
+
+    def _put_many(self, items: dict[str, Payload]) -> None:
+        # Encoded before the transaction, which blocks the other writers.
+        rows = [(_encode_key(key), _encode_payload(payload)) for key, payload in items.items()]
+        with self.environment.begin(write=True) as txn:
+            for raw_key, raw in rows:
+                txn.put(raw_key, raw)
+        logger.debug("Added/replaced %d key-value pair(s)", len(items))
+
+    def _update(self, keys: list[str], plan: Plan) -> None:
+        encoded = {key: _encode_key(key) for key in keys}
+        # LMDB has one write transaction at a time, in every process, so
+        # nothing can change the keys between the read and the write.
+        with self.environment.begin(write=True) as txn:
+            existing: dict[str, Payload] = {}
+            for key, raw_key in encoded.items():
+                if (payload := txn.get(raw_key)) is not None:
+                    existing[key] = payload
+            for key, payload in plan(existing).items():
+                txn.put(encoded[key], _encode_payload(payload))
+
+    def _delete_many(self, keys: list[str]) -> None:
+        raw_keys = _encode_keys(keys)
+        with self.environment.begin(write=True) as txn:
+            for raw_key in raw_keys:
+                txn.delete(raw_key)
+
+    def _clear(self) -> None:
+        env = self.environment
+        database = env.open_db()
+        with env.begin(write=True) as txn:
+            txn.drop(database, delete=False)
+
+    def _count(self) -> int:
+        with self.environment.begin() as txn:
+            return txn.stat()["entries"]
+
+    def _contains_many(self, keys: list[str]) -> set[str]:
+        encoded = [(key, _encode_key(key)) for key in keys]
+        # A cursor finds a key without copying its value.
+        with self.environment.begin() as txn, txn.cursor() as cursor:
+            return {key for key, raw_key in encoded if cursor.set_key(raw_key)}
+
+    def _iter_batches(self, batch_size: int) -> Iterator[dict[str, Payload]]:
+        # No transaction is kept open between two batches: a transaction
+        # belongs to its thread, and an old read transaction prevents LMDB
+        # from reusing the space of the deleted values.
+        for raw_keys in batchify(self._snapshot_keys(), size=batch_size):
+            with self.environment.begin() as txn:
+                # A key deleted since the snapshot is skipped.
+                batch: dict[str, Payload] = {
+                    raw_key.decode(): payload
+                    for raw_key in raw_keys
+                    if (payload := txn.get(raw_key)) is not None
+                }
+            if batch:
+                yield batch
+
+    def _iter_key_batches(self, batch_size: int) -> Iterator[list[str]]:
+        # As _iter_batches, without reading the values.
+        for raw_keys in batchify(self._snapshot_keys(), size=batch_size):
+            with self.environment.begin() as txn, txn.cursor() as cursor:
+                batch = [raw_key.decode() for raw_key in raw_keys if cursor.set_key(raw_key)]
+            if batch:
+                yield batch
+
+    ###########################
+    #     Template helpers    #
+    ###########################
+
+    def _snapshot_keys(self) -> list[bytes]:
+        r"""Read all the keys of the environment.
+
+        Returns:
+            The keys as LMDB keeps them, in the order of their bytes.
+        """
+        with self.environment.begin() as txn, txn.cursor() as cursor:
+            return list(cursor.iternext(values=False))
+
+    def _get_repr_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {"path": str(self._path), "closed": self.closed}
+        if self._codec.name != "json":
+            kwargs["codec"] = self._codec
+        if self._read_only:
+            kwargs["read_only"] = True
+        if not self.closed:
+            kwargs["count"] = f"{self.count():,}"
+        return kwargs | self._kwargs
+
+
+def _encode_key(key: str) -> bytes:
+    r"""Encode a key as LMDB keeps it.
+
+    Args:
+        key: The key.
+
+    Returns:
+        The key in UTF-8.
+
+    Raises:
+        ValueError: If the key contains a lone surrogate, or if it does not
+            have 1 to 511 bytes.
+    """
+    try:
+        encoded = key.encode()
+    except UnicodeEncodeError as exc:
+        msg = f"A key of LmdbStore must be valid Unicode, but it has a lone surrogate: {key!r}"
+        raise ValueError(msg) from exc
+    if not 0 < len(encoded) <= _MAX_KEY_SIZE:
+        msg = (
+            f"A key of LmdbStore must have 1 to {_MAX_KEY_SIZE} UTF-8 bytes, "
+            f"not {len(encoded)}: {key[:50]!r}"
+        )
+        raise ValueError(msg)
+    return encoded
+
+
+def _encode_keys(keys: list[str]) -> list[bytes]:
+    r"""Encode several keys as LMDB keeps them.
+
+    Args:
+        keys: The keys.
+
+    Returns:
+        The keys in UTF-8, in the same order.
+
+    Raises:
+        ValueError: If a key contains a lone surrogate, or if it does not
+            have 1 to 511 bytes.
+    """
+    # Fast path: encode and check all the keys at once.
+    with contextlib.suppress(UnicodeEncodeError):
+        encoded = list(map(str.encode, keys))
+        if all(encoded) and max(map(len, encoded), default=0) <= _MAX_KEY_SIZE:
+            return encoded
+    # A key is invalid: encode them one by one to report it.
+    return [_encode_key(key) for key in keys]
+
+
+def _encode_payload(payload: Payload) -> bytes:
+    r"""Return the bytes of a payload.
+
+    Args:
+        payload: A payload of a codec.
+
+    Returns:
+        The payload. A ``str`` is encoded in UTF-8.
+    """
+    return payload.encode() if isinstance(payload, str) else payload
+
+
+def _check_environment_files(path: Path, *, subdir: bool, lock: bool) -> None:
+    r"""Check that opening an LMDB environment would create no file.
+
+    LMDB creates a missing lock file, even for a read-only environment.
+
+    Args:
+        path: The path of the environment.
+        subdir: Whether ``path`` is the directory of the environment. If
+            not, it is its data file.
+        lock: Whether the environment uses its lock file.
+
+    Raises:
+        FileNotFoundError: If the data file is missing, or if the lock
+            file is used and missing.
+    """
+    if subdir:
+        data_file, lock_file = path / "data.mdb", path / "lock.mdb"
+    else:
+        data_file, lock_file = path, path.with_name(f"{path.name}-lock")
+    if not data_file.is_file():
+        msg = f"No LMDB environment to read: {str(data_file)!r} does not exist"
+        raise FileNotFoundError(msg)
+    if lock and not lock_file.is_file():
+        msg = (
+            f"The lock file {str(lock_file)!r} does not exist, and a read-only store does not "
+            "create it. Pass lock=False if no process writes the environment."
+        )
+        raise FileNotFoundError(msg)

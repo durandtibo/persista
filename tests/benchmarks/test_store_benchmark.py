@@ -15,8 +15,8 @@ import pytest
 
 from persista.store import (
     DuckDBStore,
+    FileStore,
     InMemoryStore,
-    JsonFileStore,
     LmdbStore,
     SQLiteStore,
 )
@@ -56,7 +56,7 @@ def create_store(name: str, path: Path) -> BaseStore:
         "sqlite": lambda: SQLiteStore(path / "data.sqlite"),
         "duckdb": lambda: DuckDBStore(path / "data.duckdb"),
         "lmdb": lambda: LmdbStore(path / "lmdb", map_size=2**28),
-        "json_file": lambda: JsonFileStore(path / "data"),
+        "json_file": lambda: FileStore(path / "data"),
     }
     return factories[name]()
 

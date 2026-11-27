@@ -82,9 +82,9 @@ class BaseStore(ABC):
     a list, and a value that would lose data raises.
 
     .. note::
-        ``LmdbStore``, ``RedisStore``, ``PostgresStore``, the file stores
-        and their pickle variants do not use the primitives below yet:
-        they implement the public methods themselves (see
+        ``RedisStore``, ``PickleRedisStore`` and ``PostgresStore`` do not
+        use the primitives below yet: they implement the public methods
+        themselves (see
         :class:`~persista.store.unmigrated.UnmigratedStore`), and they
         do not take a codec.
 
@@ -104,8 +104,9 @@ class BaseStore(ABC):
     - ``_count()``: return the number of keys.
     - ``_iter_batches(batch_size)``: yield the payloads in batches.
 
-    Two primitives have a default that a backend can replace by a faster
-    one: ``_contains_many(keys)`` and ``_filter_candidates(fields)``.
+    Three primitives have a default that a backend can replace by a
+    faster one: ``_contains_many(keys)``, ``_filter_candidates(fields)``
+    and ``_iter_key_batches(batch_size)``, which :meth:`keys` uses.
     The primitives are called with the store open, with validated keys,
     and with encoded payloads. A list of keys or a mapping of items is
     never empty, and a list of keys can contain duplicates.
@@ -545,13 +546,13 @@ class BaseStore(ABC):
             RuntimeError: If the store is closed.
         """
         check_is_open(self)
-        for batch in self._batches(self._iter_batches, _SCAN_BATCH_SIZE):
+        for batch in self._batches(self._iter_key_batches, _SCAN_BATCH_SIZE):
             yield from batch
 
     async def akeys(self) -> AsyncIterator[str]:
         """Async equivalent of :meth:`keys`."""
         check_is_open(self)
-        async with contextlib.aclosing(self._aiter_batches(_SCAN_BATCH_SIZE)) as batches:
+        async with contextlib.aclosing(self._aiter_key_batches(_SCAN_BATCH_SIZE)) as batches:
             async for batch in batches:
                 for key in batch:
                     yield key
@@ -882,6 +883,29 @@ class BaseStore(ABC):
         del fields
         return self._iter_batches(_SCAN_BATCH_SIZE)
 
+    def _iter_key_batches(self, batch_size: int) -> Iterator[list[str]]:
+        r"""Yield every key in batches.
+
+        It gives the same guarantee as :meth:`_iter_batches` for a key
+        that is present during the whole iteration, and it is called the
+        same way: each batch is read while the instance lock is held, and
+        the iterator is closed when the iteration stops early. The default
+        reads the payloads with :meth:`_iter_batches`; a backend that
+        can list its keys without reading the values replaces it.
+
+        Args:
+            batch_size: The maximum number of keys per batch.
+
+        Yields:
+            Non-empty lists of keys.
+        """
+        iterator = self._iter_batches(batch_size)
+        try:
+            for batch in iterator:
+                yield list(batch)
+        finally:
+            self._close_iterator(iterator)
+
     ############################
     #     Async primitives     #
     ############################
@@ -971,6 +995,17 @@ class BaseStore(ABC):
         """
         return self._abatches(self._filter_candidates, fields)
 
+    def _aiter_key_batches(self, batch_size: int) -> AsyncGenerator[list[str]]:
+        r"""Async equivalent of :meth:`_iter_key_batches`.
+
+        Args:
+            batch_size: The maximum number of keys per batch.
+
+        Returns:
+            An async generator of lists of keys.
+        """
+        return self._abatches(self._iter_key_batches, batch_size)
+
     async def _aclose(self) -> None:
         r"""Release the resources that only the async primitives use.
 
@@ -1045,9 +1080,7 @@ class BaseStore(ABC):
         if executor is not None:
             executor.shutdown(wait=False)
 
-    def _batches(
-        self, func: Callable[..., Iterator[dict[str, Payload]]], *args: Any
-    ) -> Iterator[dict[str, Payload]]:
+    def _batches(self, func: Callable[..., Iterator[T]], *args: Any) -> Iterator[T]:
         r"""Iterate over the batches of a primitive, holding the lock of
         the instance for one batch at a time.
 
@@ -1069,9 +1102,7 @@ class BaseStore(ABC):
         finally:
             self._close_iterator(iterator)
 
-    async def _abatches(
-        self, func: Callable[..., Iterator[dict[str, Payload]]], *args: Any
-    ) -> AsyncGenerator[dict[str, Payload]]:
+    async def _abatches(self, func: Callable[..., Iterator[T]], *args: Any) -> AsyncGenerator[T]:
         r"""Async equivalent of :meth:`_batches`, reading each batch in a
         thread.
 
@@ -1104,9 +1135,7 @@ class BaseStore(ABC):
                 await self._run_in_thread(self._close_iterator, iterator, iterator_lock)
 
     @staticmethod
-    def _next_batch(
-        iterator: Iterator[dict[str, Payload]], iterator_lock: threading.Lock | None = None
-    ) -> dict[str, Payload] | None:
+    def _next_batch(iterator: Iterator[T], iterator_lock: threading.Lock | None = None) -> T | None:
         r"""Read the next batch of an iterator.
 
         Args:
@@ -1121,9 +1150,7 @@ class BaseStore(ABC):
             return next(iterator, None)
 
     def _close_iterator(
-        self,
-        iterator: Iterator[dict[str, Payload]],
-        iterator_lock: threading.Lock | None = None,
+        self, iterator: Iterator[Any], iterator_lock: threading.Lock | None = None
     ) -> None:
         r"""Close an iterator of batches, if it can be closed.
 

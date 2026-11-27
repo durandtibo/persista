@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from persista.store.duckdb import DuckDBStore
-from persista.store.file import JsonFileStore, PickleFileStore
+from persista.store.file import FileStore
 from persista.store.in_memory import InMemoryStore
-from persista.store.lmdb import LmdbStore, PickleLmdbStore
+from persista.store.lmdb import LmdbStore
 from persista.store.null import NullStore
 from persista.store.postgres import PostgresStore
 from persista.store.redis import RedisStore
@@ -23,14 +23,14 @@ if TYPE_CHECKING:
 _SCHEMES: dict[str, type[BaseStore]] = {
     "memory": InMemoryStore,
     "null": NullStore,
-    "file+json": JsonFileStore,
-    "file+pickle": PickleFileStore,
+    "file+json": FileStore,
+    "file+pickle": FileStore,
     "sqlite": SQLiteStore,
     "sqlite+pickle": SQLiteStore,
     "duckdb": DuckDBStore,
     "duckdb+pickle": DuckDBStore,
     "lmdb": LmdbStore,
-    "lmdb+pickle": PickleLmdbStore,
+    "lmdb+pickle": LmdbStore,
     "postgresql": PostgresStore,
     "postgres": PostgresStore,
     "redis": RedisStore,
@@ -85,9 +85,9 @@ def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
     Example:
         ```pycon
         >>> import tempfile
-        >>> from persista.store import JsonFileStore, store_from_uri
+        >>> from persista.store import FileStore, store_from_uri
         >>> with tempfile.TemporaryDirectory() as tmpdir:
-        ...     with JsonFileStore(tmpdir) as store:
+        ...     with FileStore(tmpdir) as store:
         ...         store.set("key", {"value": 1})
         ...         uri = store.to_uri()
         ...     with store_from_uri(uri) as restored:

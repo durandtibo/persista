@@ -4,10 +4,7 @@ Each concrete store (:class:`~persista.store.InMemoryStore`,
 :class:`~persista.store.SQLiteStore`, :class:`~persista.store.DuckDBStore`,
 :class:`~persista.store.RedisStore`,
 :class:`~persista.store.PickleRedisStore`,
-:class:`~persista.store.LmdbStore`,
-:class:`~persista.store.PickleLmdbStore`,
-:class:`~persista.store.JsonFileStore`,
-:class:`~persista.store.PickleFileStore`,
+:class:`~persista.store.LmdbStore`, :class:`~persista.store.FileStore`,
 :class:`~persista.store.PostgresStore`) is expected to implement the
 exact same behavior for the :class:`~persista.store.BaseStore` contract.
 The tests below are parametrized over every available backend (stores
@@ -34,11 +31,10 @@ from persista.store import (
     BaseRedisStore,
     BaseStore,
     DuckDBStore,
+    FileStore,
     InMemoryStore,
-    JsonFileStore,
     LmdbStore,
-    PickleFileStore,
-    PickleLmdbStore,
+    PickleCodec,
     PickleRedisStore,
     PostgresStore,
     RedisStore,
@@ -83,10 +79,12 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
         pytest.param(lambda: PickleRedisStore(REDIS_URL), id="pickle_redis", marks=redis_skip),
         pytest.param(lambda: LmdbStore(tempfile.mkdtemp()), id="lmdb", marks=lmdb_available),
         pytest.param(
-            lambda: PickleLmdbStore(tempfile.mkdtemp()), id="pickle_lmdb", marks=lmdb_available
+            lambda: LmdbStore(tempfile.mkdtemp(), codec=PickleCodec()),
+            id="pickle_lmdb",
+            marks=lmdb_available,
         ),
-        pytest.param(lambda: JsonFileStore(tempfile.mkdtemp()), id="json_file"),
-        pytest.param(lambda: PickleFileStore(tempfile.mkdtemp()), id="pickle_file"),
+        pytest.param(lambda: FileStore(tempfile.mkdtemp()), id="file"),
+        pytest.param(lambda: FileStore(tempfile.mkdtemp(), codec=PickleCodec()), id="pickle_file"),
         pytest.param(
             lambda: PostgresStore(postgres_conninfo, table=f"store_{uuid.uuid4().hex}"),
             id="postgres",

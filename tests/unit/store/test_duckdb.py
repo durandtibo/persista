@@ -297,6 +297,11 @@ def test__iter_batches_delete_of_yielded_keys(store: DuckDBStore) -> None:
     assert visited == [str(i) for i in range(10)]
 
 
+def test__iter_key_batches(store: DuckDBStore) -> None:
+    store.set_many({"b": {}, "a": {}, "": {}})
+    assert list(store._iter_key_batches(2)) == [["", "a"], ["b"]]
+
+
 def test__get_many_many_keys(store: DuckDBStore) -> None:
     store.set_many({str(i): {} for i in range(1000)})
     assert len(store._get_many([str(i) for i in range(1000)])) == 1000

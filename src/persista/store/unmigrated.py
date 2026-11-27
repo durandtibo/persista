@@ -27,9 +27,9 @@ class UnmigratedStore(BaseStore):
 
     Example:
         ```pycon
-        >>> from persista.store import JsonFileStore
+        >>> from persista.store import RedisStore
         >>> from persista.store.unmigrated import UnmigratedStore
-        >>> issubclass(JsonFileStore, UnmigratedStore)
+        >>> issubclass(RedisStore, UnmigratedStore)
         True
 
         ```

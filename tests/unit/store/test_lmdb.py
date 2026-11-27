@@ -1,34 +1,61 @@
 from __future__ import annotations
 
-from collections.abc import Generator, Iterator
+import logging
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.store import LmdbStore, PickleLmdbStore
+from persista.store import JsonCodec, LmdbStore, PickleCodec
+from persista.store.lmdb import (
+    _check_environment_files,
+    _encode_key,
+    _encode_keys,
+    _encode_payload,
+)
+from persista.store.plan import build_plan
+from persista.testing.fixtures import lmdb_available, lmdb_not_available
+from persista.utils.imports import is_lmdb_available
+
+if is_lmdb_available():
+    import lmdb
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Generator
     from pathlib import Path
 
-    from persista.store import BaseLmdbStore
+    from persista.store import Codec
 
-lmdb = pytest.importorskip("lmdb")
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+MAP_SIZE = 2**24
 
 
-@pytest.fixture(params=[LmdbStore, PickleLmdbStore], ids=["json", "pickle"])
-def store_cls(request: pytest.FixtureRequest) -> type[BaseLmdbStore]:
-    return request.param
+class CustomCodec(JsonCodec):
+    r"""A codec with a name that no URI scheme has."""
+
+    name = "custom"
 
 
 @pytest.fixture
-def store(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> Generator[BaseLmdbStore, None, None]:
-    with store_cls(tmp_path / "db") as store:
+def path(tmp_path: Path) -> Path:
+    r"""Return the path of an environment that contains one value."""
+    path = tmp_path / "data"
+    with LmdbStore(path, map_size=MAP_SIZE) as store:
+        store.set("1", {"a": 1})
+    return path
+
+
+@pytest.fixture
+def store(tmp_path: Path) -> Generator[LmdbStore, None, None]:
+    with LmdbStore(tmp_path / "db", map_size=MAP_SIZE) as store:
         yield store
+
+
+@pytest.fixture
+def filled_store(store: LmdbStore) -> LmdbStore:
+    store._put_many({"1": '{"a": 1}', "2": '{"a": 2}', "3": '{"a": 3}'})
+    return store
+
+
+PAYLOADS = {"1": b'{"a": 1}', "2": b'{"a": 2}', "3": b'{"a": 3}'}
 
 
 ###############################
@@ -36,790 +63,557 @@ def store(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> Generator[BaseLmdbS
 ###############################
 
 
+@lmdb_not_available
+def test_init_without_lmdb(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match=r"'lmdb' package is required"):
+        LmdbStore(tmp_path)
+
+
 # --- constructor ---
 
 
-def test_init_defaults(store: BaseLmdbStore) -> None:
-    assert store.count() == 0
+@lmdb_available
+def test_init_makes_path_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert LmdbStore("data").path == (tmp_path / "data").resolve()
 
 
-def test_init_accepts_lmdb_open_kwargs(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> None:
-    with store_cls(tmp_path / "db", readahead=False) as store:
-        assert store.count() == 0
+@lmdb_available
+def test_init_does_not_create_directory(tmp_path: Path) -> None:
+    LmdbStore(tmp_path / "data")
+    assert not (tmp_path / "data").exists()
 
 
-def test_init_creates_missing_directory(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> None:
-    path = tmp_path / "nested" / "db"
-    with store_cls(path) as store:
-        assert store.count() == 0
-    assert path.is_dir()
+@lmdb_available
+def test_init_options_are_keyword_only(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        LmdbStore(tmp_path, MAP_SIZE)
 
 
-# --- repr/str ---
+@lmdb_available
+@pytest.mark.parametrize("name", ["readonly", "create"])
+def test_init_rejects_managed_options(tmp_path: Path, name: str) -> None:
+    with pytest.raises(ValueError, match=r"Use read_only"):
+        LmdbStore(tmp_path, **{name: True})
 
 
-def test_repr(store: BaseLmdbStore) -> None:
-    assert repr(store).startswith(f"{type(store).__name__}(")
+@lmdb_available
+def test_init_unsupported_codec(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"needs a codec named \['json', 'pickle'\]"):
+        LmdbStore(tmp_path, codec=CustomCodec())
 
 
-def test_str(store: BaseLmdbStore) -> None:
-    assert str(store).startswith(f"{type(store).__name__}(")
+@lmdb_available
+def test_init_passes_options_to_lmdb(tmp_path: Path) -> None:
+    with LmdbStore(tmp_path, map_size=MAP_SIZE, max_readers=7) as store:
+        assert store.environment.info()["max_readers"] == 7
 
 
-def test_repr_after_close_does_not_raise(store: BaseLmdbStore) -> None:
-    store.close()
-    assert repr(store).startswith(f"{type(store).__name__}(")
-
-
-# --- set ---
-
-
-def test_set_increases_count(store: BaseLmdbStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.count() == 1
-
-
-def test_set_stores_value(store: BaseLmdbStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.get("1") == {"text": "hello"}
-
-
-def test_set_default_overwrites_existing(store: BaseLmdbStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"})
-    assert store.count() == 1
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_on_conflict_raise(store: BaseLmdbStore) -> None:
-    store.set("1", {"text": "original"})
-    with pytest.raises(KeyError, match=r"1"):
-        store.set("1", {"text": "updated"}, on_conflict="raise")
-    assert store.get("1") == {"text": "original"}
-
-
-def test_set_on_conflict_skip(store: BaseLmdbStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"}, on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-
-
-def test_set_on_conflict_overwrite(store: BaseLmdbStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"}, on_conflict="overwrite")
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_on_conflict_merge(store: BaseLmdbStore) -> None:
-    store.set("1", {"text": "original", "author": "Alice"})
-    store.set("1", {"text": "updated"}, on_conflict="merge")
-    assert store.get("1") == {"text": "updated", "author": "Alice"}
-
-
-def test_set_on_conflict_new_key_is_unaffected(store: BaseLmdbStore) -> None:
-    store.set("1", {"text": "hello"}, on_conflict="raise")
-    assert store.get("1") == {"text": "hello"}
-
-
-def test_set_on_conflict_invalid_raises(store: BaseLmdbStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        store.set("1", {"text": "hello"}, on_conflict="bogus")
-
-
-# --- set_many ---
-
-
-def test_set_many_increases_count(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.count() == len(items)
-
-
-def test_set_many_empty_is_no_op(store: BaseLmdbStore) -> None:
-    store.set_many({})
-    assert store.count() == 0
-
-
-def test_private_set_many_empty_is_no_op(store: BaseLmdbStore) -> None:
-    """``_set_many`` is normally only reached with non-empty ``items``
-    (``set_many`` returns early otherwise), so call it directly to cover
-    its own empty-input guard."""
-    store._set_many({})
-    assert store.count() == 0
-
-
-def test_set_many_default_overwrites_existing(store: BaseLmdbStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}})
-    assert store.count() == 1
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_many_on_conflict_raise(store: BaseLmdbStore) -> None:
-    store.set_many({"1": {"text": "original"}, "2": {"text": "other"}})
-    with pytest.raises(KeyError, match=r"1"):
-        store.set_many({"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("3") is None
-
-
-def test_set_many_on_conflict_skip(store: BaseLmdbStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "new"}
-
-
-def test_set_many_on_conflict_overwrite(store: BaseLmdbStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="overwrite")
-    assert store.get("1") == {"text": "updated"}
-    assert store.get("2") == {"text": "new"}
-
-
-def test_set_many_on_conflict_merge(store: BaseLmdbStore) -> None:
-    store.set_many({"1": {"text": "original", "author": "Alice"}})
-    store.set_many({"1": {"text": "updated"}}, on_conflict="merge")
-    assert store.get("1") == {"text": "updated", "author": "Alice"}
-
-
-def test_set_many_on_conflict_invalid_raises(store: BaseLmdbStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")
-
-
-# --- set_batches ---
-
-
-def test_set_batches_empty_is_no_op(store: BaseLmdbStore) -> None:
-    store.set_batches([])
-    assert store.count() == 0
-
-
-def test_set_batches_writes_all_pairs(store: BaseLmdbStore) -> None:
-    store.set_batches([("1", {"v": 1}), ("2", {"v": 2}), ("3", {"v": 3})], batch_size=2)
-    assert store.count() == 3
-    assert store.get("2") == {"v": 2}
-
-
-def test_set_batches_consumes_a_generator(store: BaseLmdbStore) -> None:
-    def gen() -> Iterator[tuple[str, dict[str, int]]]:
-        for i in range(5):
-            yield str(i), {"v": i}
-
-    store.set_batches(gen(), batch_size=2)
-    assert store.count() == 5
-
-
-def test_set_batches_on_conflict_skip(store: BaseLmdbStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set_batches([("1", {"text": "updated"}), ("2", {"text": "new"})], on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "new"}
-
-
-# --- count ---
-
-
-def test_count_empty_store(store: BaseLmdbStore) -> None:
-    assert store.count() == 0
-
-
-def test_count_after_set_many(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.count() == len(items)
-
-
-# --- get ---
-
-
-def test_get_existing_value(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.get("1") == items["1"]
-
-
-def test_get_missing_key_returns_none(store: BaseLmdbStore) -> None:
-    assert store.get("nonexistent") is None
-
-
-def test_set_get_unicode_key(store: BaseLmdbStore) -> None:
-    store.set("héllo-中文-🎉", {"text": "hello"})
-    assert store.get("héllo-中文-🎉") == {"text": "hello"}
-
-
-def test_set_empty_string_key_raises(store: BaseLmdbStore) -> None:
-    with pytest.raises(lmdb.BadValsizeError):
-        store.set("", {"text": "hello"})
-
-
-# --- get_many ---
-
-
-def test_get_many_returns_correct_length(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert len(store.get_many(["1", "2", "99"])) == 3
-
-
-def test_get_many_returns_none_for_missing(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.get_many(["1", "99", "2"])
-    assert result[1] is None
-
-
-def test_get_many_preserves_order(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.get_many(["3", "1", "2"])
-    assert result == [items["3"], items["1"], items["2"]]
-
-
-def test_get_many_empty_list_returns_empty_list(store: BaseLmdbStore) -> None:
-    assert store.get_many([]) == []
-
-
-# --- filter ---
-
-
-def test_filter_no_args_returns_all(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert len(store.filter()) == len(items)
-
-
-def test_filter_single_field(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
-    assert len(result) == 2
-
-
-def test_filter_multiple_fields(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(author="Alice", category="Programming")
-    assert len(result) == 2
-
-
-def test_filter_no_match_returns_empty(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter(author="Charlie") == []
-
-
-def test_filter_preserves_full_value(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.filter(author="Bob", category="History")
-    expected = [v for v in items.values() if v["author"] == "Bob"]
-    assert sorted(result, key=lambda v: v["title"]) == sorted(expected, key=lambda v: v["title"])
-
-
-def test_filter_empty_store_returns_empty(store: BaseLmdbStore) -> None:
-    assert store.filter(author="Alice") == []
-
-
-def test_filter_integer_field_value(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(year=2022)
-    assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
-
-
-def test_filter_integer_value_no_match_returns_empty(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter(year=9999) == []
-
-
-# --- delete ---
-
-
-def test_delete_removes_value(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete("1")
-    assert store.count() == len(items) - 1
-    assert store.get("1") is None
-
-
-def test_delete_nonexistent_is_silent(store: BaseLmdbStore) -> None:
-    store.delete("nonexistent")
-
-
-# --- delete_many ---
-
-
-def test_delete_many_removes_values(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete_many(["1", "3"])
-    assert store.count() == len(items) - 2
-    assert store.get("1") is None
-    assert store.get("3") is None
-
-
-def test_delete_many_preserves_other_values(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many(["1", "3"])
-    assert store.get("2") is not None
-    assert store.get("4") is not None
-
-
-def test_delete_many_empty_list_is_no_op(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many([])
-    assert store.count() == len(items)
-
-
-def test_delete_many_nonexistent_keys_are_silent(store: BaseLmdbStore) -> None:
-    store.delete_many(["99", "100"])
-
-
-def test_delete_many_single_key(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete_many(["2"])
-    assert store.count() == len(items) - 1
-    assert store.get("2") is None
-
-
-# --- clear ---
-
-
-def test_clear_removes_all_values(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.clear()
-    assert store.count() == 0
-    assert list(store.keys()) == []
-
-
-def test_clear_empty_store_is_no_op(store: BaseLmdbStore) -> None:
-    store.clear()
-    assert store.count() == 0
-
-
-def test_clear_returns_none(store: BaseLmdbStore) -> None:
-    assert store.clear() is None
-
-
-def test_clear_then_set_works(store: BaseLmdbStore) -> None:
-    store.set("1", {"text": "hello"})
-    store.clear()
-    store.set("2", {"text": "world"})
-    assert store.count() == 1
-    assert store.get("2") == {"text": "world"}
-
-
-# --- contains ---
-
-
-def test_contains_true_when_key_present(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.contains("1")
-
-
-def test_contains_false_when_key_missing(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert not store.contains("99")
-
-
-def test_contains_false_when_store_empty(store: BaseLmdbStore) -> None:
-    assert not store.contains("1")
-
-
-# --- contains_many ---
-
-
-def test_contains_many_all_found(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
-
-
-def test_contains_many_all_missing(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["99", "100"]) == [False, False]
-
-
-def test_contains_many_mixed(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
-
-
-def test_contains_many_empty_input_returns_empty_lists(store: BaseLmdbStore) -> None:
-    assert store.contains_many([]) == []
-
-
-def test_contains_many_empty_store_returns_all_missing(store: BaseLmdbStore) -> None:
-    assert store.contains_many(["1", "2"]) == [False, False]
-
-
-def test_contains_many_returns_list_of_bools(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.contains_many(["1", "99"])
-    assert isinstance(result, list)
-    assert all(isinstance(flag, bool) for flag in result)
+@lmdb_available
+def test_init_map_size(store: LmdbStore) -> None:
+    assert store.environment.info()["map_size"] == MAP_SIZE
 
 
 # --- keys ---
 
 
-def test_keys_empty_store_yields_nothing(store: BaseLmdbStore) -> None:
-    assert list(store.keys()) == []
+@lmdb_available
+@pytest.mark.parametrize("key", ["a", "x" * 511, "é" * 255, "a" + chr(0) + "b"])
+def test_accepted_key(store: LmdbStore, key: str) -> None:
+    store.set(key, {})
+    assert list(store.keys()) == [key]
 
 
-def test_keys_returns_all_keys(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert sorted(store.keys()) == sorted(items.keys())
-
-
-# --- values ---
-
-
-def test_values_empty_store_yields_nothing(store: BaseLmdbStore) -> None:
-    assert list(store.values()) == []
-
-
-def test_values_returns_all_values(store: BaseLmdbStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = list(store.values())
-    assert len(result) == len(items)
-    assert {v["title"] for v in result} == {v["title"] for v in items.values()}
-
-
-def test_values_is_lazy_generator(store: BaseLmdbStore) -> None:
-    assert isinstance(store.values(), Iterator)
-
-
-# --- iter_batches ---
-
-
-def test_iter_batches_empty_store_yields_nothing(store: BaseLmdbStore) -> None:
-    assert list(store.iter_batches()) == []
-
-
-def test_iter_batches_returns_generator(store: BaseLmdbStore) -> None:
-    result = store.iter_batches()
-    assert isinstance(result, Iterator)
-
-
-def test_iter_batches_default_batch_size(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
+@lmdb_available
+@pytest.mark.parametrize(
+    "key",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("x" * 512, id="too_long"),
+        pytest.param("é" * 256, id="too_many_bytes"),
+        pytest.param(chr(0xD800), id="surrogate"),
+    ],
+)
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda s, k: s.get(k), id="get"),
+        pytest.param(lambda s, k: s.get_many(["1", k]), id="get_many"),
+        pytest.param(lambda s, k: s.contains(k), id="contains"),
+        pytest.param(lambda s, k: s.set(k, {}), id="set"),
+        pytest.param(lambda s, k: s.set_many({"new": {}, k: {}}), id="set_many"),
+        pytest.param(
+            lambda s, k: s.set_many({"1": {}, k: {}}, on_conflict="raise"), id="set_many_raise"
+        ),
+        pytest.param(lambda s, k: s.delete(k), id="delete"),
+        pytest.param(lambda s, k: s.delete_many(["1", k]), id="delete_many"),
+    ],
+)
+def test_rejected_key_raises_and_changes_nothing(
+    filled_store: LmdbStore, key: str, operation: Callable[[LmdbStore, str], Any]
 ) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches())
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
+    with pytest.raises(ValueError, match=r"A key of LmdbStore must"):
+        operation(filled_store, key)
+    assert dict(next(filled_store._iter_batches(10))) == PAYLOADS
 
 
-def test_iter_batches_yields_correct_batch_sizes(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=2))
-    assert sorted(len(b) for b in batches) == [2, 2]
+# --- open / close ---
 
 
-def test_iter_batches_batch_size_larger_than_store(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=100))
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
+@lmdb_available
+def test__open_creates_missing_directories(tmp_path: Path) -> None:
+    with LmdbStore(tmp_path / "nested" / "data", map_size=MAP_SIZE):
+        assert (tmp_path / "nested" / "data" / "data.mdb").is_file()
 
 
-def test_iter_batches_returns_all_key_value_pairs(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    for batch in store.iter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
+@lmdb_available
+def test__open_single_file(tmp_path: Path) -> None:
+    with LmdbStore(tmp_path / "nested" / "db", map_size=MAP_SIZE, subdir=False):
+        assert (tmp_path / "nested" / "db").is_file()
 
 
-def test_iter_batches_batches_are_dicts(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=2))
-    assert all(isinstance(batch, dict) for batch in batches)
-
-
-def test_iter_batches_zero_batch_size_raises(store: BaseLmdbStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        list(store.iter_batches(batch_size=0))
-
-
-def test_iter_batches_negative_batch_size_raises(store: BaseLmdbStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        list(store.iter_batches(batch_size=-1))
-
-
-def test_iter_batches_error_raised_before_any_query(store: BaseLmdbStore) -> None:
-    gen = store.iter_batches(batch_size=0)
-    with pytest.raises(ValueError, match="batch_size"):
-        next(gen)
-
-
-def test_iter_batches_does_not_mutate_store(
-    store: BaseLmdbStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    list(store.iter_batches(batch_size=2))
-    assert store.count() == len(items)
-
-
-# --- close ---
-
-
-def test_close_is_idempotent(store: BaseLmdbStore) -> None:
-    store.close()
-    store.close()  # should not raise
-
-
-def test_get_before_open_raises(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> None:
-    store = store_cls(str(tmp_path / "unopened"))
-    with pytest.raises(RuntimeError, match="not open"):
-        store.get("1")
-
-
-def test_close_returns_none(store: BaseLmdbStore) -> None:
-    assert store.close() is None
-
-
-# --- closed ---
-
-
-def test_closed_false_before_close(store: BaseLmdbStore) -> None:
-    assert not store.closed
-
-
-def test_closed_true_after_close(store: BaseLmdbStore) -> None:
-    store.close()
-    assert store.closed
-
-
-def test_environment_raises_when_not_open(store_cls: type[BaseLmdbStore], tmp_path: Path) -> None:
-    store = store_cls(tmp_path / "db")
-    with pytest.raises(RuntimeError, match="is not open"):
-        _ = store._environment
-
-
-# --- context manager ---
-
-
-def test_context_manager_returns_self(store: BaseLmdbStore, store_cls: type[BaseLmdbStore]) -> None:
-    assert isinstance(store, store_cls)
-
-
-def test_context_manager_closes_on_normal_exit(
-    tmp_path: Path, store_cls: type[BaseLmdbStore]
-) -> None:
-    with store_cls(tmp_path / "db") as store:
-        store.set("1", {"text": "hello"})
-        assert store.count() == 1
-    assert store._closed
-
-
-def test_context_manager_closes_on_exception(
-    tmp_path: Path, store_cls: type[BaseLmdbStore]
-) -> None:
-    msg = "boom"
-    with pytest.raises(ValueError, match="boom"), store_cls(tmp_path / "db") as store:
-        raise ValueError(msg)
-    assert store._closed
-
-
-def test_context_manager_usable_for_reads_and_writes(store: BaseLmdbStore) -> None:
-    store.set_many(
-        {
-            "1": {"text": "hello", "author": "Alice"},
-            "2": {"text": "world", "author": "Bob"},
-        }
-    )
-    assert store.count() == 2
-    assert store.filter(author="Alice")[0]["text"] == "hello"
-    store.delete("1")
-    assert store.count() == 1
-
-
-def test_context_manager_multiple_open_close_same_path(
-    tmp_path: Path, store_cls: type[BaseLmdbStore]
-) -> None:
-    """Reopening after close reconnects to the same environment on disk,
-    so previously written data is still there."""
-    lmdb_store = store_cls(tmp_path / "db")
-    for i in range(3):
-        with lmdb_store as store:
-            store.set(str(i), {"text": "hello"})
-            assert store.count() == i + 1
-
-
-# --- async context manager ---
-
-
-async def test_async_context_manager_returns_self(
-    store: BaseLmdbStore, store_cls: type[BaseLmdbStore]
-) -> None:
-    async with store as opened:
-        assert isinstance(opened, store_cls)
-
-
-async def test_async_context_manager_closes_on_normal_exit(
-    tmp_path: Path, store_cls: type[BaseLmdbStore]
-) -> None:
-    async with store_cls(tmp_path / "db") as store:
-        store.set("1", {"text": "hello"})
-        assert store.count() == 1
-    assert store._closed
-
-
-async def test_async_context_manager_multiple_open_close_same_path(
-    tmp_path: Path, store_cls: type[BaseLmdbStore]
-) -> None:
-    """Reopening after close via ``async with`` reconnects to the same
-    environment on disk, so previously written data is still there."""
-    lmdb_store = store_cls(tmp_path / "db")
-    for i in range(3):
-        async with lmdb_store as store:
-            store.set(str(i), {"text": "hello"})
-            assert store.count() == i + 1
-
-
-#####################################
-#     Tests for to_uri/from_uri     #
-#####################################
-
-
-def test_to_uri_from_uri_round_trips_data(
-    tmp_path: Path, store_cls: type[BaseLmdbStore], items: dict[str, dict[str, Any]]
-) -> None:
-    path = tmp_path / "db"
-    with store_cls(path) as store:
-        store.set_many(items)
-        uri = store.to_uri()
-    with store_cls.from_uri(uri) as reloaded:
-        assert reloaded.count() == len(items)
-
-
-def test_from_uri_read_only_rejects_writes(
-    tmp_path: Path, store_cls: type[BaseLmdbStore], items: dict[str, dict[str, Any]]
-) -> None:
-    path = tmp_path / "db"
-    with store_cls(path) as store:
-        store.set_many(items)
-        uri = store.to_uri()
-    with store_cls.from_uri(uri, read_only=True) as reloaded:
-        assert reloaded.count() == len(items)
-        with pytest.raises(lmdb.ReadonlyError):
-            reloaded.set("new", {"a": 1})
-
-
-##########################################################
-#     PickleLmdbStore-specific serialization behavior     #
-##########################################################
-
-# The JSON and pickle variants share the exact same behavior for
-# JSON-compatible values (covered by every test above, run against
-# both `store_cls` params). They differ only in what they can encode:
-# PickleLmdbStore round-trips arbitrary Python objects, LmdbStore
-# silently normalizes them to their closest JSON equivalent.
-
-
-def test_pickle_store_round_trips_tuples_and_sets(tmp_path: Path) -> None:
-    with PickleLmdbStore(tmp_path / "db") as store:
-        store.set("1", {"coordinates": (1, 2, 3), "tags": {"python", "lmdb"}})
-        assert store.get("1") == {"coordinates": (1, 2, 3), "tags": {"python", "lmdb"}}
-
-
-def test_json_store_normalizes_tuples_and_sets_are_unsupported(tmp_path: Path) -> None:
-    with LmdbStore(tmp_path / "db") as store:
-        store.set("1", {"coordinates": (1, 2, 3)})
-        # JSON has no tuple type, so it comes back as a list.
-        assert store.get("1") == {"coordinates": [1, 2, 3]}
-        with pytest.raises(TypeError, match="not JSON serializable"):
-            store.set("2", {"tags": {"python", "lmdb"}})
-
-
-###############################
-#     Tests for async APIs    #
-###############################
-
-
-# --- aget / aset ---
-
-
-async def test_lmdb_store_aget_aset_round_trip(store: BaseLmdbStore) -> None:
-    await store.aset("1", {"a": 1})
-    assert await store.aget("1") == {"a": 1}
-
-
-# --- acontains_many ---
-
-
-async def test_lmdb_store_acontains_many(store: BaseLmdbStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    assert await store.acontains_many(["1", "3"]) == [True, False]
-
-
-# --- akeys ---
-
-
-async def test_lmdb_store_akeys(store: BaseLmdbStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    assert sorted([key async for key in store.akeys()]) == ["1", "2"]
-
-
-# --- aiter_batches ---
-
-
-async def test_lmdb_store_aiter_batches(store: BaseLmdbStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
-    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
-    assert sum(len(b) for b in batches) == 3
-
-
-###############################
-#     Error paths             #
-###############################
-
-
-def test_set_raises_when_map_size_exhausted(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> None:
-    with (  # noqa: PT012
-        store_cls(tmp_path / "db", map_size=64 * 1024) as store,
-        pytest.raises(lmdb.MapFullError),
+@lmdb_available
+def test__open_same_path_twice(path: Path) -> None:
+    second = LmdbStore(path, map_size=MAP_SIZE)
+    with (
+        LmdbStore(path, map_size=MAP_SIZE),
+        pytest.raises(lmdb.Error, match=r"already open in this process"),
     ):
-        for i in range(100_000):
-            store.set(str(i), {"text": "x" * 1000})
+        second.open()
+    assert second.closed
 
 
-def test_pickle_store_decode_raises_on_corrupted_bytes(tmp_path: Path) -> None:
-    with PickleLmdbStore(tmp_path / "db") as store:
-        with store._env.begin(write=True) as txn:
-            txn.put(b"1", b"not-a-valid-pickle-blob")
-        with pytest.raises(Exception):  # noqa: B017, PT011
-            store.get("1")
+@lmdb_available
+def test_reopen_keeps_values(path: Path) -> None:
+    with LmdbStore(path, map_size=MAP_SIZE) as store:
+        assert store.get("1") == {"a": 1}
 
 
-# --- environment ---
+@lmdb_available
+def test__close(store: LmdbStore) -> None:
+    environment = store.environment
+    store._close()
+    with pytest.raises(lmdb.Error, match=r"closed"):
+        environment.stat()
 
 
-def test_environment_exposes_lmdb_env(store: BaseLmdbStore) -> None:
-    store.set("a", {"x": 1})
-    assert store.environment.stat()["entries"] >= 1
+@lmdb_available
+def test__close_without_open(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.INFO):
+        LmdbStore(tmp_path)._close()
+    assert caplog.messages == []
 
 
-def test_environment_before_open_raises(tmp_path: Path, store_cls: type[BaseLmdbStore]) -> None:
-    with pytest.raises(RuntimeError, match="not open"):
-        _ = store_cls(tmp_path / "db").environment
+@lmdb_available
+def test_environment_not_open(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match=r"LmdbStore is not open"):
+        _ = LmdbStore(tmp_path).environment
+
+
+# --- read only ---
+
+
+@lmdb_available
+def test_read_only_reads_existing_values(path: Path) -> None:
+    with LmdbStore(path, map_size=MAP_SIZE, read_only=True) as store:
+        assert store.get("1") == {"a": 1}
+
+
+@lmdb_available
+@pytest.mark.parametrize(
+    "write",
+    [
+        pytest.param(lambda s: s.set("2", {}), id="set"),
+        pytest.param(lambda s: s.set("2", {}, on_conflict="raise"), id="set_raise"),
+        pytest.param(lambda s: s.delete("1"), id="delete"),
+        pytest.param(lambda s: s.clear(), id="clear"),
+    ],
+)
+def test_read_only_rejects_writes(path: Path, write: Callable[[LmdbStore], Any]) -> None:
+    with LmdbStore(path, map_size=MAP_SIZE, read_only=True) as store:
+        with pytest.raises(lmdb.ReadonlyError, match=r"read-only"):
+            write(store)
+        assert dict(next(store.iter_batches())) == {"1": {"a": 1}}
+
+
+@lmdb_available
+def test_read_only_does_not_create_directory(tmp_path: Path) -> None:
+    store = LmdbStore(tmp_path / "data", read_only=True)
+    with pytest.raises(FileNotFoundError, match=r"No LMDB environment to read"):
+        store.open()
+    assert not (tmp_path / "data").exists()
+
+
+@lmdb_available
+def test_read_only_does_not_create_files(tmp_path: Path) -> None:
+    store = LmdbStore(tmp_path, read_only=True)
+    with pytest.raises(FileNotFoundError, match=r"No LMDB environment to read"):
+        store.open()
+    assert list(tmp_path.iterdir()) == []
+
+
+@lmdb_available
+def test_read_only_does_not_create_lock_file(path: Path) -> None:
+    (path / "lock.mdb").unlink()
+    store = LmdbStore(path, read_only=True)
+    with pytest.raises(FileNotFoundError, match=r"lock file .* does not exist"):
+        store.open()
+    assert [file.name for file in path.iterdir()] == ["data.mdb"]
+
+
+@lmdb_available
+def test_read_only_without_lock(path: Path) -> None:
+    (path / "lock.mdb").unlink()
+    with LmdbStore(path, map_size=MAP_SIZE, read_only=True, lock=False) as store:
+        assert (store.get("1"), [file.name for file in path.iterdir()]) == ({"a": 1}, ["data.mdb"])
+
+
+@lmdb_available
+def test_read_only_single_file(tmp_path: Path) -> None:
+    with LmdbStore(tmp_path / "db", map_size=MAP_SIZE, subdir=False) as store:
+        store.set("1", {})
+    with LmdbStore(tmp_path / "db", map_size=MAP_SIZE, subdir=False, read_only=True) as store:
+        assert store.contains("1")
+
+
+# --- primitives ---
+
+
+@lmdb_available
+def test__get_many(filled_store: LmdbStore) -> None:
+    assert filled_store._get_many(["3", "missing", "1", "3"]) == {
+        "3": PAYLOADS["3"],
+        "1": PAYLOADS["1"],
+    }
+
+
+@lmdb_available
+@pytest.mark.parametrize(("key", "expected"), [("1", {"1": PAYLOADS["1"]}), ("missing", {})])
+def test__get_many_one_key(filled_store: LmdbStore, key: str, expected: dict) -> None:
+    assert filled_store._get_many([key]) == expected
+
+
+@lmdb_available
+@pytest.mark.parametrize("payload", ['{"é": 1}', '{"é": 1}'.encode()])
+def test__put_many(store: LmdbStore, payload: str | bytes) -> None:
+    store._put_many({"a": payload})
+    assert store._get_many(["a"]) == {"a": '{"é": 1}'.encode()}
+
+
+@lmdb_available
+def test__put_many_full_map_writes_nothing(tmp_path: Path) -> None:
+    with LmdbStore(tmp_path, map_size=2**16) as store:
+        with pytest.raises(lmdb.MapFullError, match=r"MDB_MAP_FULL"):
+            store._put_many({"a": b"1", "b": b"x" * 2**17})
+        assert store._count() == 0
+
+
+@lmdb_available
+def test__update(filled_store: LmdbStore) -> None:
+    filled_store._update(["1", "4"], lambda existing: {"4": existing["1"]})
+    assert filled_store._get_many(["1", "4"]) == {"1": PAYLOADS["1"], "4": PAYLOADS["1"]}
+
+
+@lmdb_available
+def test__update_gives_the_existing_payloads_to_the_plan(filled_store: LmdbStore) -> None:
+    received: list[dict] = []
+    filled_store._update(["4", "1"], lambda existing: received.append(existing) or {})
+    assert received == [{"1": PAYLOADS["1"]}]
+
+
+@lmdb_available
+def test__update_plan_raises_writes_nothing(filled_store: LmdbStore) -> None:
+    plan = build_plan({"4": "{}", "1": "{}"}, "raise", JsonCodec())
+    with pytest.raises(KeyError, match=r"already exist"):
+        filled_store._update(["4", "1"], plan)
+    assert filled_store._count() == 3
+
+
+@lmdb_available
+def test__delete_many(filled_store: LmdbStore) -> None:
+    filled_store._delete_many(["1", "missing", "1", "3"])
+    assert filled_store._get_many(["1", "2", "3"]) == {"2": PAYLOADS["2"]}
+
+
+@lmdb_available
+def test__clear(filled_store: LmdbStore) -> None:
+    filled_store._clear()
+    assert filled_store._count() == 0
+
+
+@lmdb_available
+def test__clear_then_write(filled_store: LmdbStore) -> None:
+    filled_store._clear()
+    filled_store._put_many({"4": b"{}"})
+    assert filled_store._get_many(["1", "4"]) == {"4": b"{}"}
+
+
+@lmdb_available
+def test__count(filled_store: LmdbStore) -> None:
+    assert filled_store._count() == 3
+
+
+@lmdb_available
+def test__contains_many(filled_store: LmdbStore) -> None:
+    assert filled_store._contains_many(["1", "missing", "1", "3"]) == {"1", "3"}
+
+
+@lmdb_available
+@pytest.mark.parametrize(
+    ("batch_size", "expected"),
+    [(1, [["1"], ["2"], ["3"]]), (2, [["1", "2"], ["3"]]), (3, [["1", "2", "3"]])],
+)
+def test__iter_batches(filled_store: LmdbStore, batch_size: int, expected: list[list[str]]) -> None:
+    assert [list(batch) for batch in filled_store._iter_batches(batch_size)] == expected
+
+
+@lmdb_available
+def test__iter_batches_payloads(filled_store: LmdbStore) -> None:
+    assert list(filled_store._iter_batches(10)) == [PAYLOADS]
+
+
+@lmdb_available
+def test__iter_batches_empty_store(store: LmdbStore) -> None:
+    assert list(store._iter_batches(2)) == []
+
+
+@lmdb_available
+@pytest.mark.parametrize("method", ["_iter_batches", "_iter_key_batches"])
+def test_iteration_skips_keys_deleted_since_the_snapshot(
+    filled_store: LmdbStore, method: str
+) -> None:
+    iterator = getattr(filled_store, method)(1)
+    next(iterator)
+    filled_store._delete_many(["2"])
+    assert [list(batch) for batch in iterator] == [["3"]]
+
+
+@lmdb_available
+@pytest.mark.parametrize("method", ["_iter_batches", "_iter_key_batches"])
+def test_iteration_does_not_yield_empty_batches(filled_store: LmdbStore, method: str) -> None:
+    iterator = getattr(filled_store, method)(1)
+    next(iterator)
+    filled_store._clear()
+    assert list(iterator) == []
+
+
+@lmdb_available
+@pytest.mark.parametrize("method", ["_iter_batches", "_iter_key_batches"])
+def test_iteration_does_not_yield_keys_written_after_the_snapshot(
+    filled_store: LmdbStore, method: str
+) -> None:
+    iterator = getattr(filled_store, method)(1)
+    next(iterator)
+    filled_store._put_many({"4": b"{}"})
+    assert [list(batch) for batch in iterator] == [["2"], ["3"]]
+
+
+@lmdb_available
+@pytest.mark.parametrize("method", ["_iter_batches", "_iter_key_batches"])
+def test_iteration_keeps_no_reader_between_batches(filled_store: LmdbStore, method: str) -> None:
+    iterator = getattr(filled_store, method)(1)
+    next(iterator)
+    # The table of the readers has no transaction that holds a snapshot.
+    assert [line.split()[-1] for line in filled_store.environment.readers().splitlines()[1:]] in (
+        [],
+        ["-"],
+    )
+
+
+@lmdb_available
+@pytest.mark.parametrize(
+    ("batch_size", "expected"),
+    [(1, [["1"], ["2"], ["3"]]), (2, [["1", "2"], ["3"]]), (3, [["1", "2", "3"]])],
+)
+def test__iter_key_batches(
+    filled_store: LmdbStore, batch_size: int, expected: list[list[str]]
+) -> None:
+    assert list(filled_store._iter_key_batches(batch_size)) == expected
+
+
+@lmdb_available
+def test__iter_key_batches_empty_store(store: LmdbStore) -> None:
+    assert list(store._iter_key_batches(2)) == []
+
+
+@lmdb_available
+def test__snapshot_keys(filled_store: LmdbStore) -> None:
+    assert filled_store._snapshot_keys() == [b"1", b"2", b"3"]
+
+
+# --- uri ---
+
+
+@lmdb_available
+@pytest.mark.parametrize(
+    ("codec", "scheme"), [(JsonCodec(), "lmdb"), (PickleCodec(), "lmdb+pickle")]
+)
+def test_to_uri(codec: Codec, scheme: str) -> None:
+    assert LmdbStore("/data/a dir", codec=codec).to_uri() == f"{scheme}:/data/a%20dir"
+
+
+@lmdb_available
+@pytest.mark.parametrize("codec", [JsonCodec(), PickleCodec()])
+def test_from_uri_gives_the_path_and_the_codec(tmp_path: Path, codec: Codec) -> None:
+    restored = LmdbStore.from_uri(LmdbStore(tmp_path, codec=codec).to_uri())
+    assert (restored.path, type(restored._codec)) == (tmp_path.resolve(), type(codec))
+
+
+@lmdb_available
+def test_from_uri_passes_the_options(path: Path) -> None:
+    uri = LmdbStore(path).to_uri()
+    with LmdbStore.from_uri(uri, map_size=2**25) as store:
+        assert store.environment.info()["map_size"] == 2**25
+
+
+@lmdb_available
+def test_from_uri_read_only(path: Path) -> None:
+    uri = LmdbStore(path).to_uri()
+    with (
+        LmdbStore.from_uri(uri, read_only=True) as store,
+        pytest.raises(lmdb.ReadonlyError, match=r"read-only"),
+    ):
+        store.set("2", {})
+
+
+@lmdb_available
+def test_from_uri_keeps_given_codec(tmp_path: Path) -> None:
+    codec = PickleCodec()
+    uri = LmdbStore(tmp_path, codec=codec).to_uri()
+    assert LmdbStore.from_uri(uri, codec=codec)._codec is codec
+
+
+@lmdb_available
+def test_from_uri_codec_mismatch(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"does not match the scheme"):
+        LmdbStore.from_uri(LmdbStore(tmp_path).to_uri(), codec=PickleCodec())
+
+
+@lmdb_available
+@pytest.mark.parametrize("uri", ["sqlite:/data", "lmdb+json:/data", "/data"])
+def test_from_uri_other_scheme(uri: str) -> None:
+    with pytest.raises(ValueError, match=r"Invalid scheme"):
+        LmdbStore.from_uri(uri)
+
+
+# --- repr ---
+
+
+@lmdb_available
+def test_repr(filled_store: LmdbStore) -> None:
+    assert "(count): 3" in repr(filled_store)
+
+
+@lmdb_available
+def test__get_repr_kwargs_closed(tmp_path: Path) -> None:
+    assert LmdbStore(tmp_path)._get_repr_kwargs() == {
+        "path": str(tmp_path.resolve()),
+        "closed": True,
+    }
+
+
+@lmdb_available
+def test__get_repr_kwargs_options(tmp_path: Path) -> None:
+    codec = PickleCodec()
+    store = LmdbStore(tmp_path, codec=codec, read_only=True, max_readers=7)
+    assert store._get_repr_kwargs() == {
+        "path": str(tmp_path.resolve()),
+        "closed": True,
+        "codec": codec,
+        "read_only": True,
+        "max_readers": 7,
+    }
+
+
+#################################
+#     Tests for _encode_key     #
+#################################
+
+
+@pytest.mark.parametrize(
+    ("key", "encoded"), [("a", b"a"), ("é", b"\xc3\xa9"), ("x" * 511, b"x" * 511)]
+)
+def test__encode_key(key: str, encoded: bytes) -> None:
+    assert _encode_key(key) == encoded
+
+
+@pytest.mark.parametrize(("key", "size"), [("", 0), ("x" * 512, 512), ("é" * 256, 512)])
+def test__encode_key_invalid_size(key: str, size: int) -> None:
+    with pytest.raises(ValueError, match=rf"1 to 511 UTF-8 bytes, not {size}:"):
+        _encode_key(key)
+
+
+def test__encode_key_lone_surrogate() -> None:
+    with pytest.raises(ValueError, match=r"lone surrogate"):
+        _encode_key(chr(0xD800))
+
+
+##################################
+#     Tests for _encode_keys     #
+##################################
+
+
+@pytest.mark.parametrize(
+    ("keys", "encoded"),
+    [([], []), (["b", "é", "b"], [b"b", b"\xc3\xa9", b"b"]), (["x" * 511], [b"x" * 511])],
+)
+def test__encode_keys(keys: list[str], encoded: list[bytes]) -> None:
+    assert _encode_keys(keys) == encoded
+
+
+@pytest.mark.parametrize("key", ["", "x" * 512])
+def test__encode_keys_invalid_size(key: str) -> None:
+    with pytest.raises(ValueError, match=r"1 to 511 UTF-8 bytes"):
+        _encode_keys(["a", key])
+
+
+def test__encode_keys_lone_surrogate() -> None:
+    with pytest.raises(ValueError, match=r"lone surrogate"):
+        _encode_keys(["a", chr(0xD800)])
+
+
+#####################################
+#     Tests for _encode_payload     #
+#####################################
+
+
+@pytest.mark.parametrize("payload", ["é", "é".encode()])
+def test__encode_payload(payload: str | bytes) -> None:
+    assert _encode_payload(payload) == "é".encode()
+
+
+##############################################
+#     Tests for _check_environment_files     #
+##############################################
+
+
+@pytest.mark.parametrize(
+    ("names", "subdir", "lock"),
+    [
+        pytest.param(["db/data.mdb", "db/lock.mdb"], True, True, id="directory"),
+        pytest.param(["db/data.mdb"], True, False, id="directory_without_lock"),
+        pytest.param(["db", "db-lock"], False, True, id="file"),
+        pytest.param(["db"], False, False, id="file_without_lock"),
+    ],
+)
+def test__check_environment_files(
+    tmp_path: Path, names: list[str], subdir: bool, lock: bool
+) -> None:
+    for name in names:
+        (tmp_path / name).parent.mkdir(exist_ok=True)
+        (tmp_path / name).touch()
+    assert _check_environment_files(tmp_path / "db", subdir=subdir, lock=lock) is None
+
+
+@pytest.mark.parametrize("subdir", [True, False])
+def test__check_environment_files_no_data_file(tmp_path: Path, subdir: bool) -> None:
+    with pytest.raises(FileNotFoundError, match=r"No LMDB environment to read"):
+        _check_environment_files(tmp_path / "db", subdir=subdir, lock=False)
+
+
+@pytest.mark.parametrize(("name", "subdir"), [("db/data.mdb", True), ("db", False)])
+def test__check_environment_files_no_lock_file(tmp_path: Path, name: str, subdir: bool) -> None:
+    (tmp_path / name).parent.mkdir(exist_ok=True)
+    (tmp_path / name).touch()
+    with pytest.raises(FileNotFoundError, match=r"lock file .* does not exist"):
+        _check_environment_files(tmp_path / "db", subdir=subdir, lock=True)

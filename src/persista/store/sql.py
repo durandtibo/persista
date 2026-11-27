@@ -20,13 +20,12 @@ __all__ = [
 import contextlib
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
-from urllib.parse import urlsplit
 
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
-from persista.store.codec import JsonCodec, PickleCodec
-from persista.store.uri import decode_path_uri, encode_path_uri
+from persista.store.codec import JsonCodec
+from persista.store.uri import decode_codec_uri, encode_path_uri
 from persista.store.validation import check_is_open
 
 if TYPE_CHECKING:
@@ -42,6 +41,8 @@ _VALUE_COLUMN_TYPES: dict[str, str] = {"json": "JSON", "pickle": "BLOB"}
 
 _DELETE_ALL = "DELETE FROM store"
 _SELECT_KEYS = "SELECT key FROM store"
+_SELECT_FIRST_KEYS = "SELECT key FROM store ORDER BY key LIMIT ?"
+_SELECT_NEXT_KEYS = "SELECT key FROM store WHERE key > ? ORDER BY key LIMIT ?"
 _SELECT_ALL = "SELECT key, value FROM store"
 _SELECT_ONE = "SELECT key, value FROM store WHERE key = ?"
 _SELECT_FIRST_BATCH = "SELECT key, value FROM store ORDER BY key LIMIT ?"
@@ -237,19 +238,9 @@ def decode_sql_uri(uri: str, *, scheme: str, codec: Codec | None = None) -> tupl
 
         ```
     """
-    pickle_scheme = f"{scheme}+pickle"
-    is_pickle = urlsplit(uri).scheme == pickle_scheme
-    database = decode_path_uri(uri, expected_scheme=pickle_scheme if is_pickle else scheme)
-    default: Codec = PickleCodec() if is_pickle else JsonCodec()
-    if codec is None:
-        return database, default
-    if codec.name != default.name:
-        msg = (
-            f"The codec {codec.name!r} does not match the scheme of {uri!r}, "
-            f"which is for the codec {default.name!r}"
-        )
-        raise ValueError(msg)
-    return database, codec
+    return decode_codec_uri(
+        uri, schemes={"json": scheme, "pickle": f"{scheme}+pickle"}, codec=codec
+    )
 
 
 class SQLStore(BaseStore):
@@ -549,6 +540,15 @@ class SQLStore(BaseStore):
             if len(rows) < batch_size:
                 return
             rows = self._fetch(_SELECT_NEXT_BATCH, [rows[-1][0], batch_size])
+
+    def _iter_key_batches(self, batch_size: int) -> Iterator[list[str]]:
+        # As _iter_batches, without reading the values.
+        rows = self._fetch(_SELECT_FIRST_KEYS, [batch_size])
+        while rows:
+            yield [row[0] for row in rows]
+            if len(rows) < batch_size:
+                return
+            rows = self._fetch(_SELECT_NEXT_KEYS, [rows[-1][0], batch_size])
 
     def _filter_candidates(self, fields: Mapping[str, Any]) -> Iterator[dict[str, Payload]]:
         if not self._filters_in_sql():

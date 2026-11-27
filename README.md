@@ -103,11 +103,12 @@ synchronous and `a`-prefixed asynchronous methods on every store:
 
 - Uniform API across backends: `get`/`aget`, `get_many`/`aget_many`, `set`/`aset`,
   `set_many`/`aset_many`, `delete`/`adelete`, `filter`/`afilter`, iteration
-- Backends: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`
-- Codecs for `InMemoryStore`, `SQLiteStore` and `DuckDBStore`: JSON by default, which rejects the
+- Backends: `InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`,
+  `PostgresStore`
+- Codecs for the in-memory and local stores: JSON by default, which rejects the
   values that would lose data, or `pickle` (`SQLiteStore(path, codec=PickleCodec())`) to keep Python
   types
-- Pickle-backed variants of the other stores (`PickleLmdbStore`, `PickleRedisStore`, ...)
+- A pickle-backed variant of the Redis store (`PickleRedisStore`)
 - Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`, `"merge"`)
 
 ### ⏱️ **TTL Caching**

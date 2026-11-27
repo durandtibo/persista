@@ -7,16 +7,17 @@ import pytest
 import persista.store as store_pkg
 from persista.store import (
     DuckDBStore,
+    FileStore,
     InMemoryStore,
     JsonCodec,
-    JsonFileStore,
+    LmdbStore,
     NullStore,
     PickleCodec,
     SQLiteStore,
     register_scheme,
     store_from_uri,
 )
-from persista.testing.fixtures import duckdb_available
+from persista.testing.fixtures import duckdb_available, lmdb_available
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -34,13 +35,23 @@ def test_store_from_uri_null() -> None:
     assert isinstance(store, NullStore)
 
 
-def test_store_from_uri_file_json(tmp_path: Path) -> None:
-    with JsonFileStore(tmp_path / "db") as original:
+@pytest.mark.parametrize(
+    ("cls", "codec"),
+    [
+        pytest.param(FileStore, JsonCodec(), id="file_json"),
+        pytest.param(FileStore, PickleCodec(), id="file_pickle"),
+        pytest.param(LmdbStore, JsonCodec(), id="lmdb", marks=lmdb_available),
+        pytest.param(LmdbStore, PickleCodec(), id="lmdb_pickle", marks=lmdb_available),
+    ],
+)
+def test_store_from_uri_local_store_keeps_codec(
+    tmp_path: Path, cls: type[BaseStore], codec: Codec
+) -> None:
+    with cls(tmp_path / "data", codec=codec) as original:
         original.set("1", {"a": 1})
         uri = original.to_uri()
-    store = store_from_uri(uri)
-    assert isinstance(store, JsonFileStore)
-    assert store.get("1") == {"a": 1}
+    with store_from_uri(uri) as store:
+        assert (type(store), type(store._codec), store.get("1")) == (cls, type(codec), {"a": 1})
 
 
 @pytest.mark.parametrize(

@@ -538,6 +538,45 @@ def test__iter_batches_key_inserted_before_the_position(filled_store: SQLiteStor
     assert visited == ["1", "2", "3"]
 
 
+@pytest.mark.parametrize(
+    ("batch_size", "expected"),
+    [(1, [["1"], ["2"], ["3"]]), (2, [["1", "2"], ["3"]]), (3, [["1", "2", "3"]])],
+)
+def test__iter_key_batches(
+    filled_store: SQLiteStore, batch_size: int, expected: list[list[str]]
+) -> None:
+    assert list(filled_store._iter_key_batches(batch_size)) == expected
+
+
+def test__iter_key_batches_empty_store(store: SQLiteStore) -> None:
+    assert list(store._iter_key_batches(2)) == []
+
+
+def test__iter_key_batches_does_not_read_the_values(filled_store: SQLiteStore) -> None:
+    statements = trace(filled_store)
+    list(filled_store._iter_key_batches(2))
+    assert statements == [
+        "SELECT key FROM store ORDER BY key LIMIT 2",
+        "SELECT key FROM store WHERE key > '2' ORDER BY key LIMIT 2",
+    ]
+
+
+def test__iter_key_batches_delete_of_yielded_keys(filled_store: SQLiteStore) -> None:
+    visited: list[str] = []
+    for batch in filled_store._iter_key_batches(1):
+        visited.extend(batch)
+        filled_store._delete_many(batch)
+    assert visited == ["1", "2", "3"]
+
+
+def test__iter_key_batches_key_inserted_before_the_position(filled_store: SQLiteStore) -> None:
+    visited: list[str] = []
+    for batch in filled_store._iter_key_batches(1):
+        visited.extend(batch)
+        filled_store._put_many({"0": "{}"})
+    assert visited == ["1", "2", "3"]
+
+
 # --- filter ---
 
 
