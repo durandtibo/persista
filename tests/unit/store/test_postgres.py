@@ -168,6 +168,9 @@ class FakeConnection:
         if m := _EXISTS_RE.match(text):
             table = self.tables.get(m.group(1), {})
             return [(1,)] if params[0] in table else []
+        return self._dispatch_select(text, params)
+
+    def _dispatch_select(self, text: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
         if m := _COL_ANY_RE.match(text):
             table = self.tables.get(m.group(2), {})
             return [(key,) for key in params[0] if key in table]

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
     from persista.store.types import OnConflict
 
-if is_duckdb_available():  # pragma: no cover
+if TYPE_CHECKING or is_duckdb_available():  # pragma: no cover
     import duckdb
 
 logger: logging.Logger = logging.getLogger(__name__)

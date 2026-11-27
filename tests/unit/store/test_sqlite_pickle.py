@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.store import PickleSQLiteStore
+from persista.store import PickleSQLiteStore, sqlite as sqlite_module
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
@@ -402,8 +402,6 @@ def test_from_uri_read_only_rejects_writes(
 async def test_async_methods_work_without_aiosqlite(
     monkeypatch: pytest.MonkeyPatch, items: dict[str, dict[str, Any]]
 ) -> None:
-    from persista.store import sqlite as sqlite_module
-
     monkeypatch.setattr(sqlite_module, "is_aiosqlite_available", lambda: False)
     with PickleSQLiteStore(":memory:") as store:
         await store.aset_many(items)

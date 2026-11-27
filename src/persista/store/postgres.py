@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
     from persista.store.types import OnConflict
 
-if is_psycopg_available():  # pragma: no cover
+if TYPE_CHECKING or is_psycopg_available():  # pragma: no cover
     import psycopg
     from psycopg import sql
     from psycopg.conninfo import conninfo_to_dict

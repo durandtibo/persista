@@ -7,6 +7,7 @@ __all__ = ["create_session", "fetch_response"]
 
 import logging
 import time
+from typing import TYPE_CHECKING
 
 from persista.utils.imports import (
     check_requests,
@@ -15,10 +16,10 @@ from persista.utils.imports import (
     is_urllib3_available,
 )
 
-if is_requests_available():  # pragma: no cover
+if TYPE_CHECKING or is_requests_available():  # pragma: no cover
     import requests
     from requests.adapters import HTTPAdapter
-if is_urllib3_available():  # pragma: no cover
+if TYPE_CHECKING or is_urllib3_available():  # pragma: no cover
     from urllib3.util.retry import Retry
 
 logger: logging.Logger = logging.getLogger(__name__)

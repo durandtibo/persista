@@ -33,7 +33,7 @@ UUID `id` from the metadata itself, so two records with the same metadata conten
 >>> from persista.record import Record
 >>> record = Record.from_metadata({"source": "cats.txt", "page": 1})
 >>> record.metadata
-{'source': 'cats.txt', 'page': 1}
+mappingproxy({'source': 'cats.txt', 'page': 1})
 
 ```
 

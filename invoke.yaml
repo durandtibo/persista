@@ -1,3 +1,6 @@
 tasklib:
   package:
     name: persista
+  groups:
+    install: dev,docs
+    update: dev,docs

@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
     from persista.store.types import OnConflict
 
-if is_aiosqlite_available():  # pragma: no cover
+if TYPE_CHECKING or is_aiosqlite_available():  # pragma: no cover
     import aiosqlite
 
 logger: logging.Logger = logging.getLogger(__name__)
