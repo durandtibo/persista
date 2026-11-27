@@ -105,10 +105,9 @@ synchronous and `a`-prefixed asynchronous methods on every store:
   `set_many`/`aset_many`, `delete`/`adelete`, `filter`/`afilter`, iteration
 - Backends: `InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`,
   `PostgresStore`
-- Codecs for the in-memory and local stores: JSON by default, which rejects the
-  values that would lose data, or `pickle` (`SQLiteStore(path, codec=PickleCodec())`) to keep Python
-  types
-- A pickle-backed variant of the Redis store (`PickleRedisStore`)
+- Codecs for all the stores but PostgreSQL: JSON by default, which rejects the values that would
+  lose data, or `pickle` (`SQLiteStore(path, codec=PickleCodec())`) to keep Python types
+- A namespace for each `RedisStore`, so that several stores can share a Redis database
 - Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`, `"merge"`)
 
 ### ⏱️ **TTL Caching**

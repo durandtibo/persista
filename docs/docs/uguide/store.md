@@ -109,11 +109,10 @@ TypeError: dict keys must be str, not int: 1
 :warning: Decoding a `pickle` payload can execute arbitrary code. Only use `PickleCodec` with data
 from trusted sources.
 
-`InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore` and `LmdbStore` take a codec
-(`NullStore` always uses `JsonCodec`, to check the values it discards). `RedisStore` and
-`PostgresStore` encode the values themselves, as described in their sections: `PickleRedisStore`
-uses `pickle`, and the others use JSON, without all the checks above. For example, they turn an
-`int` key of a value into a `str` instead of rejecting it.
+`InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore` and `RedisStore` take a
+codec (`NullStore` always uses `JsonCodec`, to check the values it discards). `PostgresStore`
+encodes the values itself, as JSON and without all the checks above. For example, it turns an `int`
+key of a value into a `str` instead of rejecting it.
 
 ### Setting Multiple Values
 
@@ -187,9 +186,9 @@ key already exists:
 
 ### Errors
 
-`InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `NullStore` and the
-[custom stores](#writing-a-custom-store) check the state of the store and the arguments before doing
-anything, also when there is nothing to do (for example `get_many([])`):
+`InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`,
+`NullStore` and the [custom stores](#writing-a-custom-store) check the state of the store and the
+arguments before doing anything, also when there is nothing to do (for example `get_many([])`):
 
 | Situation                                                          | Error          |
 | ------------------------------------------------------------------ | -------------- |
@@ -220,10 +219,11 @@ A key is a `str`, compared exactly: `"a"` and `"A"` are two keys. Some backends 
 string. Their limits apply to them only, and every method that takes a key (reads and deletes
 included) raises `ValueError` for a key outside them, before anything is read or written:
 
-| Store       | Limit                                                                                                            |
-| ----------- | ---------------------------------------------------------------------------------------------------------------- |
-| `LmdbStore` | 1 to 511 UTF-8 bytes, so not the empty string; no lone surrogate                                                 |
-| `FileStore` | the file name, with its extension, has at most 255 characters (see [File Store](#file-store)); no lone surrogate |
+| Store        | Limit                                                                                                            |
+| ------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `LmdbStore`  | 1 to 511 UTF-8 bytes, so not the empty string; no lone surrogate                                                 |
+| `FileStore`  | the file name, with its extension, has at most 255 characters (see [File Store](#file-store)); no lone surrogate |
+| `RedisStore` | no lone surrogate                                                                                                |
 
 ## File Store
 
@@ -523,13 +523,13 @@ also readable. `map_size` is now a keyword-only argument.
 
 ### Redis
 
-`RedisStore` stores values in [Redis](https://redis.io/), encoded as JSON (requires the `redis`
-extra):
+`RedisStore` stores values in [Redis](https://redis.io/), through the `redis` extra, with the sync
+and the async clients of `redis-py`:
 
 ```python
 from persista.store import RedisStore
 
-with RedisStore("redis://localhost:6379/0") as store:
+with RedisStore("redis://localhost:6379/0", namespace="documents") as store:
     store.set_many(
         {
             "1": {
@@ -548,18 +548,74 @@ with RedisStore("redis://localhost:6379/0") as store:
     len(store.filter(author="Alice"))  # 2
 ```
 
-Use `PickleRedisStore` to store arbitrary Python objects using `pickle` instead of JSON.
+- Opening the store connects to the server, so a wrong address or password fails in `open`.
+- The values are kept as the payloads of the codec: JSON by default, which any Redis client can read.
+  Pass `codec=PickleCodec()` to keep Python types. A namespace does not record its codec: reading it
+  with the other codec raises a decoding error.
+- The other keyword arguments, such as `socket_timeout` or `max_connections`, are passed to
+  `redis.Redis.from_url` and to its async equivalent. `decode_responses` is not accepted.
+- A key can be any string without a lone surrogate (see [key limits](#key-limits)).
+- `repr` shows the URL without its credentials and runs no command, and the logs do not contain the
+  password. Percent-encode the special characters of a username or a password. `to_uri` returns the
+  URL as given, password included.
 
-:warning: `pickle.loads` can execute arbitrary code. Only use `PickleRedisStore` with data from
-trusted sources.
+:warning: Decoding a `pickle` payload can execute arbitrary code. Only use `PickleCodec` with a
+trusted server.
+
+#### Namespaces
+
+A store owns the namespace given by `namespace` (`"persista"` by default) in its Redis database. It
+only reads, counts and clears the keys of its namespace, so several stores can share a database, as
+long as their namespaces differ. Redis keys are laid out as follows:
+
+| Redis key             | Type   | Content                           |
+| --------------------- | ------ | --------------------------------- |
+| `<namespace>:v:<key>` | string | the payload of the value of a key |
+| `<namespace>:keys`    | set    | the keys of the store             |
+
+A namespace is a non-empty string that does not contain `:v:` and does not end with `:v`, so that
+two namespaces never share a Redis key. For example, `app` and `app:cache` are two namespaces.
+Do not modify these keys with other programs, and do not use a server that evicts keys
+(`maxmemory-policy`) for data that must be kept.
+
+#### Concurrency
+
+- A write of several keys runs in one transaction.
+- `on_conflict="raise"`, `"skip"` and `"merge"` are atomic against every other writer, including
+  other processes: the store watches the keys (`WATCH`/`MULTI`) and starts again if one of them
+  changes before the write. Many writers of the same key therefore slow each other down.
+- `clear` removes, in one transaction, every key that exists when it starts. A key that another
+  client creates during the call is kept.
+- A client has a limited number of connections (100 by default with `redis-py` 8). A call that needs
+  one more raises `redis.exceptions.MaxConnectionsError`, for example with several hundred `aset`
+  calls in one `asyncio.gather`: pass a larger `max_connections`, or limit the concurrency.
+
+#### Event Loops and Closing
+
+The async methods use an async client that belongs to the event loop that created it: another event
+loop gets its own client, so a store can be used in several calls of `asyncio.run`. A client is
+closed by `aclose` (or `async with`) in its loop, or when its loop shuts down, which `asyncio.run`
+does before it returns. `close` raises `RuntimeError` while an async client is open, for example in
+a coroutine that called an async method: call `await store.aclose()` instead. `aclose` waits for the
+async calls of the loop that are in progress. A loop that you manage yourself must call
+`aclose`, or `loop.shutdown_asyncgens()`, before it is closed.
+
+#### Changes from Earlier Versions
+
+:warning: `PickleRedisStore` and `BaseRedisStore` were removed: use
+`RedisStore(url, codec=PickleCodec())`. The layout of the Redis keys changed (the values were stored
+under the keys themselves, and the keys in the set `__keys__`), so **the data written by an earlier
+version is not found**. To keep it, read it with the earlier version and write it with the new one.
+The key `__keys__` is no longer reserved.
 
 ## Async Usage
 
 Every store also exposes `a`-prefixed asynchronous methods (`aget`, `aset`, `acount`, ...) that
 are coroutines (or async iterators), so they must be `await`ed and used from an `async` function.
 The same store instance can be used from both sync and async code -- there is no separate async
-class. Async methods are available on every store, including `RedisStore` and `PostgresStore`,
-which use the async driver of their library. The async methods of `InMemoryStore`, `FileStore`,
+class. Async methods are available on every store. Those of `RedisStore` and `PostgresStore`
+use the async driver of their library (see [event loops and closing](#event-loops-and-closing) for
+`RedisStore`). The async methods of `InMemoryStore`, `FileStore`,
 `SQLiteStore`, `DuckDBStore` and `LmdbStore` run in a worker thread of the store, one call at a time,
 so calls that wait for the store do not fill the default executor of your application. Cancelling an
 async call that already runs in a thread does not stop it. Iterating asynchronously takes one thread
@@ -600,7 +656,7 @@ hop per batch, so a larger `batch_size` is faster.
 
 ```
 
-`RedisStore`/`PickleRedisStore` and `PostgresStore` follow the same pattern, connecting to a
+`RedisStore` and `PostgresStore` follow the same pattern, connecting to a
 running Redis or PostgreSQL server:
 
 ```python
@@ -684,15 +740,16 @@ in mini-batches, which is useful when the source data does not fit comfortably i
 
 ```
 
-With `InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore` and `LmdbStore`, a key that is
-present during a whole iteration is yielded exactly once, even if you write or delete keys during the
-iteration (for example, you can delete each batch after processing it). The SQL stores read the keys
-in order and start each batch after the last key of the previous one (keyset pagination).
-`InMemoryStore`, `FileStore` and `LmdbStore` take a snapshot of the keys when the iteration starts,
-so a batch can be smaller than `batch_size`. `keys` and `akeys` do not read the values of
-`FileStore`, `SQLiteStore`, `DuckDBStore` and `LmdbStore`. A custom store must give the same guarantee
-in `_iter_batches`. Closing one of these stores, or a custom store, during an iteration raises
-`RuntimeError`.
+With `InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore` and `RedisStore`, a
+key that is present during a whole iteration is yielded exactly once, even if you write or delete
+keys during the iteration (for example, you can delete each batch after processing it). The SQL
+stores read the keys in order and start each batch after the last key of the previous one (keyset
+pagination). `InMemoryStore`, `FileStore`, `LmdbStore` and `RedisStore` take a snapshot of the keys
+when the iteration starts, so a batch can be smaller than `batch_size` (`keys` of `RedisStore` can
+also yield a key deleted during the iteration). `keys` and `akeys` do not read the values of
+`FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore` and `RedisStore`. A custom store must give the
+same guarantee in `_iter_batches`. Closing one of these stores, or a custom store, during an
+iteration raises `RuntimeError`.
 
 ## Writing a Custom Store
 
@@ -809,9 +866,12 @@ local stores:
 | `LmdbStore`   | `lmdb`      | `lmdb+pickle`   |
 
 Other constructor options, such as the `timeout` of `SQLiteStore`, the `map_size` of `LmdbStore` or
-the `table` of `PostgresStore`, are not part of the URI. The `from_uri` methods of `FileStore`,
-`SQLiteStore`, `DuckDBStore` and `LmdbStore` accept the other keyword arguments of the constructor,
-to pass them again; the other stores are reconstructed with the default options.
+the `namespace` of `RedisStore` or the `table` of `PostgresStore`, are not part of the URI. The
+`redis://` URLs do not carry the codec either. The `from_uri` methods of `FileStore`, `SQLiteStore`,
+`DuckDBStore`, `LmdbStore` and `RedisStore` accept the other keyword arguments of the constructor, to
+pass them again (for example `RedisStore.from_uri(uri, codec=PickleCodec(), namespace="documents")`);
+the other stores are reconstructed with the default options. The URL of a server store contains the
+password: treat it as a secret.
 
 ```pycon
 >>> from persista.store import PickleCodec, SQLiteStore
@@ -839,8 +899,8 @@ True
 
 ```
 
-`PickleRedisStore` shares the `redis://` scheme with `RedisStore`, so it isn't reachable through
-the dispatcher -- call `PickleRedisStore.from_uri(uri)` directly.
+`store_from_uri` builds a store with its default options: for a `redis://` URL, a `RedisStore` with
+the `JsonCodec` and the `persista` namespace. For other options, call `RedisStore.from_uri`.
 
 Use `register_scheme` to register a custom store class (or override a built-in one) under a
 given scheme:
@@ -889,16 +949,16 @@ arbitrary code. Only use it with a configuration from a trusted source.
 
 ## Choosing a Store
 
-| Store           | Backend                    | Persisted | Pickle values   | Async               |
-| --------------- | -------------------------- | --------- | --------------- | ------------------- |
-| `InMemoryStore` | Python `dict`              | No        | Yes (codec)     | Yes (worker thread) |
-| `FileStore`     | One file per value         | Yes       | Yes (codec)     | Yes (worker thread) |
-| `SQLiteStore`   | SQLite                     | Yes       | Yes (codec)     | Yes (worker thread) |
-| `DuckDBStore`   | DuckDB                     | Yes       | Yes (codec)     | Yes (worker thread) |
-| `LmdbStore`     | LMDB                       | Yes       | Yes (codec)     | Yes (worker thread) |
-| `RedisStore`    | Redis                      | Yes       | Yes (`Pickle…`) | Yes                 |
-| `PostgresStore` | PostgreSQL                 | Yes       | No              | Yes                 |
-| `NullStore`     | None (discards everything) | No        | N/A             | Yes                 |
+| Store           | Backend                    | Persisted | Pickle values | Async               |
+| --------------- | -------------------------- | --------- | ------------- | ------------------- |
+| `InMemoryStore` | Python `dict`              | No        | Yes (codec)   | Yes (worker thread) |
+| `FileStore`     | One file per value         | Yes       | Yes (codec)   | Yes (worker thread) |
+| `SQLiteStore`   | SQLite                     | Yes       | Yes (codec)   | Yes (worker thread) |
+| `DuckDBStore`   | DuckDB                     | Yes       | Yes (codec)   | Yes (worker thread) |
+| `LmdbStore`     | LMDB                       | Yes       | Yes (codec)   | Yes (worker thread) |
+| `RedisStore`    | Redis                      | Yes       | Yes (codec)   | Yes                 |
+| `PostgresStore` | PostgreSQL                 | Yes       | No            | Yes                 |
+| `NullStore`     | None (discards everything) | No        | N/A           | Yes                 |
 
 Use `InMemoryStore` for tests and prototyping, `FileStore` for values that you want to read as files,
 `SQLiteStore`/`DuckDBStore`/`LmdbStore` for local persistence without a server (SQLite can be shared

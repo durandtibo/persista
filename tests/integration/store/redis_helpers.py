@@ -8,7 +8,12 @@ Redis server is reachable at ``REDIS_URL``.
 
 from __future__ import annotations
 
-__all__ = ["REDIS_URL", "redis_server_available", "redis_server_reachable"]
+__all__ = [
+    "REDIS_URL",
+    "delete_namespaces",
+    "redis_server_available",
+    "redis_server_reachable",
+]
 
 import os
 
@@ -28,7 +33,8 @@ def redis_server_reachable() -> bool:
     if not is_redis_available():
         return False
     try:
-        redis.Redis.from_url(REDIS_URL, socket_connect_timeout=1).ping()
+        with redis.Redis.from_url(REDIS_URL, socket_connect_timeout=1) as client:
+            client.ping()
     except redis.exceptions.RedisError:
         return False
     return True
@@ -37,3 +43,18 @@ def redis_server_reachable() -> bool:
 redis_server_available = pytest.mark.skipif(
     not redis_server_reachable(), reason="Requires a reachable Redis server"
 )
+
+
+def delete_namespaces(prefix: str) -> None:
+    r"""Delete the Redis keys that start with a prefix, if the server is
+    reachable.
+
+    Args:
+        prefix: The start of the keys to delete. It must not contain the
+            special characters of the Redis patterns.
+    """
+    if not redis_server_reachable():
+        return
+    with redis.Redis.from_url(REDIS_URL) as client:
+        for key in client.scan_iter(match=f"{prefix}*", count=1000):
+            client.delete(key)

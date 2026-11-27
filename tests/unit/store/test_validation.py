@@ -19,6 +19,7 @@ from persista.store.validation import (
     check_is_open,
     validate_key,
     validate_keys,
+    validate_namespace,
     validate_table_name,
 )
 
@@ -193,6 +194,58 @@ def test_validate_keys_single_str_raises() -> None:
 def test_validate_keys_non_str_key_raises() -> None:
     with pytest.raises(TypeError, match=r"A key must be a str, not int: 1"):
         validate_keys(["a", 1])
+
+
+########################################
+#     Tests for validate_namespace     #
+########################################
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    [
+        "persista",
+        "a",
+        "v",
+        "app:cache",
+        "a:",
+        ":a",
+        ":",
+        "a:keys",
+        "v:a",
+        "a:V",
+        "a:vv",
+        "av",
+        "a:v ",
+        " ",
+        "é:🎉",
+        "a*?[b]",
+    ],
+)
+def test_validate_namespace_valid(namespace: str) -> None:
+    validate_namespace(namespace)
+
+
+def test_validate_namespace_empty() -> None:
+    with pytest.raises(ValueError, match=r"A namespace must not be empty"):
+        validate_namespace("")
+
+
+@pytest.mark.parametrize("namespace", ["a:v", ":v", "a:v:", "a:v:b", ":v:", "a:v:keys"])
+def test_validate_namespace_that_could_collide(namespace: str) -> None:
+    with pytest.raises(ValueError, match=r"must not contain ':v:' or end with ':v'"):
+        validate_namespace(namespace)
+
+
+def test_validate_namespace_surrogate() -> None:
+    with pytest.raises(ValueError, match=r"valid Unicode, but it has a lone surrogate"):
+        validate_namespace("a" + chr(0xD800))
+
+
+@pytest.mark.parametrize("namespace", [None, 1, b"a"])
+def test_validate_namespace_not_a_str(namespace: object) -> None:
+    with pytest.raises(TypeError, match=r"A namespace must be a str"):
+        validate_namespace(namespace)
 
 
 ###############################

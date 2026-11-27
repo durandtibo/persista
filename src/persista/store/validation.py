@@ -14,6 +14,7 @@ __all__ = [
     "validate_field_name",
     "validate_key",
     "validate_keys",
+    "validate_namespace",
     "validate_on_conflict",
     "validate_table_name",
 ]
@@ -146,6 +147,52 @@ def validate_keys(keys: Iterable[str]) -> list[str]:
     if set(map(type, keys)) <= {str}:
         return keys
     return [validate_key(key) for key in keys]
+
+
+def validate_namespace(namespace: str) -> None:
+    """Validate the namespace of a store whose keys are
+    ``<namespace>:v:<key>`` and ``<namespace>:keys``, such as
+    :class:`~persista.store.RedisStore`.
+
+    With these rules, two different namespaces never produce the same
+    key, even if one starts with the other.
+
+    Args:
+        namespace: The namespace to validate.
+
+    Raises:
+        TypeError: If ``namespace`` is not a ``str``.
+        ValueError: If ``namespace`` is empty, contains ``":v:"``, ends
+            with ``":v"``, or contains a lone surrogate.
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import validate_namespace
+        >>> validate_namespace("app:cache")
+        >>> validate_namespace("app:v")
+        Traceback (most recent call last):
+            ...
+        ValueError: Invalid namespace: 'app:v'. A namespace must not contain ':v:' or end with ':v'
+
+        ```
+    """
+    if not isinstance(namespace, str):
+        msg = f"A namespace must be a str, not {type(namespace).__name__}: {namespace!r}"
+        raise TypeError(msg)
+    if not namespace:
+        msg = "A namespace must not be empty"
+        raise ValueError(msg)
+    # ":v:" separates the namespace from the key of a value.
+    if ":v:" in namespace or namespace.endswith(":v"):
+        msg = (
+            f"Invalid namespace: {namespace!r}. A namespace must not contain ':v:' or end with ':v'"
+        )
+        raise ValueError(msg)
+    try:
+        namespace.encode()
+    except UnicodeEncodeError as exc:
+        msg = f"A namespace must be valid Unicode, but it has a lone surrogate: {namespace!r}"
+        raise ValueError(msg) from exc
 
 
 def validate_field_name(name: str) -> None:

@@ -1,64 +1,84 @@
 from __future__ import annotations
 
-import threading
-from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
+import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from persista.store import PickleRedisStore, RedisStore, redis as redis_module
+from persista.store import JsonCodec, PickleCodec, RedisStore
+from persista.store.plan import build_plan
+from persista.store.redis import (
+    _check_url,
+    _decode_keys,
+    _encode_key,
+    _encode_keys,
+    _encode_members,
+    _LoopClient,
+    _present,
+    _redact_url,
+)
+from persista.testing.fixtures import redis_available, redis_not_available
+from persista.utils.imports import is_redis_available
+
+if is_redis_available():
+    import fakeredis
+    import redis
 
 if TYPE_CHECKING:
-    from persista.store import BaseRedisStore
-
-fakeredis = pytest.importorskip("fakeredis")
-redis = pytest.importorskip("redis")
+    from collections.abc import Callable, Generator
 
 MODULE = "persista.store.redis"
 
+URL = "redis://localhost:6379/0"
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+SURROGATE = chr(0xD800)
 
+PAYLOADS = {"1": b'{"a": 1}', "2": b'{"a": 2}', "3": b'{"a": 3}'}
 
-def _use_fake_redis(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A single fake server instance is used regardless of `store_cls`, since
-    # RedisStore/PickleRedisStore only differ in serialization, and both
-    # request the correct `decode_responses` mode via `from_url` kwargs.
-    monkeypatch.setattr(
-        f"{MODULE}.redis.Redis.from_url",
-        lambda *_args, **kwargs: fakeredis.FakeRedis(
-            decode_responses=kwargs.get("decode_responses", True)
-        ),
-    )
-
-
-def _use_fake_async_redis(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Mirrors `_use_fake_redis`, but for the lazily-created
-    # `redis.asyncio.Redis` client used by the `a`-prefixed methods.
-    monkeypatch.setattr(
-        f"{MODULE}.aredis.Redis.from_url",
-        lambda *_args, **kwargs: fakeredis.aioredis.FakeRedis(
-            decode_responses=kwargs.get("decode_responses", True)
-        ),
-    )
-
-
-@pytest.fixture(params=[RedisStore, PickleRedisStore], ids=["json", "pickle"])
-def store_cls(request: pytest.FixtureRequest) -> type[BaseRedisStore]:
-    return request.param
+# The Redis keys of a store that contains PAYLOADS.
+REDIS_KEYS = [b"persista:keys", b"persista:v:1", b"persista:v:2", b"persista:v:3"]
 
 
 @pytest.fixture
-def store(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> Generator[BaseRedisStore, None, None]:
-    _use_fake_redis(monkeypatch)
-    _use_fake_async_redis(monkeypatch)
-    with store_cls() as store:
+def server(monkeypatch: pytest.MonkeyPatch) -> Any:
+    r"""Replace the Redis server of the sync and async clients by a fake
+    one, and return it."""
+    server = fakeredis.FakeServer()
+    monkeypatch.setattr(
+        f"{MODULE}.redis.Redis.from_url",
+        lambda _url, **_kwargs: fakeredis.FakeRedis(server=server),
+    )
+    monkeypatch.setattr(
+        f"{MODULE}.aredis.Redis.from_url",
+        lambda _url, **_kwargs: fakeredis.FakeAsyncRedis(server=server),
+    )
+    return server
+
+
+@pytest.fixture
+def raw(server: Any) -> Any:
+    r"""Return a client of the fake server, outside of any store."""
+    return fakeredis.FakeRedis(server=server)
+
+
+@pytest.fixture
+def store(server: Any) -> Generator[RedisStore, None, None]:
+    del server  # The store connects to the fake server.
+    with RedisStore() as store:
         yield store
+
+
+@pytest.fixture
+def filled_store(store: RedisStore) -> RedisStore:
+    store._put_many(PAYLOADS)
+    return store
+
+
+def scan(client: Any) -> list[bytes]:
+    r"""Return the sorted keys of a Redis database."""
+    return sorted(client.keys())
 
 
 ###############################
@@ -66,1700 +86,1229 @@ def store(
 ###############################
 
 
+@redis_not_available
+def test_init_without_redis() -> None:
+    with pytest.raises(RuntimeError, match=r"'redis' package is required"):
+        RedisStore()
+
+
 # --- constructor ---
 
 
-def test_init_defaults(store: BaseRedisStore) -> None:
-    assert store.count() == 0
+@redis_available
+def test_init_defaults() -> None:
+    store = RedisStore()
+    assert (store.to_uri(), store.namespace, store.closed) == (URL, "persista", True)
 
 
-def test_init_accepts_redis_from_url_kwargs(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
+@redis_available
+def test_init_does_not_connect(monkeypatch: pytest.MonkeyPatch) -> None:
+    from_url = MagicMock()
+    monkeypatch.setattr(f"{MODULE}.redis.Redis.from_url", from_url)
+    RedisStore()
+    from_url.assert_not_called()
+
+
+@redis_available
+def test_init_namespace() -> None:
+    assert RedisStore(namespace="app:cache").namespace == "app:cache"
+
+
+@redis_available
+def test_init_options_are_keyword_only() -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        RedisStore(URL, JsonCodec())
+
+
+@redis_available
+@pytest.mark.parametrize("namespace", ["", "a:v", "a:v:b", SURROGATE])
+def test_init_invalid_namespace(namespace: str) -> None:
+    with pytest.raises(ValueError, match=r"[Nn]amespace"):
+        RedisStore(namespace=namespace)
+
+
+@redis_available
+def test_init_namespace_not_a_str() -> None:
+    with pytest.raises(TypeError, match=r"A namespace must be a str"):
+        RedisStore(namespace=None)
+
+
+@redis_available
+@pytest.mark.parametrize(
+    ("url", "kwargs"),
+    [
+        pytest.param(URL, {"decode_responses": True}, id="argument"),
+        pytest.param(URL, {"decode_responses": False}, id="argument_false"),
+        pytest.param(f"{URL}?decode_responses=true", {}, id="url"),
+    ],
+)
+def test_init_rejects_decode_responses(url: str, kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match=r"does not accept decode_responses"):
+        RedisStore(url, **kwargs)
+
+
+@redis_available
+def test__open_passes_the_url_and_the_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    from_url = MagicMock()
+    monkeypatch.setattr(f"{MODULE}.redis.Redis.from_url", from_url)
+    RedisStore(URL, socket_timeout=5.0).open()
+    from_url.assert_called_once_with(URL, socket_timeout=5.0)
+
+
+@redis_available
+async def test__async_client_passes_the_url_and_the_options(
+    server: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _use_fake_redis(monkeypatch)
-    with store_cls(socket_timeout=5.0) as store:
-        assert store.count() == 0
+    from_url = MagicMock(return_value=fakeredis.FakeAsyncRedis(server=server))
+    monkeypatch.setattr(f"{MODULE}.aredis.Redis.from_url", from_url)
+    async with RedisStore(URL, socket_timeout=5.0) as store:
+        await store.acount()
+    from_url.assert_called_once_with(URL, socket_timeout=5.0)
 
 
-# --- repr/str ---
+# --- open / close ---
 
 
-def test_repr(store: BaseRedisStore) -> None:
-    assert repr(store).startswith(f"{type(store).__name__}(")
+@redis_available
+def test__open_pings_the_server(server: Any) -> None:
+    server.connected = False
+    store = RedisStore()
+    with pytest.raises(redis.ConnectionError, match=r"."):
+        store.open()
+    assert store.closed
 
 
-def test_str(store: BaseRedisStore) -> None:
-    assert str(store).startswith(f"{type(store).__name__}(")
+@redis_available
+def test__open_user_without_ping_permission(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MagicMock()
+    client.ping.side_effect = redis.exceptions.NoPermissionError("no permission")
+    monkeypatch.setattr(f"{MODULE}.redis.Redis.from_url", lambda _url: client)
+    with RedisStore() as store:
+        assert store.client is client
 
 
-def test_repr_after_close_does_not_raise(store: BaseRedisStore) -> None:
-    store.close()
-    assert repr(store).startswith(f"{type(store).__name__}(")
+@redis_available
+def test__open_failure_closes_the_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MagicMock()
+    client.ping.side_effect = redis.AuthenticationError("invalid password")
+    monkeypatch.setattr(f"{MODULE}.redis.Redis.from_url", lambda _url: client)
+    with pytest.raises(redis.AuthenticationError, match=r"invalid password"):
+        RedisStore().open()
+    client.close.assert_called_once_with()
 
 
-# --- set ---
+@redis_available
+def test__open_invalid_url_hides_the_password() -> None:
+    store = RedisStore("redis://user:pa55/word@localhost:6379/0")
+    with pytest.raises(ValueError, match=r"Invalid Redis URL") as exc_info:
+        store.open()
+    assert "pa55" not in str(exc_info.value)
 
 
-def test_set_increases_count(store: BaseRedisStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.count() == 1
+@redis_available
+def test__close(store: RedisStore) -> None:
+    store._close()
+    with pytest.raises(RuntimeError, match=r"RedisStore is not open"):
+        _ = store.client
 
 
-def test_set_stores_value(store: BaseRedisStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.get("1") == {"text": "hello"}
+@redis_available
+def test__close_without_open(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.INFO):
+        RedisStore()._close()
+    assert caplog.messages == []
 
 
-def test_set_default_overwrites_existing(store: BaseRedisStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"})
-    assert store.count() == 1
-    assert store.get("1") == {"text": "updated"}
+@redis_available
+@pytest.mark.usefixtures("server")
+def test__close_does_not_log_the_password(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.DEBUG), RedisStore("redis://user:secret@localhost:6379/0"):
+        pass
+    assert [message for message in caplog.messages if "Redis" in message] == [
+        "Closing Redis connection at redis://localhost:6379/0"
+    ]
 
 
-def test_set_on_conflict_raise(store: BaseRedisStore) -> None:
-    store.set("1", {"text": "original"})
-    with pytest.raises(KeyError, match=r"1"):
-        store.set("1", {"text": "updated"}, on_conflict="raise")
-    assert store.get("1") == {"text": "original"}
+@redis_available
+@pytest.mark.usefixtures("server")
+def test_reopen_keeps_values() -> None:
+    store = RedisStore()
+    with store:
+        store.set("1", {"a": 1})
+    with store:
+        assert store.get("1") == {"a": 1}
 
 
-def test_set_on_conflict_skip(store: BaseRedisStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"}, on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
+@redis_available
+def test_client_not_open() -> None:
+    with pytest.raises(RuntimeError, match=r"RedisStore is not open"):
+        _ = RedisStore().client
 
 
-def test_set_on_conflict_overwrite(store: BaseRedisStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"}, on_conflict="overwrite")
-    assert store.get("1") == {"text": "updated"}
+@redis_available
+def test_client_returns_bytes(filled_store: RedisStore) -> None:
+    assert filled_store.client.scard("persista:keys") == 3
 
 
-def test_set_on_conflict_merge(store: BaseRedisStore) -> None:
-    store.set("1", {"text": "original", "author": "Alice"})
-    store.set("1", {"text": "updated"}, on_conflict="merge")
-    assert store.get("1") == {"text": "updated", "author": "Alice"}
+# --- namespace ---
 
 
-def test_set_on_conflict_new_key_is_unaffected(store: BaseRedisStore) -> None:
-    store.set("1", {"text": "hello"}, on_conflict="raise")
-    assert store.get("1") == {"text": "hello"}
+@redis_available
+@pytest.mark.usefixtures("filled_store")
+def test_key_layout(raw: Any) -> None:
+    assert scan(raw) == REDIS_KEYS
 
 
-def test_set_on_conflict_invalid_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        store.set("1", {"text": "hello"}, on_conflict="bogus")
-
-
-# --- set_many ---
-
-
-def test_set_many_increases_count(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.count() == len(items)
-
-
-def test_set_many_empty_is_no_op(store: BaseRedisStore) -> None:
-    store.set_many({})
-    assert store.count() == 0
-
-
-def test_set_many_default_overwrites_existing(store: BaseRedisStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}})
-    assert store.count() == 1
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_many_on_conflict_raise(store: BaseRedisStore) -> None:
-    store.set_many({"1": {"text": "original"}, "2": {"text": "other"}})
-    with pytest.raises(KeyError, match=r"1"):
-        store.set_many({"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("3") is None
-
-
-def test_set_many_on_conflict_skip(store: BaseRedisStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "new"}
-
-
-def test_set_many_on_conflict_overwrite(store: BaseRedisStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="overwrite")
-    assert store.get("1") == {"text": "updated"}
-    assert store.get("2") == {"text": "new"}
-
-
-def test_set_many_on_conflict_merge(store: BaseRedisStore) -> None:
-    store.set_many({"1": {"text": "original", "author": "Alice"}})
-    store.set_many({"1": {"text": "updated"}}, on_conflict="merge")
-    assert store.get("1") == {"text": "updated", "author": "Alice"}
-
-
-def test_set_many_on_conflict_invalid_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")
-
-
-# --- reserved key ---
-#
-# "__keys__" is the internal Redis set this store uses to track which data
-# keys exist. Writing a user value under that same name would overwrite the
-# set with a string, corrupting keys()/count()/contains()/values() for the
-# whole store, so it must be rejected up front.
-
-
-def test_set_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        store.set("__keys__", {"x": 1})
-
-
-def test_set_many_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        store.set_many({"1": {"x": 1}, "__keys__": {"x": 2}})
-
-
-def test_set_reserved_key_does_not_corrupt_store(store: BaseRedisStore) -> None:
-    store.set("a", {"x": 1})
-    with pytest.raises(ValueError, match=r"__keys__"):
-        store.set("__keys__", {"x": 2})
-    # The internal tracking set must be untouched: keys()/count() still work.
-    assert store.count() == 1
-    assert list(store.keys()) == ["a"]
-
-
-async def test_aset_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        await store.aset("__keys__", {"x": 1})
-
-
-async def test_aset_many_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        await store.aset_many({"1": {"x": 1}, "__keys__": {"x": 2}})
-
-
-def test_get_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        store.get("__keys__")
-
-
-def test_get_many_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        store.get_many(["1", "__keys__"])
-
-
-def test_contains_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        store.contains("__keys__")
-
-
-def test_contains_many_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        store.contains_many(["1", "__keys__"])
-
-
-def test_delete_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        store.delete("__keys__")
-
-
-def test_delete_many_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        store.delete_many(["1", "__keys__"])
-
-
-def test_delete_reserved_key_does_not_corrupt_store(store: BaseRedisStore) -> None:
-    """Before the guard, delete("__keys__") would silently wipe the
-    internal keys-tracking set, breaking keys()/count()/contains_many()
-    for the whole store."""
-    store.set("a", {"x": 1})
-    with pytest.raises(ValueError, match=r"__keys__"):
-        store.delete("__keys__")
-    assert store.count() == 1
-    assert list(store.keys()) == ["a"]
-
-
-async def test_adelete_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        await store.adelete("__keys__")
-
-
-async def test_adelete_many_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        await store.adelete_many(["1", "__keys__"])
-
-
-async def test_aget_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        await store.aget("__keys__")
-
-
-async def test_acontains_reserved_key_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"__keys__"):
-        await store.acontains("__keys__")
-
-
-# --- concurrency ---
-
-
-def test_concurrent_set_on_conflict_raise_never_corrupts_value(store: BaseRedisStore) -> None:
-    """Many threads race to create the same key with
-    on_conflict="raise".
-
-    set_many resolves conflicts under a WATCH/MULTI transaction retried
-    on WatchError, so exactly one write must win; the stored value must
-    be a single writer's value, not lost or interleaved.
-    """
-    n_threads = 8
-    barrier = threading.Barrier(n_threads)
-    successes: list[int] = []
-    lock = threading.Lock()
-
-    def create_one(i: int) -> None:
-        barrier.wait()
-        try:
-            store.set("k", {"writer": i}, on_conflict="raise")
-        except KeyError:
-            return
-        with lock:
-            successes.append(i)
-
-    threads = [threading.Thread(target=create_one, args=(i,)) for i in range(n_threads)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    assert len(successes) == 1
-    assert store.get("k") == {"writer": successes[0]}
-
-
-def test_set_many_on_conflict_skip_all_conflicting_writes_nothing(store: BaseRedisStore) -> None:
-    """When every key in the batch already exists and
-    on_conflict="skip", the WATCH/MULTI transaction in set_many resolves
-    to an empty to_write mapping and must leave every existing value
-    untouched."""
-    store.set_many({"1": {"text": "original"}, "2": {"text": "original"}})
-    store.set_many(
-        {"1": {"text": "updated"}, "2": {"text": "updated"}},
-        on_conflict="skip",
-    )
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "original"}
-
-
-async def test_aset_many_on_conflict_skip_all_conflicting_writes_nothing(
-    store: BaseRedisStore,
-) -> None:
-    await store.aset_many({"1": {"text": "original"}, "2": {"text": "original"}})
-    await store.aset_many(
-        {"1": {"text": "updated"}, "2": {"text": "updated"}},
-        on_conflict="skip",
-    )
-    assert await store.aget("1") == {"text": "original"}
-    assert await store.aget("2") == {"text": "original"}
-
-
-# --- _set_many / _aset_many (private "overwrite" helper) ---
-#
-# set_many/aset_many only call these directly on the on_conflict="overwrite"
-# fast path, where items is always non-empty (set_many/aset_many return
-# early on an empty mapping). The "if items:" no-op guard inside them is
-# still part of their contract as standalone helpers, so it's covered
-# directly here rather than indirectly through the public API.
-
-
-def test_set_many_helper_empty_items_is_a_no_op(store: BaseRedisStore) -> None:
-    store._set_many({})
-    assert store.count() == 0
-
-
-async def test_aset_many_helper_empty_items_is_a_no_op(store: BaseRedisStore) -> None:
-    await store._aset_many({})
-    assert await store.acount() == 0
-
-
-def test_set_many_retries_on_watch_error(
-    store: BaseRedisStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Deterministically force a WatchError on the first attempt (by
-    mutating a watched key out from under the pipeline mid-resolve) and
-    assert set_many retries the whole resolve+write cycle instead of
-    corrupting state or propagating the error."""
-    store.set("1", {"text": "original"})
-    original_resolve_conflicts = redis_module.resolve_conflicts
-    call_count = 0
-
-    def flaky_resolve_conflicts(*args: Any, **kwargs: Any) -> Any:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            store._client.set("1", store._encode({"text": "external"}))
-        return original_resolve_conflicts(*args, **kwargs)
-
-    monkeypatch.setattr(f"{MODULE}.resolve_conflicts", flaky_resolve_conflicts)
-
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-
-    assert call_count == 2
-    assert store.get("2") == {"text": "new"}
-
-
-async def test_aset_many_retries_on_watch_error(
-    store: BaseRedisStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Deterministically force a WatchError on the first attempt (by
-    mutating a watched key out from under the pipeline mid-resolve) and
-    assert aset_many retries the whole resolve+write cycle instead of
-    corrupting state or propagating the error."""
-    store.set("1", {"text": "original"})
-    original_aresolve_conflicts = redis_module.aresolve_conflicts
-    call_count = 0
-
-    async def flaky_aresolve_conflicts(*args: Any, **kwargs: Any) -> Any:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            aclient = await store._ensure_aclient()
-            await aclient.set("1", store._encode({"text": "external"}))
-        return await original_aresolve_conflicts(*args, **kwargs)
-
-    monkeypatch.setattr(f"{MODULE}.aresolve_conflicts", flaky_aresolve_conflicts)
-
-    await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-
-    assert call_count == 2
-    assert await store.aget("2") == {"text": "new"}
-
-
-# --- set_batches ---
-
-
-def test_set_batches_empty_is_no_op(store: BaseRedisStore) -> None:
-    store.set_batches([])
-    assert store.count() == 0
-
-
-def test_set_batches_writes_all_pairs(store: BaseRedisStore) -> None:
-    store.set_batches([("1", {"v": 1}), ("2", {"v": 2}), ("3", {"v": 3})], batch_size=2)
-    assert store.count() == 3
-    assert store.get("2") == {"v": 2}
-
-
-def test_set_batches_consumes_a_generator(store: BaseRedisStore) -> None:
-    def gen() -> Iterator[tuple[str, dict[str, int]]]:
-        for i in range(5):
-            yield str(i), {"v": i}
-
-    store.set_batches(gen(), batch_size=2)
-    assert store.count() == 5
-
-
-def test_set_batches_on_conflict_skip(store: BaseRedisStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set_batches([("1", {"text": "updated"}), ("2", {"text": "new"})], on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "new"}
-
-
-# --- count ---
-
-
-def test_count_empty_store(store: BaseRedisStore) -> None:
-    assert store.count() == 0
-
-
-def test_count_after_set_many(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.count() == len(items)
-
-
-# --- get ---
-
-
-def test_get_existing_value(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.get("1") == items["1"]
-
-
-def test_get_missing_key_returns_none(store: BaseRedisStore) -> None:
-    assert store.get("nonexistent") is None
-
-
-def test_get_propagates_connection_error(store: BaseRedisStore) -> None:
-    with (
-        patch.object(store._client, "get", side_effect=redis.ConnectionError("boom")),
-        pytest.raises(redis.ConnectionError, match="boom"),
-    ):
-        store.get("1")
-
-
-# --- get_many ---
-
-
-def test_get_many_returns_correct_length(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert len(store.get_many(["1", "2", "99"])) == 3
-
-
-def test_get_many_returns_none_for_missing(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.get_many(["1", "99", "2"])
-    assert result[1] is None
-
-
-def test_get_many_preserves_order(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.get_many(["3", "1", "2"])
-    assert result == [items["3"], items["1"], items["2"]]
-
-
-def test_get_many_empty_list_returns_empty_list(store: BaseRedisStore) -> None:
-    assert store.get_many([]) == []
-
-
-def test_get_many_duplicate_keys_returns_value_for_each_occurrence(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.get_many(["1", "1"])
-    assert result == [items["1"], items["1"]]
-
-
-# --- filter ---
-
-
-def test_filter_no_args_returns_all(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert len(store.filter()) == len(items)
-
-
-def test_filter_single_field(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
-    assert len(result) == 2
-
-
-def test_filter_multiple_fields(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(author="Alice", category="Programming")
-    assert len(result) == 2
-
-
-def test_filter_no_match_returns_empty(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter(author="Charlie") == []
-
-
-def test_filter_preserves_full_value(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.filter(author="Bob", category="History")
-    expected = [v for v in items.values() if v["author"] == "Bob"]
-    assert sorted(result, key=lambda v: v["title"]) == sorted(expected, key=lambda v: v["title"])
-
-
-def test_filter_empty_store_returns_empty(store: BaseRedisStore) -> None:
-    assert store.filter(author="Alice") == []
-
-
-def test_filter_integer_field_value(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.filter(year=2022)
-    assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
-
-
-def test_filter_integer_value_no_match_returns_empty(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter(year=9999) == []
-
-
-# --- delete ---
-
-
-def test_delete_removes_value(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete("1")
-    assert store.count() == len(items) - 1
-    assert store.get("1") is None
-
-
-def test_delete_nonexistent_is_silent(store: BaseRedisStore) -> None:
-    store.delete("nonexistent")
-
-
-# --- delete_many ---
-
-
-def test_delete_many_removes_values(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many(["1", "3"])
-    assert store.count() == len(items) - 2
-    assert store.get("1") is None
-    assert store.get("3") is None
-
-
-def test_delete_many_preserves_other_values(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many(["1", "3"])
-    assert store.get("2") is not None
-    assert store.get("4") is not None
-
-
-def test_delete_many_empty_list_is_no_op(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many([])
-    assert store.count() == len(items)
-
-
-def test_delete_many_nonexistent_keys_are_silent(store: BaseRedisStore) -> None:
-    store.delete_many(["99", "100"])
-
-
-def test_delete_many_single_key(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete_many(["2"])
-    assert store.count() == len(items) - 1
-    assert store.get("2") is None
-
-
-# --- clear ---
-
-
-def test_clear_removes_all_values(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.clear()
-    assert store.count() == 0
-    assert list(store.keys()) == []
-
-
-def test_clear_removes_raw_value_keys_from_server(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.clear()
-    # Every value key (not just the "__keys__" tracking set) must be gone
-    # from the underlying server, not merely absent from the tracking set.
-    assert store._client.keys("*") == []
-
-
-def test_clear_empty_store_is_no_op(store: BaseRedisStore) -> None:
-    store.clear()
-    assert store.count() == 0
-
-
-def test_clear_returns_none(store: BaseRedisStore) -> None:
-    assert store.clear() is None
-
-
-def test_clear_then_set_works(store: BaseRedisStore) -> None:
-    store.set("1", {"text": "hello"})
-    store.clear()
-    store.set("2", {"text": "world"})
-    assert store.count() == 1
-    assert store.get("2") == {"text": "world"}
-
-
-# --- contains ---
-
-
-def test_contains_true_when_key_present(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.contains("1")
-
-
-def test_contains_false_when_key_missing(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert not store.contains("99")
-
-
-def test_contains_false_when_store_empty(store: BaseRedisStore) -> None:
-    assert not store.contains("1")
-
-
-# --- contains_many ---
-
-
-def test_contains_many_all_found(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
-
-
-def test_contains_many_all_missing(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["99", "100"]) == [False, False]
-
-
-def test_contains_many_mixed(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
-
-
-def test_contains_many_empty_input_returns_empty_lists(store: BaseRedisStore) -> None:
-    assert store.contains_many([]) == []
-
-
-def test_contains_many_empty_store_returns_all_missing(store: BaseRedisStore) -> None:
-    assert store.contains_many(["1", "2"]) == [False, False]
-
-
-def test_contains_many_returns_list_of_bools(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.contains_many(["1", "99"])
-    assert isinstance(result, list)
-    assert all(isinstance(flag, bool) for flag in result)
+@redis_available
+@pytest.mark.usefixtures("filled_store")
+def test_key_layout_members(raw: Any) -> None:
+    assert raw.smembers("persista:keys") == {b"1", b"2", b"3"}
+
+
+@redis_available
+def test_former_keys_set_name_is_a_key(store: RedisStore) -> None:
+    store.set("__keys__", {"a": 1})
+    assert (store.get("__keys__"), list(store.keys())) == ({"a": 1}, ["__keys__"])
+
+
+@redis_available
+@pytest.mark.usefixtures("filled_store")
+def test_namespaces_do_not_share_keys() -> None:
+    with RedisStore(namespace="persista:other") as other:
+        assert (other.get("1"), other.count()) == (None, 0)
+
+
+@redis_available
+def test_clear_keeps_other_namespaces_and_keys(filled_store: RedisStore, raw: Any) -> None:
+    raw.set("persista:unrelated", "x")
+    with RedisStore(namespace="other") as other:
+        other.set("1", {})
+        filled_store.clear()
+    assert scan(raw) == [b"other:keys", b"other:v:1", b"persista:unrelated"]
 
 
 # --- keys ---
 
 
-def test_keys_empty_store_yields_nothing(store: BaseRedisStore) -> None:
-    assert list(store.keys()) == []
-
-
-def test_keys_returns_all_keys(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert sorted(store.keys()) == sorted(items.keys())
-
-
-# --- values ---
-
-
-def test_values_empty_store_yields_nothing(store: BaseRedisStore) -> None:
-    assert list(store.values()) == []
-
-
-def test_values_returns_all_values(store: BaseRedisStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = list(store.values())
-    assert len(result) == len(items)
-    assert {v["title"] for v in result} == {v["title"] for v in items.values()}
-
-
-def test_values_is_lazy_generator(store: BaseRedisStore) -> None:
-    assert isinstance(store.values(), Iterator)
-
-
-# --- iter_batches ---
-
-
-def test_iter_batches_empty_store_yields_nothing(store: BaseRedisStore) -> None:
-    assert list(store.iter_batches()) == []
-
-
-def test_iter_batches_returns_generator(store: BaseRedisStore) -> None:
-    result = store.iter_batches()
-    assert isinstance(result, Iterator)
-
-
-def test_iter_batches_default_batch_size(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches())
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-def test_iter_batches_yields_correct_batch_sizes(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=2))
-    assert sorted(len(b) for b in batches) == [2, 2]
-
-
-def test_iter_batches_batch_size_larger_than_store(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=100))
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-def test_iter_batches_returns_all_key_value_pairs(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    for batch in store.iter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
-
-
-def test_iter_batches_batches_are_dicts(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=2))
-    assert all(isinstance(batch, dict) for batch in batches)
-
-
-def test_iter_batches_zero_batch_size_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        list(store.iter_batches(batch_size=0))
-
-
-def test_iter_batches_negative_batch_size_raises(store: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        list(store.iter_batches(batch_size=-1))
-
-
-def test_iter_batches_error_raised_before_any_query(store: BaseRedisStore) -> None:
-    gen = store.iter_batches(batch_size=0)
-    with pytest.raises(ValueError, match="batch_size"):
-        next(gen)
-
-
-def test_iter_batches_does_not_mutate_store(
-    store: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    list(store.iter_batches(batch_size=2))
-    assert store.count() == len(items)
-
-
-# --- to_uri/from_uri ---
-
-
-def test_to_uri_returns_url_unchanged(store: BaseRedisStore) -> None:
-    assert store.to_uri() == store._url
-
-
-def test_from_uri_constructs_with_same_url(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    _use_fake_redis(monkeypatch)
-    url = "redis://localhost:6379/0"
-    new_store = store_cls.from_uri(url)
-    assert new_store._url == url
-    new_store.open()
-    new_store.set("1", {"text": "hello"})
-    assert new_store.get("1") == {"text": "hello"}
-
-
-def test_from_uri_ignores_read_only(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    _use_fake_redis(monkeypatch)
-    url = "redis://localhost:6379/0"
-    new_store = store_cls.from_uri(url, read_only=True)
-    assert new_store._url == url
-    new_store.open()
-    new_store.set("1", {"text": "hello"})
-    assert new_store.get("1") == {"text": "hello"}
-
-
-# --- close ---
-
-
-def test_close_is_idempotent(store: BaseRedisStore) -> None:
-    store.close()
-    store.close()  # should not raise
-
-
-def test_open_is_idempotent(store: BaseRedisStore) -> None:
-    store.open()  # already open; should not raise or reconnect
-    store.set("1", {"text": "hello"})
-    assert store.get("1") == {"text": "hello"}
-
-
-async def test_aopen_is_idempotent(store: BaseRedisStore) -> None:
-    await store.aopen()  # already open; should not raise or reconnect
-    await store.aset("1", {"text": "hello"})
-    assert await store.aget("1") == {"text": "hello"}
-
-
-def test_get_before_open_raises(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    _use_fake_redis(monkeypatch)
-    _use_fake_async_redis(monkeypatch)
-    store = store_cls()
-    with pytest.raises(RuntimeError, match="not open"):
-        store.get("1")
-
-
-def test_close_returns_none(store: BaseRedisStore) -> None:
-    assert store.close() is None
-
-
-async def test_close_from_running_event_loop_raises(store: BaseRedisStore) -> None:
-    await store._ensure_aclient()
-    with pytest.raises(RuntimeError, match="inside a running event loop"):
-        store.close()
-
-
-def test_close_with_already_closed_event_loop_logs_and_clears_aclient(
-    store: BaseRedisStore,
-) -> None:
-    """If the event loop that owned the async client is already closed
-    by the time ``close()`` runs synchronously, ``asyncio.run(...)``
-    raises ``RuntimeError``; ``close()`` should swallow it, log, and
-    still clear ``_aclient``."""
-    store._aclient = MagicMock()
-    with patch(f"{MODULE}.asyncio.run", side_effect=RuntimeError("event loop is closed")):
-        store.close()
-    assert store._aclient is None
-    assert store.closed
-
-
-# --- closed ---
-
-
-def test_closed_false_before_close(store: BaseRedisStore) -> None:
-    assert not store.closed
-
-
-def test_closed_true_after_close(store: BaseRedisStore) -> None:
-    store.close()
-    assert store.closed
-
-
-def test_redis_raises_when_not_open(store_cls: type[BaseRedisStore]) -> None:
-    store = store_cls()
-    with pytest.raises(RuntimeError, match="is not open"):
-        _ = store._redis
-
-
-# --- context manager ---
-
-
-def test_context_manager_returns_self(
-    store: BaseRedisStore, store_cls: type[BaseRedisStore]
-) -> None:
-    assert isinstance(store, store_cls)
-
-
-def test_context_manager_closes_on_normal_exit(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    _use_fake_redis(monkeypatch)
-    with store_cls() as store:
-        store.set("1", {"text": "hello"})
-        assert store.count() == 1
-    assert store._closed
-
-
-def test_context_manager_closes_on_exception(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    _use_fake_redis(monkeypatch)
-    msg = "boom"
-    with pytest.raises(ValueError, match="boom"), store_cls() as store:
-        raise ValueError(msg)
-    assert store._closed
-
-
-def test_context_manager_usable_for_reads_and_writes(store: BaseRedisStore) -> None:
-    store.set_many(
-        {
-            "1": {"text": "hello", "author": "Alice"},
-            "2": {"text": "world", "author": "Bob"},
-        }
-    )
-    assert store.count() == 2
-    assert store.filter(author="Alice")[0]["text"] == "hello"
-    store.delete("1")
-    assert store.count() == 1
-
-
-def test_context_manager_multiple_open_close_same_server(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    """Reopening after close reconnects to the same Redis server, so
-    previously written data is still there."""
-    server = fakeredis.FakeServer()
-    monkeypatch.setattr(
-        f"{MODULE}.redis.Redis.from_url",
-        lambda *_args, **kwargs: fakeredis.FakeRedis(
-            server=server, decode_responses=kwargs.get("decode_responses", True)
+@redis_available
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda s, k: s.get(k), id="get"),
+        pytest.param(lambda s, k: s.get_many(["1", k]), id="get_many"),
+        pytest.param(lambda s, k: s.contains(k), id="contains"),
+        pytest.param(lambda s, k: s.set(k, {}), id="set"),
+        pytest.param(lambda s, k: s.set_many({"new": {}, k: {}}), id="set_many"),
+        pytest.param(
+            lambda s, k: s.set_many({"new": {}, k: {}}, on_conflict="skip"), id="set_many_skip"
         ),
-    )
-    redis_store = store_cls()
-    for i in range(3):
-        with redis_store as store:
-            store.set(str(i), {"text": "hello"})
-            assert store.count() == i + 1
-
-
-def test_context_manager_multiple_open_close_server_reset(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
+        pytest.param(lambda s, k: s.delete(k), id="delete"),
+        pytest.param(lambda s, k: s.delete_many(["1", k]), id="delete_many"),
+    ],
+)
+def test_surrogate_key_raises_and_changes_nothing(
+    filled_store: RedisStore, raw: Any, operation: Callable[[RedisStore, str], Any]
 ) -> None:
-    """Reopening after close connects to a server that lost its state
-    (e.g. restarted), so previously written data is gone."""
-    _use_fake_redis(monkeypatch)
-    redis_store = store_cls()
-    for _ in range(3):
-        with redis_store as store:
-            assert store.count() == 0
-            store.set("1", {"text": "hello"})
-            assert store.count() == 1
-
-
-async def test_async_context_manager_multiple_open_close_server_reset(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    """Reopening after close connects to a server that lost its state
-    (e.g. restarted), so previously written data is gone."""
-    _use_fake_redis(monkeypatch)
-    _use_fake_async_redis(monkeypatch)
-    redis_store = store_cls()
-    for _ in range(3):
-        async with redis_store as store:
-            assert await store.acount() == 0
-            await store.aset("1", {"text": "hello"})
-            assert await store.acount() == 1
-
-
-###########################################
-#     Async (`a`-prefixed) method tests    #
-###########################################
-
-# Mirrors the sync test suite above, but exercises the lazily-created
-# `redis.asyncio.Redis` client through the `a`-prefixed methods.
-
-
-@pytest.fixture
-async def astore(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> AsyncGenerator[BaseRedisStore]:
-    _use_fake_redis(monkeypatch)
-    _use_fake_async_redis(monkeypatch)
-    async with store_cls() as store:
-        yield store
-
-
-# --- constructor ---
-
-
-async def test_ainit_defaults(astore: BaseRedisStore) -> None:
-    assert await astore.acount() == 0
-
-
-async def test_ainit_accepts_redis_from_url_kwargs(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    _use_fake_redis(monkeypatch)
-    _use_fake_async_redis(monkeypatch)
-    async with store_cls(socket_timeout=5.0) as store:
-        assert await store.acount() == 0
-
-
-# --- repr/str ---
-
-
-async def test_arepr_after_aclose_does_not_raise(astore: BaseRedisStore) -> None:
-    await astore.aclose()
-    assert repr(astore).startswith(f"{type(astore).__name__}(")
-
-
-# --- aget / aget_many ---
-
-
-async def test_aget_missing_key_returns_none(astore: BaseRedisStore) -> None:
-    assert await astore.aget("nonexistent") is None
-
-
-async def test_aget_existing_value(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert await astore.aget("1") == items["1"]
-
-
-async def test_aget_many_returns_correct_length(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert len(await astore.aget_many(["1", "2", "99"])) == 3
-
-
-async def test_aget_many_returns_none_for_missing(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    result = await astore.aget_many(["1", "99", "2"])
-    assert result[1] is None
-
-
-async def test_aget_many_preserves_order(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    result = await astore.aget_many(["3", "1", "2"])
-    assert result == [items["3"], items["1"], items["2"]]
-
-
-async def test_aget_many_empty_list_returns_empty_list(astore: BaseRedisStore) -> None:
-    assert await astore.aget_many([]) == []
-
-
-# --- aset / aset_many ---
-
-
-async def test_aset_increases_count(astore: BaseRedisStore) -> None:
-    await astore.aset("1", {"text": "hello"})
-    assert await astore.acount() == 1
-
-
-async def test_aset_stores_value(astore: BaseRedisStore) -> None:
-    await astore.aset("1", {"text": "hello"})
-    assert await astore.aget("1") == {"text": "hello"}
-
-
-async def test_aset_default_overwrites_existing(astore: BaseRedisStore) -> None:
-    await astore.aset("1", {"text": "original"})
-    await astore.aset("1", {"text": "updated"})
-    assert await astore.acount() == 1
-    assert await astore.aget("1") == {"text": "updated"}
-
-
-async def test_aset_on_conflict_raise(astore: BaseRedisStore) -> None:
-    await astore.aset("1", {"text": "original"})
-    with pytest.raises(KeyError, match=r"1"):
-        await astore.aset("1", {"text": "updated"}, on_conflict="raise")
-    assert await astore.aget("1") == {"text": "original"}
-
-
-async def test_aset_on_conflict_skip(astore: BaseRedisStore) -> None:
-    await astore.aset("1", {"text": "original"})
-    await astore.aset("1", {"text": "updated"}, on_conflict="skip")
-    assert await astore.aget("1") == {"text": "original"}
-
-
-async def test_aset_on_conflict_overwrite(astore: BaseRedisStore) -> None:
-    await astore.aset("1", {"text": "original"})
-    await astore.aset("1", {"text": "updated"}, on_conflict="overwrite")
-    assert await astore.aget("1") == {"text": "updated"}
-
-
-async def test_aset_on_conflict_merge(astore: BaseRedisStore) -> None:
-    await astore.aset("1", {"text": "original", "author": "Alice"})
-    await astore.aset("1", {"text": "updated"}, on_conflict="merge")
-    assert await astore.aget("1") == {"text": "updated", "author": "Alice"}
-
-
-async def test_aset_on_conflict_new_key_is_unaffected(astore: BaseRedisStore) -> None:
-    await astore.aset("1", {"text": "hello"}, on_conflict="raise")
-    assert await astore.aget("1") == {"text": "hello"}
-
-
-async def test_aset_on_conflict_invalid_raises(astore: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        await astore.aset("1", {"text": "hello"}, on_conflict="bogus")
-
-
-async def test_aset_many_increases_count(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert await astore.acount() == len(items)
-
-
-async def test_aset_many_empty_is_no_op(astore: BaseRedisStore) -> None:
-    await astore.aset_many({})
-    assert await astore.acount() == 0
-
-
-async def test_aset_many_default_overwrites_existing(astore: BaseRedisStore) -> None:
-    await astore.aset_many({"1": {"text": "original"}})
-    await astore.aset_many({"1": {"text": "updated"}})
-    assert await astore.acount() == 1
-    assert await astore.aget("1") == {"text": "updated"}
-
-
-async def test_aset_many_on_conflict_raise(astore: BaseRedisStore) -> None:
-    await astore.aset_many({"1": {"text": "original"}, "2": {"text": "other"}})
-    with pytest.raises(KeyError, match=r"1"):
-        await astore.aset_many(
-            {"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise"
-        )
-    assert await astore.aget("1") == {"text": "original"}
-    assert await astore.aget("3") is None
-
-
-async def test_aset_many_on_conflict_skip(astore: BaseRedisStore) -> None:
-    await astore.aset_many({"1": {"text": "original"}})
-    await astore.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-    assert await astore.aget("1") == {"text": "original"}
-    assert await astore.aget("2") == {"text": "new"}
-
-
-async def test_aset_many_on_conflict_overwrite(astore: BaseRedisStore) -> None:
-    await astore.aset_many({"1": {"text": "original"}})
-    await astore.aset_many(
-        {"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="overwrite"
-    )
-    assert await astore.aget("1") == {"text": "updated"}
-    assert await astore.aget("2") == {"text": "new"}
-
-
-async def test_aset_many_on_conflict_merge(astore: BaseRedisStore) -> None:
-    await astore.aset_many({"1": {"text": "original", "author": "Alice"}})
-    await astore.aset_many({"1": {"text": "updated"}}, on_conflict="merge")
-    assert await astore.aget("1") == {"text": "updated", "author": "Alice"}
-
-
-async def test_aset_many_on_conflict_invalid_raises(astore: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        await astore.aset_many({"1": {"text": "hello"}}, on_conflict="bogus")
-
-
-# --- aset_batches ---
-
-
-async def test_aset_batches_empty_is_no_op(astore: BaseRedisStore) -> None:
-    await astore.aset_batches([])
-    assert await astore.acount() == 0
-
-
-async def test_aset_batches_writes_all_pairs(astore: BaseRedisStore) -> None:
-    await astore.aset_batches([("1", {"v": 1}), ("2", {"v": 2}), ("3", {"v": 3})], batch_size=2)
-    assert await astore.acount() == 3
-    assert await astore.aget("2") == {"v": 2}
-
-
-async def test_aset_batches_consumes_a_generator(astore: BaseRedisStore) -> None:
-    def gen() -> Iterator[tuple[str, dict[str, int]]]:
-        for i in range(5):
-            yield str(i), {"v": i}
-
-    await astore.aset_batches(gen(), batch_size=2)
-    assert await astore.acount() == 5
-
-
-async def test_aset_batches_on_conflict_skip(astore: BaseRedisStore) -> None:
-    await astore.aset("1", {"text": "original"})
-    await astore.aset_batches(
-        [("1", {"text": "updated"}), ("2", {"text": "new"})], on_conflict="skip"
-    )
-    assert await astore.aget("1") == {"text": "original"}
-    assert await astore.aget("2") == {"text": "new"}
-
-
-# --- acount ---
-
-
-async def test_acount_empty_store(astore: BaseRedisStore) -> None:
-    assert await astore.acount() == 0
-
-
-async def test_acount_after_set_many(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert await astore.acount() == len(items)
-
-
-# --- afilter ---
-
-
-async def test_afilter_no_args_returns_all(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert len(await astore.afilter()) == len(items)
-
-
-async def test_afilter_single_field(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    result = await astore.afilter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
-    assert len(result) == 2
-
-
-async def test_afilter_multiple_fields(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    result = await astore.afilter(author="Alice", category="Programming")
-    assert len(result) == 2
-
-
-async def test_afilter_no_match_returns_empty(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert await astore.afilter(author="Charlie") == []
-
-
-async def test_afilter_preserves_full_value(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    result = await astore.afilter(author="Bob", category="History")
-    expected = [v for v in items.values() if v["author"] == "Bob"]
-    assert sorted(result, key=lambda v: v["title"]) == sorted(expected, key=lambda v: v["title"])
-
-
-async def test_afilter_empty_store_returns_empty(astore: BaseRedisStore) -> None:
-    assert await astore.afilter(author="Alice") == []
-
-
-async def test_afilter_integer_field_value(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    result = await astore.afilter(year=2022)
-    assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
-
-
-async def test_afilter_integer_value_no_match_returns_empty(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert await astore.afilter(year=9999) == []
-
-
-# --- adelete / adelete_many ---
-
-
-async def test_adelete_removes_value(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    await astore.adelete("1")
-    assert await astore.acount() == len(items) - 1
-    assert await astore.aget("1") is None
-
-
-async def test_adelete_nonexistent_is_silent(astore: BaseRedisStore) -> None:
-    await astore.adelete("nonexistent")
-
-
-async def test_adelete_many_removes_values(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    await astore.adelete_many(["1", "3"])
-    assert await astore.acount() == len(items) - 2
-    assert await astore.aget("1") is None
-    assert await astore.aget("3") is None
-
-
-async def test_adelete_many_preserves_other_values(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    await astore.adelete_many(["1", "3"])
-    assert await astore.aget("2") is not None
-    assert await astore.aget("4") is not None
-
-
-async def test_adelete_many_empty_list_is_no_op(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    await astore.adelete_many([])
-    assert await astore.acount() == len(items)
-
-
-async def test_adelete_many_nonexistent_keys_are_silent(astore: BaseRedisStore) -> None:
-    await astore.adelete_many(["99", "100"])
-
-
-async def test_adelete_many_single_key(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    await astore.adelete_many(["2"])
-    assert await astore.acount() == len(items) - 1
-    assert await astore.aget("2") is None
-
-
-# --- aclear ---
-
-
-async def test_aclear_removes_all_values(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    await astore.aclear()
-    assert await astore.acount() == 0
-    assert [key async for key in astore.akeys()] == []
-
-
-async def test_aclear_empty_store_is_no_op(astore: BaseRedisStore) -> None:
-    await astore.aclear()
-    assert await astore.acount() == 0
-
-
-async def test_aclear_returns_none(astore: BaseRedisStore) -> None:
-    assert await astore.aclear() is None
-
-
-async def test_aclear_then_set_works(astore: BaseRedisStore) -> None:
-    await astore.aset("1", {"text": "hello"})
-    await astore.aclear()
-    await astore.aset("2", {"text": "world"})
-    assert await astore.acount() == 1
-    assert await astore.aget("2") == {"text": "world"}
-
-
-# --- acontains / acontains_many ---
-
-
-async def test_acontains_true_when_key_present(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert await astore.acontains("1")
-
-
-async def test_acontains_false_when_key_missing(astore: BaseRedisStore) -> None:
-    assert not await astore.acontains("99")
-
-
-async def test_acontains_false_when_store_empty(astore: BaseRedisStore) -> None:
-    assert not await astore.acontains("1")
-
-
-async def test_acontains_many_all_found(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert await astore.acontains_many(["1", "2", "3", "4"]) == [True, True, True, True]
-
-
-async def test_acontains_many_all_missing(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert await astore.acontains_many(["99", "100"]) == [False, False]
-
-
-async def test_acontains_many_mixed(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    assert await astore.acontains_many(["1", "99", "3", "42"]) == [True, False, True, False]
-
-
-async def test_acontains_many_empty_input_returns_empty_lists(astore: BaseRedisStore) -> None:
-    assert await astore.acontains_many([]) == []
-
-
-async def test_acontains_many_empty_store_returns_all_missing(astore: BaseRedisStore) -> None:
-    assert await astore.acontains_many(["1", "2"]) == [False, False]
-
-
-async def test_acontains_many_returns_list_of_bools(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    result = await astore.acontains_many(["1", "99"])
-    assert isinstance(result, list)
-    assert all(isinstance(flag, bool) for flag in result)
-
-
-# --- akeys / avalues ---
-
-
-async def test_akeys_empty_store_yields_nothing(astore: BaseRedisStore) -> None:
-    assert [key async for key in astore.akeys()] == []
-
-
-async def test_akeys_returns_all_keys(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    result = [key async for key in astore.akeys()]
-    assert sorted(result) == sorted(items.keys())
-
-
-async def test_avalues_empty_store_yields_nothing(astore: BaseRedisStore) -> None:
-    assert [value async for value in astore.avalues()] == []
-
-
-async def test_avalues_returns_async_iterator(astore: BaseRedisStore) -> None:
-    assert isinstance(astore.avalues(), AsyncIterator)
-
-
-async def test_avalues_returns_all_values(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    result = [value async for value in astore.avalues()]
-    assert len(result) == len(items)
-    assert {v["title"] for v in result} == {v["title"] for v in items.values()}
-
-
-# --- aiter_batches ---
-
-
-async def test_aiter_batches_empty_store_yields_nothing(astore: BaseRedisStore) -> None:
-    assert [batch async for batch in astore.aiter_batches()] == []
-
-
-async def test_aiter_batches_returns_async_iterator(astore: BaseRedisStore) -> None:
-    assert isinstance(astore.aiter_batches(), AsyncIterator)
-
-
-async def test_aiter_batches_default_batch_size(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    batches = [batch async for batch in astore.aiter_batches()]
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-async def test_aiter_batches_yields_correct_batch_sizes(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    batches = [batch async for batch in astore.aiter_batches(batch_size=2)]
-    assert sorted(len(b) for b in batches) == [2, 2]
-
-
-async def test_aiter_batches_batch_size_larger_than_store(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    batches = [batch async for batch in astore.aiter_batches(batch_size=100)]
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-async def test_aiter_batches_returns_all_key_value_pairs(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    async for batch in astore.aiter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
-
-
-async def test_aiter_batches_batches_are_dicts(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    batches = [batch async for batch in astore.aiter_batches(batch_size=2)]
-    assert all(isinstance(batch, dict) for batch in batches)
-
-
-async def test_aiter_batches_zero_batch_size_raises(astore: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        async for _ in astore.aiter_batches(batch_size=0):
-            pass
-
-
-async def test_aiter_batches_negative_batch_size_raises(astore: BaseRedisStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        async for _ in astore.aiter_batches(batch_size=-1):
-            pass
-
-
-async def test_aiter_batches_error_raised_before_any_query(astore: BaseRedisStore) -> None:
-    gen = astore.aiter_batches(batch_size=0)
-    with pytest.raises(ValueError, match="batch_size"):
-        await anext(gen)
-
-
-async def test_aiter_batches_does_not_mutate_store(
-    astore: BaseRedisStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await astore.aset_many(items)
-    async for _ in astore.aiter_batches(batch_size=2):
-        pass
-    assert await astore.acount() == len(items)
-
-
-# --- aclosed ---
-
-
-async def test_aclosed_false_before_aclose(astore: BaseRedisStore) -> None:
-    assert not astore.closed
-
-
-async def test_aclosed_true_after_aclose(astore: BaseRedisStore) -> None:
-    await astore.aclose()
-    assert astore.closed
-
-
-# --- aclose / async context manager ---
-
-
-async def test_aclose_is_idempotent(astore: BaseRedisStore) -> None:
-    await astore.aclose()
-    await astore.aclose()  # should not raise
-
-
-async def test_aclose_returns_none(astore: BaseRedisStore) -> None:
-    assert await astore.aclose() is None
-
-
-async def test_async_context_manager_returns_self(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    _use_fake_redis(monkeypatch)
-    _use_fake_async_redis(monkeypatch)
-    async with store_cls() as store:
-        assert isinstance(store, store_cls)
-
-
-async def test_async_context_manager_closes_on_normal_exit(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    _use_fake_redis(monkeypatch)
-    _use_fake_async_redis(monkeypatch)
-    async with store_cls() as store:
-        await store.aset("1", {"text": "hello"})
-        assert await store.acount() == 1
-    assert store._closed
-
-
-async def test_async_context_manager_closes_on_exception(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    _use_fake_redis(monkeypatch)
-    _use_fake_async_redis(monkeypatch)
-    msg = "boom"
-    with pytest.raises(ValueError, match="boom"):
-        async with store_cls() as store:
-            raise ValueError(msg)
-    assert store._closed
-
-
-async def test_async_context_manager_multiple_open_close_same_server(
-    monkeypatch: pytest.MonkeyPatch, store_cls: type[BaseRedisStore]
-) -> None:
-    """Reopening after aclose reconnects to the same Redis server, so
-    previously written data is still there."""
-    server = fakeredis.FakeServer()
-    monkeypatch.setattr(
-        f"{MODULE}.redis.Redis.from_url",
-        lambda *_args, **kwargs: fakeredis.FakeRedis(
-            server=server, decode_responses=kwargs.get("decode_responses", True)
+    with pytest.raises(ValueError, match=r"A key of RedisStore must be valid Unicode"):
+        operation(filled_store, SURROGATE)
+    assert scan(raw) == REDIS_KEYS
+
+
+@redis_available
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda s, k: s.aget(k), id="aget"),
+        pytest.param(lambda s, k: s.aget_many(["1", k]), id="aget_many"),
+        pytest.param(lambda s, k: s.acontains(k), id="acontains"),
+        pytest.param(lambda s, k: s.aset(k, {}), id="aset"),
+        pytest.param(lambda s, k: s.aset_many({"new": {}, k: {}}), id="aset_many"),
+        pytest.param(
+            lambda s, k: s.aset_many({"new": {}, k: {}}, on_conflict="skip"), id="aset_many_skip"
         ),
-    )
-    monkeypatch.setattr(
-        f"{MODULE}.aredis.Redis.from_url",
-        lambda *_args, **kwargs: fakeredis.aioredis.FakeRedis(
-            server=server, decode_responses=kwargs.get("decode_responses", True)
-        ),
-    )
-    redis_store = store_cls()
-    for i in range(3):
-        async with redis_store as store:
-            await store.aset(str(i), {"text": "hello"})
-            assert await store.acount() == i + 1
-
-
-async def test_async_context_manager_usable_for_reads_and_writes(
-    astore: BaseRedisStore,
+        pytest.param(lambda s, k: s.adelete(k), id="adelete"),
+        pytest.param(lambda s, k: s.adelete_many(["1", k]), id="adelete_many"),
+    ],
+)
+async def test_surrogate_key_raises_and_changes_nothing_async(
+    filled_store: RedisStore, raw: Any, operation: Callable[[RedisStore, str], Any]
 ) -> None:
-    await astore.aset_many(
-        {
-            "1": {"text": "hello", "author": "Alice"},
-            "2": {"text": "world", "author": "Bob"},
-        }
-    )
-    assert await astore.acount() == 2
-    result = await astore.afilter(author="Alice")
-    assert result[0]["text"] == "hello"
-    await astore.adelete("1")
-    assert await astore.acount() == 1
+    with pytest.raises(ValueError, match=r"A key of RedisStore must be valid Unicode"):
+        await operation(filled_store, SURROGATE)
+    assert scan(raw) == REDIS_KEYS
+    await filled_store.aclose()
 
 
-##########################################################
-#     PickleRedisStore-specific serialization behavior    #
-##########################################################
-
-# The JSON and pickle variants share the exact same behavior for
-# JSON-compatible values (covered by every test above, run against
-# both `store_cls` params). They differ only in what they can encode:
-# PickleRedisStore round-trips arbitrary Python objects, RedisStore
-# silently normalizes them to their closest JSON equivalent.
+# --- primitives ---
 
 
-def test_pickle_store_round_trips_tuples_and_sets(monkeypatch: pytest.MonkeyPatch) -> None:
-    _use_fake_redis(monkeypatch)
-    with PickleRedisStore() as store:
-        store.set("1", {"coordinates": (1, 2, 3), "tags": {"python", "redis"}})
-        assert store.get("1") == {"coordinates": (1, 2, 3), "tags": {"python", "redis"}}
+@redis_available
+@pytest.mark.parametrize(
+    ("keys", "expected"),
+    [
+        pytest.param(["1"], {"1": b'{"a": 1}'}, id="one"),
+        pytest.param(["4"], {}, id="one_missing"),
+        pytest.param(["1", "4", "3", "1"], {"1": b'{"a": 1}', "3": b'{"a": 3}'}, id="many"),
+        pytest.param(["4", "5"], {}, id="many_missing"),
+    ],
+)
+def test__get_many(filled_store: RedisStore, keys: list[str], expected: dict) -> None:
+    assert filled_store._get_many(keys) == expected
 
 
-def test_json_store_normalizes_tuples_and_sets_are_unsupported(
-    monkeypatch: pytest.MonkeyPatch,
+@redis_available
+@pytest.mark.parametrize("payload", ['{"a": "é"}', '{"a": "é"}'.encode()])
+def test__put_many(store: RedisStore, payload: str | bytes) -> None:
+    store._put_many({"1": payload})
+    assert store.client.get("persista:v:1") == '{"a": "é"}'.encode()
+
+
+@redis_available
+def test__put_many_removes_a_time_to_live(filled_store: RedisStore) -> None:
+    filled_store.client.expire("persista:v:1", 100)
+    filled_store._put_many({"1": b"{}"})
+    assert filled_store.client.ttl("persista:v:1") == -1
+
+
+@redis_available
+def test__update(filled_store: RedisStore) -> None:
+    filled_store._update(["1", "4"], lambda _: {"4": b"{}"})
+    assert filled_store._get_many(["1", "4"]) == {"1": b'{"a": 1}', "4": b"{}"}
+
+
+@redis_available
+def test__update_adds_the_keys_to_the_set(store: RedisStore) -> None:
+    store._update(["1"], lambda _: {"1": b"{}"})
+    assert store.client.smembers("persista:keys") == {b"1"}
+
+
+@redis_available
+def test__update_gives_the_existing_payloads_to_the_plan(filled_store: RedisStore) -> None:
+    plan = MagicMock(return_value={})
+    filled_store._update(["2", "4"], plan)
+    plan.assert_called_once_with({"2": b'{"a": 2}'})
+
+
+@redis_available
+def test__update_empty_plan_writes_nothing(store: RedisStore, raw: Any) -> None:
+    store._update(["1"], lambda _: {})
+    assert scan(raw) == []
+
+
+@redis_available
+def test__update_plan_raises_writes_nothing(filled_store: RedisStore) -> None:
+    plan = build_plan({"1": "{}", "4": "{}"}, "raise", JsonCodec())
+    with pytest.raises(KeyError, match=r"already exist"):
+        filled_store._update(["1", "4"], plan)
+    assert filled_store._get_many(["1", "4"]) == {"1": b'{"a": 1}'}
+
+
+@redis_available
+@pytest.mark.parametrize(
+    ("change", "second_existing"),
+    [
+        pytest.param(lambda c: c.set("persista:v:1", b"new"), {"1": b"new"}, id="overwrite"),
+        pytest.param(lambda c: c.delete("persista:v:1"), {}, id="delete"),
+    ],
+)
+def test__update_calls_the_plan_again_after_a_concurrent_write(
+    filled_store: RedisStore, raw: Any, change: Callable[[Any], Any], second_existing: dict
 ) -> None:
-    _use_fake_redis(monkeypatch)
+    calls = []
+
+    def plan(existing: dict) -> dict:
+        calls.append(existing)
+        if len(calls) == 1:
+            change(raw)
+        return {"1": b"planned"}
+
+    filled_store._update(["1"], plan)
+    assert (calls, raw.get("persista:v:1")) == (
+        [{"1": b'{"a": 1}'}, second_existing],
+        b"planned",
+    )
+
+
+@redis_available
+def test__update_detects_the_creation_of_a_missing_key(store: RedisStore, raw: Any) -> None:
+    def plan(existing: dict) -> dict:
+        if existing:
+            return {}
+        raw.set("persista:v:1", b"other")
+        return {"1": b"planned"}
+
+    store._update(["1"], plan)
+    assert raw.get("persista:v:1") == b"other"
+
+
+@redis_available
+def test__delete_many(filled_store: RedisStore, raw: Any) -> None:
+    filled_store._delete_many(["1", "3", "4", "1"])
+    assert (scan(raw), raw.smembers("persista:keys")) == (
+        [b"persista:keys", b"persista:v:2"],
+        {b"2"},
+    )
+
+
+@redis_available
+def test__clear(filled_store: RedisStore, raw: Any) -> None:
+    filled_store._clear()
+    assert scan(raw) == []
+
+
+@redis_available
+def test__clear_empty_store(store: RedisStore, raw: Any) -> None:
+    store._clear()
+    assert scan(raw) == []
+
+
+@redis_available
+def test__clear_several_batches(
+    filled_store: RedisStore, raw: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(f"{MODULE}._DELETE_BATCH_SIZE", 2)
+    filled_store._clear()
+    assert scan(raw) == []
+
+
+@redis_available
+def test__clear_keeps_a_key_created_during_the_call(
+    filled_store: RedisStore, raw: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = filled_store._snapshot_keys
+
+    def snapshot_then_write() -> list[bytes]:
+        keys = snapshot()
+        filled_store._put_many({"4": b"{}"})
+        return keys
+
+    monkeypatch.setattr(filled_store, "_snapshot_keys", snapshot_then_write)
+    filled_store._clear()
+    assert (scan(raw), raw.smembers("persista:keys")) == (
+        [b"persista:keys", b"persista:v:4"],
+        {b"4"},
+    )
+
+
+@redis_available
+def test__count(filled_store: RedisStore) -> None:
+    assert filled_store._count() == 3
+
+
+@redis_available
+def test__contains_many(filled_store: RedisStore) -> None:
+    assert filled_store._contains_many(["1", "4", "3", "1"]) == {"1", "3"}
+
+
+# --- iteration ---
+
+
+@redis_available
+@pytest.mark.parametrize(("batch_size", "sizes"), [(1, [1, 1, 1]), (2, [2, 1]), (10, [3])])
+def test__iter_batches_sizes(filled_store: RedisStore, batch_size: int, sizes: list[int]) -> None:
+    assert [len(batch) for batch in filled_store._iter_batches(batch_size)] == sizes
+
+
+@redis_available
+def test__iter_batches_payloads(filled_store: RedisStore) -> None:
+    assert list(filled_store._iter_batches(10)) == [PAYLOADS]
+
+
+@redis_available
+def test__iter_key_batches(filled_store: RedisStore) -> None:
+    assert sorted(key for batch in filled_store._iter_key_batches(2) for key in batch) == [
+        "1",
+        "2",
+        "3",
+    ]
+
+
+@redis_available
+@pytest.mark.parametrize("method", ["_iter_batches", "_iter_key_batches"])
+def test_iteration_empty_store(store: RedisStore, method: str) -> None:
+    assert list(getattr(store, method)(2)) == []
+
+
+@redis_available
+def test_iteration_skips_keys_deleted_since_the_snapshot(filled_store: RedisStore) -> None:
+    iterator = filled_store._iter_batches(1)
+    first = next(iterator)
+    filled_store._clear()
+    assert (len(first), list(iterator)) == (1, [])
+
+
+@redis_available
+@pytest.mark.parametrize("method", ["_iter_batches", "_iter_key_batches"])
+def test_iteration_does_not_yield_keys_written_after_the_snapshot(
+    filled_store: RedisStore, method: str
+) -> None:
+    iterator = getattr(filled_store, method)(1)
+    next(iterator)
+    filled_store._put_many({"4": b"{}"})
+    assert len(list(iterator)) == 2
+
+
+@redis_available
+def test__snapshot_keys(filled_store: RedisStore) -> None:
+    assert sorted(filled_store._snapshot_keys()) == [b"1", b"2", b"3"]
+
+
+# --- async primitives ---
+
+
+@redis_available
+@pytest.mark.parametrize(
+    ("keys", "expected"),
+    [
+        pytest.param(["1"], {"1": b'{"a": 1}'}, id="one"),
+        pytest.param(["4"], {}, id="one_missing"),
+        pytest.param(["1", "4", "3", "1"], {"1": b'{"a": 1}', "3": b'{"a": 3}'}, id="many"),
+    ],
+)
+async def test__aget_many(filled_store: RedisStore, keys: list[str], expected: dict) -> None:
+    assert await filled_store._aget_many(keys) == expected
+    await filled_store.aclose()
+
+
+@redis_available
+async def test__aput_many(store: RedisStore, raw: Any) -> None:
+    await store._aput_many(PAYLOADS)
+    assert scan(raw) == REDIS_KEYS
+    await store.aclose()
+
+
+@redis_available
+async def test__aupdate(filled_store: RedisStore) -> None:
+    await filled_store._aupdate(["1", "4"], lambda _: {"4": b"{}"})
+    assert filled_store._get_many(["1", "4"]) == {"1": b'{"a": 1}', "4": b"{}"}
+    await filled_store.aclose()
+
+
+@redis_available
+async def test__aupdate_gives_the_existing_payloads_to_the_plan(filled_store: RedisStore) -> None:
+    plan = MagicMock(return_value={})
+    await filled_store._aupdate(["2", "4"], plan)
+    plan.assert_called_once_with({"2": b'{"a": 2}'})
+    await filled_store.aclose()
+
+
+@redis_available
+async def test__aupdate_plan_raises_writes_nothing(filled_store: RedisStore) -> None:
+    plan = build_plan({"1": "{}", "4": "{}"}, "raise", JsonCodec())
+    with pytest.raises(KeyError, match=r"already exist"):
+        await filled_store._aupdate(["1", "4"], plan)
+    assert filled_store._get_many(["1", "4"]) == {"1": b'{"a": 1}'}
+    await filled_store.aclose()
+
+
+@redis_available
+@pytest.mark.parametrize(
+    ("change", "second_existing"),
+    [
+        pytest.param(lambda c: c.set("persista:v:1", b"new"), {"1": b"new"}, id="overwrite"),
+        pytest.param(lambda c: c.delete("persista:v:1"), {}, id="delete"),
+    ],
+)
+async def test__aupdate_calls_the_plan_again_after_a_concurrent_write(
+    filled_store: RedisStore, raw: Any, change: Callable[[Any], Any], second_existing: dict
+) -> None:
+    calls = []
+
+    def plan(existing: dict) -> dict:
+        calls.append(existing)
+        if len(calls) == 1:
+            change(raw)
+        return {"1": b"planned"}
+
+    await filled_store._aupdate(["1"], plan)
+    assert (calls, raw.get("persista:v:1")) == (
+        [{"1": b'{"a": 1}'}, second_existing],
+        b"planned",
+    )
+    await filled_store.aclose()
+
+
+@redis_available
+async def test__adelete_many(filled_store: RedisStore, raw: Any) -> None:
+    await filled_store._adelete_many(["1", "3", "4"])
+    assert (scan(raw), raw.smembers("persista:keys")) == (
+        [b"persista:keys", b"persista:v:2"],
+        {b"2"},
+    )
+    await filled_store.aclose()
+
+
+@redis_available
+async def test__aclear(filled_store: RedisStore, raw: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(f"{MODULE}._DELETE_BATCH_SIZE", 2)
+    raw.set("other:v:1", "x")
+    await filled_store._aclear()
+    assert scan(raw) == [b"other:v:1"]
+    await filled_store.aclose()
+
+
+@redis_available
+async def test__aclear_empty_store(store: RedisStore, raw: Any) -> None:
+    await store._aclear()
+    assert scan(raw) == []
+    await store.aclose()
+
+
+@redis_available
+async def test__acount(filled_store: RedisStore) -> None:
+    assert await filled_store._acount() == 3
+    await filled_store.aclose()
+
+
+@redis_available
+async def test__acontains_many(filled_store: RedisStore) -> None:
+    assert await filled_store._acontains_many(["1", "4", "3", "1"]) == {"1", "3"}
+    await filled_store.aclose()
+
+
+@redis_available
+@pytest.mark.parametrize(("batch_size", "sizes"), [(1, [1, 1, 1]), (2, [2, 1]), (10, [3])])
+async def test__aiter_batches_sizes(
+    filled_store: RedisStore, batch_size: int, sizes: list[int]
+) -> None:
+    assert [len(batch) async for batch in filled_store._aiter_batches(batch_size)] == sizes
+    await filled_store.aclose()
+
+
+@redis_available
+async def test__aiter_batches_payloads(filled_store: RedisStore) -> None:
+    assert [batch async for batch in filled_store._aiter_batches(10)] == [PAYLOADS]
+    await filled_store.aclose()
+
+
+@redis_available
+@pytest.mark.parametrize("method", ["_aiter_batches", "_aiter_key_batches"])
+async def test_async_iteration_empty_store(store: RedisStore, method: str) -> None:
+    assert [batch async for batch in getattr(store, method)(2)] == []
+    await store.aclose()
+
+
+@redis_available
+async def test_async_iteration_skips_keys_deleted_since_the_snapshot(
+    filled_store: RedisStore,
+) -> None:
+    iterator = filled_store._aiter_batches(1)
+    first = await anext(iterator)
+    filled_store._clear()
+    assert (len(first), [batch async for batch in iterator]) == (1, [])
+    await filled_store.aclose()
+
+
+@redis_available
+@pytest.mark.parametrize("method", ["_aiter_batches", "_aiter_key_batches"])
+async def test_async_iteration_does_not_yield_keys_written_after_the_snapshot(
+    filled_store: RedisStore, method: str
+) -> None:
+    iterator = getattr(filled_store, method)(1)
+    await anext(iterator)
+    filled_store._put_many({"4": b"{}"})
+    assert len([batch async for batch in iterator]) == 2
+    await filled_store.aclose()
+
+
+@redis_available
+@pytest.mark.parametrize("method", ["_aiter_batches", "_aiter_key_batches"])
+@pytest.mark.parametrize("batch_size", [1, 10])
+async def test_async_iteration_closed_store(
+    filled_store: RedisStore, method: str, batch_size: int
+) -> None:
+    iterator = getattr(filled_store, method)(batch_size)
+    await anext(iterator)
+    await filled_store.aclose()
+    with pytest.raises(RuntimeError, match=r"is not open"):
+        await anext(iterator)
+
+
+@redis_available
+async def test__afilter_candidates(filled_store: RedisStore) -> None:
+    assert [batch async for batch in filled_store._afilter_candidates({"a": 1})] == [PAYLOADS]
+    await filled_store.aclose()
+
+
+@redis_available
+async def test__aiter_key_batches(filled_store: RedisStore) -> None:
+    keys = [key async for batch in filled_store._aiter_key_batches(2) for key in batch]
+    assert sorted(keys) == ["1", "2", "3"]
+    await filled_store.aclose()
+
+
+@redis_available
+async def test__asnapshot_keys(filled_store: RedisStore) -> None:
+    assert sorted(await filled_store._asnapshot_keys()) == [b"1", b"2", b"3"]
+    await filled_store.aclose()
+
+
+@redis_available
+async def test_async_calls_do_not_use_threads(
+    store: RedisStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(store, "_run_in_thread", MagicMock(side_effect=AssertionError("thread")))
+    await store.aset("1", {"a": 1}, on_conflict="merge")
+    await store.aset("2", {})
+    await store.acontains("1")
+    await store.afilter()
+    await store.acount()
+    await store.adelete("1")
+    await store.aclear()
+    assert [key async for key in store.akeys()] == []
+    await store._aclose()
+
+
+# --- async client ---
+
+
+@redis_available
+async def test__async_client_is_reused_in_a_loop(store: RedisStore) -> None:
+    assert await store._async_client() is await store._async_client()
+    await store.aclose()
+
+
+@redis_available
+@pytest.mark.usefixtures("server")
+async def test__async_client_closed_store() -> None:
+    with pytest.raises(RuntimeError, match=r"RedisStore is not open"):
+        await RedisStore()._async_client()
+
+
+@redis_available
+async def test__async_client_being_closed(store: RedisStore) -> None:
+    entry = await store._async_client()
+    entry.closing = True
+    with pytest.raises(RuntimeError, match=r"it is being closed"):
+        await store._async_client()
+    entry.closing = False
+    await store.aclose()
+
+
+@redis_available
+def test_each_event_loop_has_its_own_client(store: RedisStore) -> None:
+    async def client() -> Any:
+        return (await store._async_client()).client
+
+    assert asyncio.run(client()) is not asyncio.run(client())
+
+
+@redis_available
+def test_use_in_two_event_loops(store: RedisStore) -> None:
+    asyncio.run(store.aset("1", {}))
+    asyncio.run(store.aset("2", {}))
+    assert asyncio.run(store.acount()) == 2
+
+
+@redis_available
+def test_loop_shutdown_closes_the_client(server: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = fakeredis.FakeAsyncRedis(server=server)
+    closed = []
+
+    async def aclose() -> None:
+        closed.append(True)
+
+    monkeypatch.setattr(client, "aclose", aclose)
+    monkeypatch.setattr(f"{MODULE}.aredis.Redis.from_url", lambda _url: client)
     with RedisStore() as store:
-        store.set("1", {"coordinates": (1, 2, 3)})
-        # JSON has no tuple type, so it comes back as a list.
-        assert store.get("1") == {"coordinates": [1, 2, 3]}
-        with pytest.raises(TypeError, match="not JSON serializable"):
-            store.set("2", {"tags": {"python", "redis"}})
+        asyncio.run(store.acount())
+        assert (closed, store._aclients) == ([True], {})
 
 
-async def test_pickle_store_round_trips_tuples_and_sets_async(
-    monkeypatch: pytest.MonkeyPatch,
+@redis_available
+async def test_close_with_an_open_async_client_raises(store: RedisStore) -> None:
+    await store.aset("1", {})
+    with pytest.raises(RuntimeError, match=r"call `await store.aclose\(\)`"):
+        store.close()
+    assert await store.aget("1") == {}
+    await store.aclose()
+
+
+@redis_available
+@pytest.mark.usefixtures("server")
+async def test_sync_context_manager_with_an_async_call_raises() -> None:
+    store = RedisStore()
+    with pytest.raises(RuntimeError, match=r"An async client of RedisStore is open"), store:
+        await store.acount()
+    await store.aclose()
+
+
+@redis_available
+def test_close_after_the_event_loop_shut_down(store: RedisStore) -> None:
+    asyncio.run(store.acount())
+    store.close()
+    assert store.closed
+
+
+@redis_available
+def test_close_with_the_client_of_a_stopped_loop_raises(store: RedisStore) -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(store.acount())
+        with pytest.raises(RuntimeError, match=r"An async client of RedisStore is open"):
+            store.close()
+        loop.run_until_complete(store.aclose())
+    finally:
+        loop.close()
+    assert store.closed
+
+
+@redis_available
+def test_aclose_with_the_client_of_another_loop_raises(store: RedisStore) -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(store.acount())
+        with pytest.raises(RuntimeError, match=r"An async client of RedisStore is open"):
+            asyncio.run(store.aclose())
+        assert not store.closed
+        loop.run_until_complete(store.aclose())
+    finally:
+        loop.close()
+
+
+@redis_available
+async def test_aclose(store: RedisStore) -> None:
+    await store.acount()
+    await store.aclose()
+    assert (store.closed, store._aclients) == (True, {})
+
+
+@redis_available
+async def test_aclose_without_async_call(store: RedisStore) -> None:
+    await store.aclose()
+    assert store.closed
+
+
+@redis_available
+async def test_aclose_twice(store: RedisStore) -> None:
+    await store.acount()
+    await asyncio.gather(store.aclose(), store.aclose())
+    assert store.closed
+
+
+@redis_available
+async def test_aclose_then_reopen(store: RedisStore) -> None:
+    await store.aset("1", {})
+    await store.aclose()
+    async with store:
+        assert await store.aget("1") == {}
+
+
+@redis_available
+async def test_aclose_waits_for_the_calls_that_use_the_client(store: RedisStore) -> None:
+    entry = await store._async_client()
+    with entry:
+        task = asyncio.ensure_future(store.aclose())
+        await asyncio.sleep(0)
+        waiting = not task.done() and not store.closed
+    await task
+    assert (waiting, store.closed) == (True, True)
+
+
+@redis_available
+async def test_concurrent_aclose_close_the_client_once(
+    store: RedisStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _use_fake_redis(monkeypatch)
-    _use_fake_async_redis(monkeypatch)
-    async with PickleRedisStore() as store:
-        await store.aset("1", {"coordinates": (1, 2, 3), "tags": {"python", "redis"}})
-        assert await store.aget("1") == {"coordinates": (1, 2, 3), "tags": {"python", "redis"}}
+    entry = await store._async_client()
+    aclose = AsyncMock()
+    monkeypatch.setattr(entry.client, "aclose", aclose)
+    with entry:
+        tasks = [asyncio.ensure_future(store.aclose()) for _ in range(2)]
+        await asyncio.sleep(0)
+    await asyncio.gather(*tasks)
+    assert (aclose.await_count, store.closed) == (1, True)
 
 
-async def test_json_store_normalizes_tuples_and_sets_are_unsupported_async(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _use_fake_redis(monkeypatch)
-    _use_fake_async_redis(monkeypatch)
-    async with RedisStore() as store:
-        await store.aset("1", {"coordinates": (1, 2, 3)})
-        # JSON has no tuple type, so it comes back as a list.
-        assert await store.aget("1") == {"coordinates": [1, 2, 3]}
-        with pytest.raises(TypeError, match="not JSON serializable"):
-            await store.aset("2", {"tags": {"python", "redis"}})
+@redis_available
+async def test_aclose_cancelled_keeps_the_client_usable(store: RedisStore) -> None:
+    with await store._async_client():
+        task = asyncio.ensure_future(store.aclose())
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError, match=r"^$"):
+            await task
+    assert await store.acount() == 0
+    await store.aclose()
 
 
-# --- client ---
+@redis_available
+async def test__aclose_keeps_the_store_open(store: RedisStore) -> None:
+    await store.acount()
+    await store._aclose()
+    assert (store.closed, store._aclients) == (False, {})
 
 
-def test_client_executes_commands(store: BaseRedisStore) -> None:
-    store.set("a", {"x": 1})
-    assert store.client.scard("__keys__") == 1
+@redis_available
+async def test__close_with_loop(store: RedisStore) -> None:
+    client = AsyncMock()
+    loop = asyncio.get_running_loop()
+    store._aclients[loop] = MagicMock()
+    guard = store._close_with_loop(client, loop)
+    await anext(guard)
+    await guard.aclose()
+    assert (store._aclients, client.aclose.await_count) == ({}, 1)
 
 
-def test_client_before_open_raises(store_cls: type[BaseRedisStore]) -> None:
-    with pytest.raises(RuntimeError, match="not open"):
-        _ = store_cls().client
+@redis_available
+def test__forget_closed_loops(store: RedisStore, caplog: pytest.LogCaptureFixture) -> None:
+    loop = asyncio.new_event_loop()
+    loop.close()
+    store._aclients[loop] = MagicMock()
+    with caplog.at_level(logging.WARNING):
+        store._forget_closed_loops()
+    assert (store._aclients, len(caplog.messages)) == ({}, 1)
+
+
+@redis_available
+def test__forget_closed_loops_keeps_open_loops(store: RedisStore) -> None:
+    loop = asyncio.new_event_loop()
+    entry = MagicMock()
+    store._aclients[loop] = entry
+    try:
+        store._forget_closed_loops()
+        assert store._aclients == {loop: entry}
+    finally:
+        store._aclients.clear()
+        loop.close()
+
+
+@redis_available
+def test_close_after_a_loop_closed_without_shutdown(store: RedisStore) -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(store.acount())
+    finally:
+        loop.close()
+    store.close()
+    assert store.closed
+
+
+# --- URI ---
+
+
+@redis_available
+def test_to_uri() -> None:
+    uri = "redis://user:secret@localhost:6379/1"
+    assert RedisStore(uri, namespace="app", codec=PickleCodec()).to_uri() == uri
+
+
+@redis_available
+@pytest.mark.parametrize("read_only", [True, False])
+def test_from_uri(read_only: bool) -> None:
+    store = RedisStore.from_uri(URL, read_only=read_only)
+    assert (store.to_uri(), store.namespace, store.closed) == (URL, "persista", True)
+
+
+@redis_available
+def test_from_uri_passes_the_codec_and_the_namespace() -> None:
+    codec = PickleCodec()
+    store = RedisStore.from_uri(URL, codec=codec, namespace="app")
+    assert (store._codec, store.namespace) == (codec, "app")
+
+
+@redis_available
+def test_from_uri_passes_the_connection_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    from_url = MagicMock()
+    monkeypatch.setattr(f"{MODULE}.redis.Redis.from_url", from_url)
+    RedisStore.from_uri(URL, socket_timeout=5.0).open()
+    from_url.assert_called_once_with(URL, socket_timeout=5.0)
+
+
+# --- repr ---
+
+
+@redis_available
+@pytest.mark.parametrize("operation", [repr, str])
+def test_repr_hides_the_credentials(operation: Callable[[Any], str]) -> None:
+    secrets = ["admin", "s3cret", "other", "third"]
+    store = RedisStore(
+        f"redis://{secrets[0]}:{secrets[1]}@localhost:6379/0?password={secrets[2]}",
+        password=secrets[3],
+    )
+    text = operation(store)
+    assert not any(secret in text for secret in secrets)
+
+
+@redis_available
+def test_repr_runs_no_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MagicMock()
+    monkeypatch.setattr(f"{MODULE}.redis.Redis.from_url", lambda _url: client)
+    with RedisStore() as store:
+        client.reset_mock()
+        repr(store)
+        assert client.mock_calls == []
+
+
+@redis_available
+def test__get_repr_kwargs() -> None:
+    store = RedisStore("redis://:secret@localhost:6379/0", socket_timeout=1.0)
+    assert store._get_repr_kwargs() == {
+        "url": "redis://localhost:6379/0",
+        "namespace": "persista",
+        "closed": True,
+    }
+
+
+@redis_available
+@pytest.mark.usefixtures("server")
+def test__get_repr_kwargs_codec_and_open() -> None:
+    codec = PickleCodec()
+    with RedisStore(codec=codec, namespace="app") as store:
+        assert store._get_repr_kwargs() == {
+            "url": URL,
+            "namespace": "app",
+            "closed": False,
+            "codec": codec,
+        }
+
+
+# --- template helpers ---
+
+
+@redis_available
+def test__value_names() -> None:
+    assert RedisStore(namespace="é")._value_names([b"1", b""]) == [
+        "é:v:1".encode(),
+        "é:v:".encode(),
+    ]
+
+
+@redis_available
+def test__encode_rows() -> None:
+    assert RedisStore()._encode_rows({"é": "{}", "2": b"x"}) == {"é".encode(): "{}", b"2": b"x"}
+
+
+@redis_available
+def test__encode_rows_surrogate() -> None:
+    with pytest.raises(ValueError, match=r"lone surrogate"):
+        RedisStore()._encode_rows({SURROGATE: "{}"})
+
+
+@redis_available
+def test__queue_put() -> None:
+    pipe = MagicMock()
+    RedisStore()._queue_put(pipe, {b"1": "{}", b"2": b"x"})
+    assert pipe.mock_calls == [
+        ("mset", ({b"persista:v:1": b"{}", b"persista:v:2": b"x"},), {}),
+        ("sadd", (b"persista:keys", b"1", b"2"), {}),
+    ]
+
+
+@redis_available
+def test__queue_put_empty() -> None:
+    pipe = MagicMock()
+    RedisStore()._queue_put(pipe, {})
+    assert pipe.mock_calls == []
+
+
+@redis_available
+def test__queue_delete() -> None:
+    pipe = MagicMock()
+    RedisStore()._queue_delete(pipe, iter([b"1", b"2"]))
+    assert pipe.mock_calls == [
+        ("delete", (b"persista:v:1", b"persista:v:2"), {}),
+        ("srem", (b"persista:keys", b"1", b"2"), {}),
+    ]
+
+
+#################################
+#     Tests for _LoopClient     #
+#################################
+
+
+def test__loop_client_enter_gives_the_client() -> None:
+    client = MagicMock()
+    with _LoopClient(client, MagicMock()) as entered:
+        assert entered is client
+
+
+def test__loop_client_not_closing() -> None:
+    assert not _LoopClient(MagicMock(), MagicMock()).closing
+
+
+async def test__loop_client_wait_until_idle_without_call() -> None:
+    entry = _LoopClient(MagicMock(), MagicMock())
+    await asyncio.wait_for(entry.wait_until_idle(), timeout=1)
+    assert entry._calls == 0
+
+
+async def test__loop_client_wait_until_idle_waits_for_every_call() -> None:
+    entry = _LoopClient(MagicMock(), MagicMock())
+    entry.__enter__()
+    entry.__enter__()
+    task = asyncio.ensure_future(entry.wait_until_idle())
+    await asyncio.sleep(0)
+    entry.__exit__()
+    await asyncio.sleep(0)
+    waiting = not task.done()
+    entry.__exit__()
+    await asyncio.wait_for(task, timeout=1)
+    assert waiting
+
+
+async def test__loop_client_wait_until_idle_after_a_previous_idle_time() -> None:
+    entry = _LoopClient(MagicMock(), MagicMock())
+    with entry:
+        pass
+    entry.__enter__()
+    task = asyncio.ensure_future(entry.wait_until_idle())
+    await asyncio.sleep(0)
+    waiting = not task.done()
+    entry.__exit__()
+    await asyncio.wait_for(task, timeout=1)
+    assert waiting
+
+
+def test__loop_client_exit_after_an_error() -> None:
+    entry = _LoopClient(MagicMock(), MagicMock())
+    entry.__enter__()
+    entry.__exit__(ValueError, ValueError("failed"), None)
+    assert entry._calls == 0
+
+
+#################################
+#     Tests for _encode_key     #
+#################################
+
+
+@pytest.mark.parametrize(("key", "encoded"), [("", b""), ("a", b"a"), ("é", "é".encode())])
+def test__encode_key(key: str, encoded: bytes) -> None:
+    assert _encode_key(key) == encoded
+
+
+def test__encode_key_surrogate() -> None:
+    with pytest.raises(ValueError, match=r"valid Unicode, but it has a lone surrogate"):
+        _encode_key(SURROGATE)
+
+
+##################################
+#     Tests for _encode_keys     #
+##################################
+
+
+@pytest.mark.parametrize(
+    ("keys", "encoded"), [([], []), (["a", "é", "a"], [b"a", "é".encode(), b"a"])]
+)
+def test__encode_keys(keys: list[str], encoded: list[bytes]) -> None:
+    assert _encode_keys(keys) == encoded
+
+
+def test__encode_keys_surrogate() -> None:
+    with pytest.raises(ValueError, match=r"valid Unicode, but it has a lone surrogate"):
+        _encode_keys(["a", SURROGATE])
+
+
+#####################################
+#     Tests for _encode_members     #
+#####################################
+
+
+@pytest.mark.parametrize(
+    ("members", "expected"),
+    [([], []), ([b"a", b"b"], [b"a", b"b"]), (["é"], ["é".encode()])],
+)
+def test__encode_members(members: list, expected: list[bytes]) -> None:
+    assert _encode_members(members) == expected
+
+
+##################################
+#     Tests for _decode_keys     #
+##################################
+
+
+@pytest.mark.parametrize(("raw_keys", "keys"), [([], []), ([b"a", "é".encode()], ["a", "é"])])
+def test__decode_keys(raw_keys: list[bytes], keys: list[str]) -> None:
+    assert _decode_keys(raw_keys) == keys
+
+
+##############################
+#     Tests for _present     #
+##############################
+
+
+@pytest.mark.parametrize(
+    ("keys", "values", "expected"),
+    [
+        pytest.param([], [], {}, id="empty"),
+        pytest.param(["a", "b"], [b"1", b""], {"a": b"1", "b": b""}, id="present"),
+        pytest.param(["a", "b"], [None, b"2"], {"b": b"2"}, id="missing"),
+        pytest.param(["a", "a"], [b"1", b"1"], {"a": b"1"}, id="duplicates"),
+    ],
+)
+def test__present(keys: list[str], values: list, expected: dict) -> None:
+    assert _present(keys, values) == expected
+
+
+def test__present_different_lengths() -> None:
+    with pytest.raises(ValueError, match=r"zip\(\)"):
+        _present(["a"], [])
+
+
+################################
+#     Tests for _check_url     #
+################################
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        URL,
+        "rediss://user:secret@host:6380/1",
+        "unix:///tmp/redis.sock?db=1",
+        "redis://[::1]:6379",
+    ],
+)
+def test__check_url(url: str) -> None:
+    _check_url(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param("redis://:s3cret/x@host", id="slash_in_password"),
+        pytest.param("redis://user:s3cret#x@host", id="hash_in_password"),
+        pytest.param("redis://:s3cret@host:port", id="port"),
+        pytest.param("redis://:s3cret@[::1", id="ipv6"),
+    ],
+)
+def test__check_url_invalid(url: str) -> None:
+    with pytest.raises(ValueError, match=r"Invalid Redis URL") as exc_info:
+        _check_url(url)
+    assert (exc_info.value.__suppress_context__, "s3cret" in str(exc_info.value)) == (True, False)
+
+
+#################################
+#     Tests for _redact_url     #
+#################################
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (URL, URL),
+        ("redis://localhost", "redis://localhost"),
+        ("redis://:secret@localhost:6379/0", URL),
+        ("redis://user:secret@localhost:6379/0", URL),
+        ("redis://user@localhost:6379/0", URL),
+        ("redis://:p@ss@localhost:6379/0", URL),
+        ("redis://:p%40ss@localhost:6379/0", URL),
+        ("rediss://u:secret@[::1]:6380/2", "rediss://[::1]:6380/2"),
+        (
+            "redis://localhost?password=secret&db=2&username=u&ssl_password=x",
+            "redis://localhost?db=2",
+        ),
+        ("redis://localhost:6379/0#secret", URL),
+        ("unix:///tmp/redis.sock?db=1&password=secret", "unix:///tmp/redis.sock?db=1"),
+        ("unix://user:secret@/tmp/redis.sock", "unix:///tmp/redis.sock"),
+        ("redis://:se/cret@localhost", "<hidden Redis URL>"),
+        ("redis://:12/cret@localhost", "<hidden Redis URL>"),
+        ("redis://:12?cret@localhost", "<hidden Redis URL>"),
+        ("redis://:12#cret@localhost", "<hidden Redis URL>"),
+        ("redis://:secret@[::1", "<hidden Redis URL>"),
+        ("secret@localhost", "<hidden Redis URL>"),
+        ("user:secret@localhost", "<hidden Redis URL>"),
+        ("", "<hidden Redis URL>"),
+    ],
+)
+def test__redact_url(url: str, expected: str) -> None:
+    assert _redact_url(url) == expected

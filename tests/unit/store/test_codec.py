@@ -328,6 +328,43 @@ def test_json_codec_decode(payload: str | bytes) -> None:
     assert JsonCodec().decode(payload) == {"a": 1}
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param('{"é": "🎉"}'.encode(), id="utf-8"),
+        pytest.param('{"é": "🎉"}'.encode("utf-8-sig"), id="utf-8-bom"),
+        pytest.param('{"é": "🎉"}'.encode("utf-16-le"), id="utf-16-le"),
+        pytest.param('{"é": "🎉"}'.encode("utf-16-be"), id="utf-16-be"),
+        pytest.param('{"é": "🎉"}'.encode("utf-32-le"), id="utf-32-le"),
+        pytest.param(bytearray('{"é": "🎉"}'.encode()), id="bytearray"),
+    ],
+)
+def test_json_codec_decode_bytes_encodings(payload: bytes) -> None:
+    assert JsonCodec().decode(payload) == {"é": "🎉"}
+
+
+def test_json_codec_decode_bytes_empty_object() -> None:
+    assert JsonCodec().decode(b"{}") == {}
+
+
+def test_json_codec_decode_bytes_with_surrogate() -> None:
+    # As json.loads does: another program may have written such a payload.
+    assert JsonCodec().decode(b'{"a": "\xed\xa0\x80"}') == {"a": chr(0xD800)}
+
+
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        pytest.param(b"{", r"Expecting", id="truncated"),
+        pytest.param(b"", r"Expecting value", id="empty"),
+        pytest.param(b'{"a": "\xff"}', r"can't decode byte", id="not_utf-8"),
+    ],
+)
+def test_json_codec_decode_invalid_bytes_raises(payload: bytes, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        JsonCodec().decode(payload)
+
+
 def test_json_codec_decode_returns_new_object() -> None:
     codec = JsonCodec()
     assert codec.decode('{"a": []}')["a"] is not codec.decode('{"a": []}')["a"]

@@ -120,8 +120,16 @@ Pass any other `BaseStore` to persist cached values, e.g. to share a cache acros
 from persista.cache import Cache
 from persista.store import RedisStore
 
-cache = Cache(store=RedisStore("redis://localhost:6379/0"), default_ttl=300)
+cache = Cache(store=RedisStore("redis://localhost:6379/0", namespace="cache"), default_ttl=300)
 ```
+
+`clear` clears the whole store, so give a cache a namespace of its own.
+
+After async calls on a cache over a `RedisStore`, close it with `await cache.aclose()` (or
+`async with`): `close` raises `RuntimeError` while the async client of the store is open, that is,
+until the event loop that used it is closed by `aclose` or shuts down, as it does at the end of
+`asyncio.run`. The same holds for a cache given to `AsyncHttpClient`. See
+[event loops and closing](store.md#event-loops-and-closing).
 
 ## Distinguishing a Cache Miss from a Cached `None`
 

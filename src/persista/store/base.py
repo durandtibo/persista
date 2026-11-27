@@ -82,11 +82,10 @@ class BaseStore(ABC):
     a list, and a value that would lose data raises.
 
     .. note::
-        ``RedisStore``, ``PickleRedisStore`` and ``PostgresStore`` do not
-        use the primitives below yet: they implement the public methods
-        themselves (see
-        :class:`~persista.store.unmigrated.UnmigratedStore`), and they
-        do not take a codec.
+        ``PostgresStore`` does not use the primitives below yet: it
+        implements the public methods itself (see
+        :class:`~persista.store.unmigrated.UnmigratedStore`), and it
+        does not take a codec.
 
     To implement a custom store, subclass :class:`BaseStore`, call
     ``super().__init__``, and implement :meth:`to_uri`,
