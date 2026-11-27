@@ -4,7 +4,6 @@ import pytest
 
 from persista.store import (
     BasePostgresStore,
-    BaseRedisStore,
     BaseStore,
 )
 from persista.store.unmigrated import UnmigratedStore
@@ -54,9 +53,6 @@ def test_unmigrated_store_has_a_placeholder_for_each_abstract_primitive() -> Non
     assert BaseStore.__abstractmethods__ - UnmigratedStore.__abstractmethods__ == set(PRIMITIVES)
 
 
-@pytest.mark.parametrize(
-    "cls",
-    [BasePostgresStore, BaseRedisStore],
-)
+@pytest.mark.parametrize("cls", [BasePostgresStore])
 def test_unmigrated_store_subclasses_have_every_primitive(cls: type[BaseStore]) -> None:
     assert not cls.__abstractmethods__ & set(PRIMITIVES)

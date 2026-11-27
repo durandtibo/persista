@@ -4,7 +4,6 @@ from __future__ import annotations
 
 __all__ = [
     "BasePostgresStore",
-    "BaseRedisStore",
     "BaseStore",
     "Codec",
     "DuckDBStore",
@@ -15,7 +14,6 @@ __all__ = [
     "NullStore",
     "OnConflict",
     "PickleCodec",
-    "PickleRedisStore",
     "PostgresStore",
     "RedisStore",
     "SQLiteStore",
@@ -37,7 +35,7 @@ from persista.store.keys import split_present_missing
 from persista.store.lmdb import LmdbStore
 from persista.store.null import NullStore
 from persista.store.postgres import BasePostgresStore, PostgresStore
-from persista.store.redis import BaseRedisStore, PickleRedisStore, RedisStore
+from persista.store.redis import RedisStore
 from persista.store.registry import register_scheme, store_from_uri
 from persista.store.sqlite import SQLiteStore
 from persista.store.types import OnConflict

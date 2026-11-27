@@ -1,8 +1,8 @@
 r"""Provide a shared helper for closing a lazily-created async connection
 from a store's synchronous ``close()`` method.
 
-Some backends (Redis, Postgres) eagerly open a sync connection but only
-create their async connection lazily, on first ``a``-prefixed call.
+A backend such as Postgres eagerly opens a sync connection but only
+creates its async connection lazily, on first ``a``-prefixed call.
 Closing such a store synchronously therefore has to also tear down that
 async connection, which is only safe to do with ``asyncio.run`` when no
 event loop is currently running; this module centralizes that check-and-
@@ -28,8 +28,8 @@ class SupportsAsyncClose(Protocol):
     """Structural type for an async connection exposing an async close
     method.
 
-    Matches objects like ``redis.asyncio.Redis`` or
-    ``psycopg.AsyncConnection`` -- anything with a ``close``/``aclose``-style method that returns an
+    Matches objects like ``psycopg.AsyncConnection`` -- anything with
+    a ``close``/``aclose``-style method that returns an
     awaitable -- so :func:`close_async_connection_from_sync` can accept
     them without depending on any specific driver's connection class.
     """

@@ -65,11 +65,11 @@ def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
 
     Dispatches on ``uri``'s scheme to the matching store class's
     :meth:`~persista.store.base.BaseStore.from_uri`. The returned
-    store supports both sync and async access. A store class whose
-    scheme is shared with another class (``PickleRedisStore`` reuses
-    ``RedisStore``'s native ``redis://`` scheme) isn't reachable
-    through this dispatcher -- call ``PickleRedisStore.from_uri(uri)``
-    directly.
+    store supports both sync and async access. The store has the
+    default options of its class: a ``redis://`` URI gives a
+    :class:`~persista.store.RedisStore` with the default codec and
+    namespace. Call ``RedisStore.from_uri(uri, codec=..., namespace=...)``
+    for other options.
 
     Args:
         uri: A URI produced by some ``BaseStore`` subclass's

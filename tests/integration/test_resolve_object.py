@@ -47,8 +47,8 @@ SERVER_STORES = [
         "RedisStore", {"url": "redis://localhost:6379/0"}, id="redis", marks=redis_available
     ),
     pytest.param(
-        "PickleRedisStore",
-        {"url": "redis://localhost:6379/0"},
+        "RedisStore",
+        {"url": "redis://localhost:6379/0", "codec": PickleCodec(), "namespace": "app"},
         id="pickle_redis",
         marks=redis_available,
     ),

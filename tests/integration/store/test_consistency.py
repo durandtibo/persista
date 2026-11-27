@@ -3,7 +3,6 @@ r"""Consistency tests across every ``BaseStore`` implementation.
 Each concrete store (:class:`~persista.store.InMemoryStore`,
 :class:`~persista.store.SQLiteStore`, :class:`~persista.store.DuckDBStore`,
 :class:`~persista.store.RedisStore`,
-:class:`~persista.store.PickleRedisStore`,
 :class:`~persista.store.LmdbStore`, :class:`~persista.store.FileStore`,
 :class:`~persista.store.PostgresStore`) is expected to implement the
 exact same behavior for the :class:`~persista.store.BaseStore` contract.
@@ -21,33 +20,35 @@ from __future__ import annotations
 import tempfile
 import uuid
 from collections.abc import AsyncIterator, Generator, Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from persista.record import Record
 from persista.record.store import RecordStore
 from persista.store import (
-    BaseRedisStore,
     BaseStore,
     DuckDBStore,
     FileStore,
     InMemoryStore,
     LmdbStore,
     PickleCodec,
-    PickleRedisStore,
     PostgresStore,
     RedisStore,
     SQLiteStore,
 )
 from persista.testing.fixtures import duckdb_available, lmdb_available
-from persista.utils.imports import is_redis_available
 from tests.integration.store.postgres_helpers import get_postgres_conninfo
 from tests.integration.store.redis_helpers import REDIS_URL, redis_server_reachable
 
+if TYPE_CHECKING:
+    from persista.store import Codec
 
-def _is_redis_store(store: BaseStore) -> bool:
-    return is_redis_available() and isinstance(store, BaseRedisStore)
+
+def redis_store(codec: Codec | None = None) -> RedisStore:
+    r"""Return a Redis store with a new namespace, so that it shares no
+    data with another store of the server."""
+    return RedisStore(REDIS_URL, codec=codec, namespace=f"persista-test-{uuid.uuid4().hex}")
 
 
 def _store_factories() -> list[pytest.mark.ParameterSet]:
@@ -75,8 +76,8 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
             id="duckdb",
             marks=duckdb_available,
         ),
-        pytest.param(lambda: RedisStore(REDIS_URL), id="redis", marks=redis_skip),
-        pytest.param(lambda: PickleRedisStore(REDIS_URL), id="pickle_redis", marks=redis_skip),
+        pytest.param(redis_store, id="redis", marks=redis_skip),
+        pytest.param(lambda: redis_store(PickleCodec()), id="pickle_redis", marks=redis_skip),
         pytest.param(lambda: LmdbStore(tempfile.mkdtemp()), id="lmdb", marks=lmdb_available),
         pytest.param(
             lambda: LmdbStore(tempfile.mkdtemp(), codec=PickleCodec()),
@@ -96,15 +97,12 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
 @pytest.fixture(params=_store_factories())
 def store(request: pytest.FixtureRequest) -> Generator[BaseStore, None, None]:
     with request.param() as store:
-        # RedisStore has no per-test namespace, so a shared server must be
-        # cleared before/after each test to keep tests isolated.
-        if _is_redis_store(store):
-            store.delete_many(list(store.keys()))
         yield store
-        # Some tests (e.g. close/aclose idempotency) intentionally close the
-        # store themselves, so only clean up if it is still open.
-        if _is_redis_store(store) and not store.closed:
-            store.delete_many(list(store.keys()))
+        # Remove the data of the namespace from the shared server. Some
+        # tests close the store themselves.
+        if isinstance(store, RedisStore):
+            store.open()
+            store.clear()
 
 
 @pytest.fixture(params=_store_factories())
@@ -573,8 +571,6 @@ def _all_available_stores() -> Generator[tuple[str, BaseStore], None, None]:
             continue
         store: BaseStore = factory()
         store.open()
-        if _is_redis_store(store):
-            store.delete_many(list(store.keys()))
         yield store_id, store
 
 
@@ -604,8 +600,8 @@ def test_cross_store_outputs_are_identical(items: dict[str, dict[str, Any]]) -> 
             }
     finally:
         for store in stores:
-            if _is_redis_store(store):
-                store.delete_many(list(store.keys()))
+            if isinstance(store, RedisStore):
+                store.clear()
             store.close()
 
     if len(results) < 2:
@@ -981,8 +977,6 @@ async def _all_available_stores_async() -> AsyncIterator[tuple[str, BaseStore]]:
             continue
         store: BaseStore = factory()
         await store.aopen()
-        if _is_redis_store(store):
-            await store.adelete_many([key async for key in store.akeys()])
         yield store_id, store
 
 
@@ -1014,8 +1008,8 @@ async def test_cross_store_outputs_are_identical_async(items: dict[str, dict[str
             }
     finally:
         for store in stores:
-            if _is_redis_store(store):
-                await store.adelete_many([key async for key in store.akeys()])
+            if isinstance(store, RedisStore):
+                await store.aclear()
             await store.aclose()
 
     if len(results) < 2:

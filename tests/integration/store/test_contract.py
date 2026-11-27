@@ -8,17 +8,20 @@ shares is tested in ``test_consistency.py``.
 
 Some properties are not covered yet, because the filter semantics are
 not final (``True`` and ``1`` still match, and the SQL stores with a JSON
-codec compare in the database, so the filter matrix leaves them out),
-and because the listed backends have no credentials. The writes of
-several instances of the same data are tested in
-``test_sql_concurrency.py`` and ``test_lmdb_concurrency.py``. A file
-store makes no such guarantee.
+codec compare in the database, so the filter matrix leaves them out).
+The writes of several instances of the same data are tested in
+``test_sql_concurrency.py``, ``test_lmdb_concurrency.py`` and
+``test_redis_concurrency.py``. A file store makes no such guarantee.
+The credentials of the Redis URLs are tested in ``test_redis.py``.
+
+The Redis backend needs a reachable server, and removes its data from it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
@@ -33,9 +36,15 @@ from persista.store import (
     LmdbStore,
     NullStore,
     PickleCodec,
+    RedisStore,
     SQLiteStore,
 )
-from persista.testing.fixtures import duckdb_available, lmdb_available
+from persista.testing.fixtures import duckdb_available, lmdb_available, redis_available
+from tests.integration.store.redis_helpers import (
+    REDIS_URL,
+    delete_namespaces,
+    redis_server_available,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator
@@ -46,6 +55,9 @@ if TYPE_CHECKING:
 
 NUM_THREADS = 8
 NUM_WRITES = 50
+
+# The prefix of the Redis namespaces of this run of the tests.
+REDIS_PREFIX = f"persista-contract-{uuid.uuid4().hex}"
 
 
 class PrimitivesOnlyStore(BaseStore):
@@ -125,17 +137,23 @@ BACKENDS: dict[str, Callable[[Codec, Path], BaseStore]] = {
     "duckdb_memory": lambda codec, _path: DuckDBStore(codec=codec),
     "file": lambda codec, path: FileStore(path / "files", codec=codec),
     "lmdb": lambda codec, path: LmdbStore(path / "lmdb", codec=codec, map_size=2**26),
+    # One namespace per directory, as the backends that use files.
+    "redis": lambda codec, path: RedisStore(
+        REDIS_URL, codec=codec, namespace=f"{REDIS_PREFIX}:{path}"
+    ),
 }
 
-# The backends that need an optional library, and the mark that skips them.
-MARKS: dict[str, pytest.MarkDecorator] = {
-    "duckdb": duckdb_available,
-    "duckdb_memory": duckdb_available,
-    "lmdb": lmdb_available,
+# The backends that need an optional library or a server, and the marks
+# that skip them.
+MARKS: dict[str, list[pytest.MarkDecorator]] = {
+    "duckdb": [duckdb_available],
+    "duckdb_memory": [duckdb_available],
+    "lmdb": [lmdb_available],
+    "redis": [redis_available, redis_server_available],
 }
 
 # The backends whose data outlives the store.
-PERSISTENT = ["sqlite", "duckdb", "file", "lmdb"]
+PERSISTENT = ["sqlite", "duckdb", "file", "lmdb", "redis"]
 
 # The backends whose data records the codec that wrote it.
 CODEC_CHECKED = ["sqlite", "duckdb"]
@@ -148,6 +166,7 @@ SURROGATE_KEY = chr(0xD800)
 REJECTED_KEYS: dict[str, list[str]] = {
     "file": ["a" * 251, "A" * 84, "x" * 2000, SURROGATE_KEY],
     "lmdb": ["", "x" * 512, "é" * 256, "x" * 2000, SURROGATE_KEY],
+    "redis": [SURROGATE_KEY],
 }
 
 # The backends that apply the filters in SQL with a JSON codec.
@@ -157,12 +176,17 @@ SQL_BACKENDS = ["sqlite", "sqlite_memory", "duckdb", "duckdb_memory"]
 def backend_params(names: list[str]) -> list[Any]:
     r"""Return one parameter per backend, with the mark of its optional
     library."""
-    return [
-        pytest.param(name, id=name, marks=[MARKS[name]] if name in MARKS else []) for name in names
-    ]
+    return [pytest.param(name, id=name, marks=MARKS.get(name, [])) for name in names]
 
 
 CODECS: dict[str, Callable[[], Codec]] = {"json": JsonCodec, "pickle": PickleCodec}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _redis_cleanup() -> Generator[None, None, None]:
+    r"""Remove the data of the Redis stores once the tests have run."""
+    yield
+    delete_namespaces(REDIS_PREFIX)
 
 
 @pytest.fixture(params=list(CODECS))
@@ -254,9 +278,7 @@ def test_deleting_one_case_of_a_key_keeps_the_other(store: BaseStore) -> None:
 def rejected_key_params() -> list[Any]:
     r"""Return one parameter per key that a backend rejects."""
     return [
-        pytest.param(
-            backend, key, id=f"{backend}-{i}", marks=[MARKS[backend]] if backend in MARKS else []
-        )
+        pytest.param(backend, key, id=f"{backend}-{i}", marks=MARKS.get(backend, []))
         for backend, rejected in REJECTED_KEYS.items()
         for i, key in enumerate(rejected)
     ]
@@ -308,7 +330,7 @@ def test_rejected_key_raises_and_changes_nothing(
 ) -> None:
     with BACKENDS[backend](JsonCodec(), tmp_path) as store:
         store.set("a", {"v": 1})
-        with pytest.raises(ValueError, match=r"FileStore|LmdbStore"):
+        with pytest.raises(ValueError, match=r"FileStore|LmdbStore|RedisStore"):
             operation(store, key)
         assert dict(next(store.iter_batches())) == {"a": {"v": 1}}
 
@@ -320,7 +342,7 @@ async def test_rejected_key_raises_and_changes_nothing_async(
 ) -> None:
     async with BACKENDS[backend](JsonCodec(), tmp_path) as store:
         await store.aset("a", {"v": 1})
-        with pytest.raises(ValueError, match=r"FileStore|LmdbStore"):
+        with pytest.raises(ValueError, match=r"FileStore|LmdbStore|RedisStore"):
             await operation(store, key)
         assert await store.afilter() == [{"v": 1}]
 
@@ -646,11 +668,19 @@ def test_other_threads_can_write_between_two_batches(store: BaseStore) -> None:
 ###########################
 
 
+def uri_options(store: BaseStore) -> dict[str, Any]:
+    r"""Return the arguments of the constructor that the URI of a store
+    does not describe, and that ``from_uri`` needs to read its data."""
+    if isinstance(store, RedisStore):
+        return {"codec": store._codec, "namespace": store.namespace}
+    return {}
+
+
 @pytest.mark.parametrize("backend", backend_params(PERSISTENT))
 def test_uri_reconnects_to_the_data(backend: str, codec: Codec, tmp_path: Path) -> None:
     with BACKENDS[backend](codec, tmp_path) as store:
         store.set("a", {"v": 1})
-    with store.from_uri(store.to_uri()) as restored:
+    with store.from_uri(store.to_uri(), **uri_options(store)) as restored:
         assert restored.get("a") == {"v": 1}
 
 
@@ -658,7 +688,7 @@ def test_uri_reconnects_to_the_data(backend: str, codec: Codec, tmp_path: Path) 
 def test_read_only_store_reads_the_data(backend: str, codec: Codec, tmp_path: Path) -> None:
     with BACKENDS[backend](codec, tmp_path) as store:
         store.set("a", {"v": 1})
-    with store.from_uri(store.to_uri(), read_only=True) as restored:
+    with store.from_uri(store.to_uri(), read_only=True, **uri_options(store)) as restored:
         assert restored.get("a") == {"v": 1}
 
 

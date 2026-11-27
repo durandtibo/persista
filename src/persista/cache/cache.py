@@ -152,6 +152,11 @@ class Cache(MultilineDisplayMixin):
 
         Repeated calls are safe (idempotent), since the underlying
         :meth:`BaseStore.close` is idempotent.
+
+        Raises:
+            RuntimeError: If the store cannot be closed from sync code,
+                such as a :class:`~persista.store.RedisStore` whose async
+                client is open: use :meth:`aclose`.
         """
         self._store.close()
 

@@ -20,6 +20,9 @@ from coola.display import InlineDisplayMixin
 # when an option, such as allow_nan, differs from its default.
 _JSON_ENCODER = json.JSONEncoder(allow_nan=False)
 
+# The first byte of a JSON object in UTF-8.
+_OPEN_BRACE = ord("{")
+
 
 def check_is_dict(value: Any) -> None:
     r"""Check that a value of a store is a ``dict``.
@@ -261,6 +264,11 @@ class JsonCodec(InlineDisplayMixin):
         Raises:
             ValueError: If ``payload`` is not valid JSON.
         """
+        # json.loads is slower with bytes, which it has to inspect to find
+        # their encoding. An object in UTF-8 starts with "{" and a
+        # non-null byte; json.loads handles the other cases.
+        if type(payload) is bytes and len(payload) > 1 and payload[0] == _OPEN_BRACE and payload[1]:
+            payload = payload.decode("utf-8", "surrogatepass")
         return json.loads(payload)
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
