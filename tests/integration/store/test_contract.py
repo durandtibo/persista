@@ -7,9 +7,11 @@ implements the primitives. The behaviour that every backend already
 shares is tested in ``test_consistency.py``.
 
 Some properties are not covered yet, because the filter semantics are
-not final (``True`` and ``1`` still match), and because the listed
-backends have no persistent data, no limit on their keys, and no
-credentials.
+not final (``True`` and ``1`` still match, and the SQL stores with a JSON
+codec compare in the database, so the filter matrix leaves them out),
+and because the listed backends have no limit on their keys and no
+credentials. The writes of several instances of the same data are tested
+in ``test_sql_concurrency.py``.
 """
 
 from __future__ import annotations
@@ -21,7 +23,16 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.store import BaseStore, InMemoryStore, JsonCodec, NullStore, PickleCodec
+from persista.store import (
+    BaseStore,
+    DuckDBStore,
+    InMemoryStore,
+    JsonCodec,
+    NullStore,
+    PickleCodec,
+    SQLiteStore,
+)
+from persista.testing.fixtures import duckdb_available
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterator
@@ -105,7 +116,32 @@ class BlockingStore(PrimitivesOnlyStore):
 BACKENDS: dict[str, Callable[[Codec, Path], BaseStore]] = {
     "in_memory": lambda codec, _path: InMemoryStore(codec=codec),
     "primitives_only": lambda codec, _path: PrimitivesOnlyStore(codec=codec),
+    "sqlite": lambda codec, path: SQLiteStore(path / "data.sqlite", codec=codec),
+    "sqlite_memory": lambda codec, _path: SQLiteStore(codec=codec),
+    "duckdb": lambda codec, path: DuckDBStore(path / "data.duckdb", codec=codec),
+    "duckdb_memory": lambda codec, _path: DuckDBStore(codec=codec),
 }
+
+# The backends that need an optional library, and the mark that skips them.
+MARKS: dict[str, pytest.MarkDecorator] = {
+    "duckdb": duckdb_available,
+    "duckdb_memory": duckdb_available,
+}
+
+# The backends whose data outlives the store.
+PERSISTENT = ["sqlite", "duckdb"]
+
+# The backends that apply the filters in SQL with a JSON codec.
+SQL_BACKENDS = ["sqlite", "sqlite_memory", "duckdb", "duckdb_memory"]
+
+
+def backend_params(names: list[str]) -> list[Any]:
+    r"""Return one parameter per backend, with the mark of its optional
+    library."""
+    return [
+        pytest.param(name, id=name, marks=[MARKS[name]] if name in MARKS else []) for name in names
+    ]
+
 
 CODECS: dict[str, Callable[[], Codec]] = {"json": JsonCodec, "pickle": PickleCodec}
 
@@ -115,7 +151,7 @@ def codec(request: pytest.FixtureRequest) -> Codec:
     return CODECS[request.param]()
 
 
-@pytest.fixture(params=list(BACKENDS))
+@pytest.fixture(params=backend_params(list(BACKENDS)))
 def unopened_store(request: pytest.FixtureRequest, codec: Codec, tmp_path: Path) -> BaseStore:
     return BACKENDS[request.param](codec, tmp_path)
 
@@ -126,7 +162,7 @@ def store(unopened_store: BaseStore) -> Generator[BaseStore, None, None]:
         yield store
 
 
-@pytest.fixture(params=[*BACKENDS, "null"])
+@pytest.fixture(params=backend_params([*BACKENDS, "null"]))
 def any_store(request: pytest.FixtureRequest, tmp_path: Path) -> BaseStore:
     r"""Return a closed store of every backend, including the one that
     keeps no data."""
@@ -207,7 +243,7 @@ def test_value_that_is_not_a_dict_raises(store: BaseStore, value: object) -> Non
         pytest.param({"a": b"a"}, TypeError, r"not JSON serializable", id="bytes"),
     ],
 )
-@pytest.mark.parametrize("backend", list(BACKENDS))
+@pytest.mark.parametrize("backend", backend_params(list(BACKENDS)))
 def test_json_codec_rejects_value_that_would_lose_data(
     backend: str, tmp_path: Path, value: dict, error: type[Exception], match: str
 ) -> None:
@@ -387,6 +423,17 @@ def test_merge_with_concurrent_overwrite_and_delete(store: BaseStore) -> None:
 #     Filter semantics     #
 ############################
 
+
+@pytest.fixture
+def filter_store(request: pytest.FixtureRequest, store: BaseStore, codec: Codec) -> BaseStore:
+    r"""Return the store, except for the backends that do not use the
+    filter of the base class yet."""
+    backend = request.node.callspec.params["unopened_store"]
+    if backend in SQL_BACKENDS and codec.name == "json":
+        pytest.skip("The SQL stores with a JSON codec compare the values in the database")
+    return store
+
+
 DOCUMENTS = {
     "int": {"v": 1},
     "str": {"v": "1"},
@@ -410,21 +457,24 @@ DOCUMENTS = {
     ],
 )
 def test_filter_matches_equal_values(
-    store: BaseStore, expected_value: object, keys: list[str]
+    filter_store: BaseStore, expected_value: object, keys: list[str]
 ) -> None:
+    store = filter_store
     store.set_many({key: {"key": key, **value} for key, value in DOCUMENTS.items()})
     assert sorted(value["key"] for value in store.filter(v=expected_value)) == keys
 
 
 @pytest.mark.parametrize("field", ["x-y", "a b", "a.b", "a'b", 'a"b', "1", "é", "order", "fields"])
-def test_filter_accepts_any_field_name(store: BaseStore, field: str) -> None:
+def test_filter_accepts_any_field_name(filter_store: BaseStore, field: str) -> None:
+    store = filter_store
     store.set_many({"a": {field: 1}, "b": {field: 2}})
     assert store.filter(**{field: 1}) == [{field: 1}]
 
 
-async def test_afilter_matches_filter(store: BaseStore) -> None:
+@pytest.mark.parametrize("fields", [{}, {"v": 1}])
+async def test_afilter_matches_filter(store: BaseStore, fields: dict) -> None:
     store.set_many({str(i): {"v": i % 3} for i in range(600)})
-    assert await store.afilter(v=1) == store.filter(v=1)
+    assert await store.afilter(**fields) == store.filter(**fields)
 
 
 ############################
@@ -476,6 +526,38 @@ def test_other_threads_can_write_between_two_batches(store: BaseStore) -> None:
         for _ in store.iter_batches(batch_size=1):
             executor.submit(store.set, "c", {}).result(timeout=10)
     assert store.contains("c")
+
+
+###########################
+#     Persistent data     #
+###########################
+
+
+@pytest.mark.parametrize("backend", backend_params(PERSISTENT))
+def test_uri_reconnects_to_the_data(backend: str, codec: Codec, tmp_path: Path) -> None:
+    with BACKENDS[backend](codec, tmp_path) as store:
+        store.set("a", {"v": 1})
+    with store.from_uri(store.to_uri()) as restored:
+        assert restored.get("a") == {"v": 1}
+
+
+@pytest.mark.parametrize("backend", backend_params(PERSISTENT))
+def test_read_only_store_reads_the_data(backend: str, codec: Codec, tmp_path: Path) -> None:
+    with BACKENDS[backend](codec, tmp_path) as store:
+        store.set("a", {"v": 1})
+    with store.from_uri(store.to_uri(), read_only=True) as restored:
+        assert restored.get("a") == {"v": 1}
+
+
+@pytest.mark.parametrize("backend", backend_params(PERSISTENT))
+def test_open_with_the_other_codec_raises(backend: str, codec: Codec, tmp_path: Path) -> None:
+    with BACKENDS[backend](codec, tmp_path):
+        pass
+    other = PickleCodec() if codec.name == "json" else JsonCodec()
+    store = BACKENDS[backend](other, tmp_path)
+    with pytest.raises(ValueError, match=r"does not match the codec"):
+        store.open()
+    assert store.closed
 
 
 #################################
@@ -610,6 +692,7 @@ def test_async_use_in_two_event_loops(store: BaseStore) -> None:
 async def test_waiting_calls_do_not_fill_the_default_executor() -> None:
     r"""Test that calls waiting for a busy store leave the default
     executor of the event loop free."""
+
     async with BlockingStore() as store:
         calls = [asyncio.ensure_future(store.aget(str(i))) for i in range(64)]
         try:
@@ -622,6 +705,7 @@ async def test_waiting_calls_do_not_fill_the_default_executor() -> None:
 async def test_event_loop_is_not_blocked_while_the_store_is_busy() -> None:
     r"""Test that the event loop keeps running while a call waits for
     the backend."""
+
     async with BlockingStore() as store:
         call = asyncio.ensure_future(store.aget("a"))
         while not store.reading.is_set():
@@ -636,6 +720,7 @@ async def test_cancelling_an_iteration_closes_the_backend_iterator() -> None:
     r"""Test that cancelling an async iteration while the backend reads
     a batch closes the iterator once the read is done, and leaves the
     store usable."""
+
     async with BlockingStore() as store:
         store.set_many({"a": {}})
         task = asyncio.ensure_future(collect(store.akeys()))
@@ -651,6 +736,7 @@ async def test_cancelling_an_iteration_closes_the_backend_iterator() -> None:
 async def test_cancelled_call_that_is_still_queued_does_not_run() -> None:
     r"""Test that a write cancelled before the store starts it is not
     applied."""
+
     async with BlockingStore() as store:
         read = asyncio.ensure_future(store.aget("a"))
         while not store.reading.is_set():

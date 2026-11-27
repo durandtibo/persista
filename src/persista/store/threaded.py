@@ -62,7 +62,7 @@ class ThreadedAsyncStoreMixin(UnmigratedStore):
     ``asyncio.to_thread`` wrapper around the corresponding sync method.
 
     Mix this into a :class:`~persista.store.BaseStore` subclass whose
-    backend has no native async driver (file, LMDB, DuckDB):
+    backend has no native async driver (file, LMDB):
     the subclass only needs to implement the sync side, and this mixin
     supplies a fully-conformant async side for free by running each sync
     call in a worker thread. ``akeys``/``aiter_batches`` additionally

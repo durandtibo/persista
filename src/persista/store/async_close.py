@@ -1,13 +1,13 @@
 r"""Provide a shared helper for closing a lazily-created async connection
 from a store's synchronous ``close()`` method.
 
-Several backends (SQLite, Redis, Postgres) eagerly open a sync
-connection but only create their async connection lazily, on first
-``a``-prefixed call. Closing such a store synchronously therefore has to
-also tear down that async connection, which is only safe to do with
-``asyncio.run`` when no event loop is currently running; this module
-centralizes that check-and-close logic so it isn't re-implemented (and
-potentially left to drift) in each backend.
+Some backends (Redis, Postgres) eagerly open a sync connection but only
+create their async connection lazily, on first ``a``-prefixed call.
+Closing such a store synchronously therefore has to also tear down that
+async connection, which is only safe to do with ``asyncio.run`` when no
+event loop is currently running; this module centralizes that check-and-
+close logic so it isn't re-implemented (and potentially left to drift)
+in each backend.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ class SupportsAsyncClose(Protocol):
     """Structural type for an async connection exposing an async close
     method.
 
-    Matches objects like ``redis.asyncio.Redis`` or ``aiosqlite.Connection``
-    -- anything with a ``close``/``aclose``-style method that returns an
+    Matches objects like ``redis.asyncio.Redis`` or
+    ``psycopg.AsyncConnection`` -- anything with a ``close``/``aclose``-style method that returns an
     awaitable -- so :func:`close_async_connection_from_sync` can accept
     them without depending on any specific driver's connection class.
     """
@@ -58,7 +58,7 @@ def close_async_connection_from_sync(
         aconn: The async connection to close, or ``None`` if none has
             been created yet, in which case this is a no-op.
         resource_label: A short description of the connection/backend
-            (e.g. ``"SQLite"``, ``"Redis"``, ``"Postgres"``), used in
+            (e.g. ``"Redis"``, ``"Postgres"``), used in
             log messages and the raised error.
         close_method: The name of the async close method to call on
             ``aconn`` (e.g. ``"close"``, ``"aclose"``).

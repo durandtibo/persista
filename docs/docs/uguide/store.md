@@ -4,7 +4,7 @@
 store interface backed by several storage engines. This page explains the `BaseStore` interface
 (which supports both synchronous and asynchronous usage) and how to use the concrete store
 implementations: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`,
-`PostgresStore`, and their "pickle" variants.
+`PostgresStore`, and how to store Python objects with `pickle`.
 
 **Prerequisites:** You'll need to know a bit of Python.
 For a refresher, see the [Python tutorial](https://docs.python.org/tutorial/).
@@ -109,10 +109,11 @@ TypeError: dict keys must be str, not int: 1
 :warning: Decoding a `pickle` payload can execute arbitrary code. Only use `PickleCodec` with data
 from trusted sources.
 
-Only `InMemoryStore` takes a codec for now (`NullStore` always uses `JsonCodec`, to check the
-values it discards). The persistent stores encode the values themselves, as described in their
-sections: their `Pickle` variants use `pickle`, and the others use JSON, without all the checks
-above. For example, they turn an `int` key of a value into a `str` instead of rejecting it.
+`InMemoryStore`, `SQLiteStore` and `DuckDBStore` take a codec (`NullStore` always uses
+`JsonCodec`, to check the values it discards). The other stores encode the values themselves, as
+described in their sections: their `Pickle` variants use `pickle`, and the others use JSON, without
+all the checks above. For example, they turn an `int` key of a value into a `str` instead of
+rejecting it.
 
 ### Setting Multiple Values
 
@@ -186,9 +187,9 @@ key already exists:
 
 ### Errors
 
-`InMemoryStore`, `NullStore` and the [custom stores](#writing-a-custom-store) check the state of
-the store and the arguments before doing anything, also when there is nothing to do (for example
-`get_many([])`):
+`InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `NullStore` and the
+[custom stores](#writing-a-custom-store) check the state of the store and the arguments before doing
+anything, also when there is nothing to do (for example `get_many([])`):
 
 | Situation                                       | Error          |
 | ----------------------------------------------- | -------------- |
@@ -216,8 +217,9 @@ RuntimeError: InMemoryStore is not open; call open()/aopen() or use it as a cont
 
 ### SQLite
 
-`SQLiteStore` persists values in a SQLite database, storing each value as a single JSON column.
-It works both with a file path and with `":memory:"`:
+`SQLiteStore` persists values in a SQLite database, in the table `store` with a `key` column and a
+`value` column, which holds JSON by default. It works both with a file path and with `":memory:"`
+(a private database that is new and empty each time the store is opened):
 
 ```pycon
 >>> from persista.store import SQLiteStore
@@ -242,7 +244,8 @@ It works both with a file path and with `":memory:"`:
 
 ```
 
-To persist to disk, pass a file path instead of `":memory:"`:
+To persist to disk, pass a file path instead of `":memory:"`. The file and its parent directories
+are created when the store is opened:
 
 ```python
 from pathlib import Path
@@ -253,10 +256,14 @@ with SQLiteStore(Path("tmp/data.sqlite")) as store:
     ...
 ```
 
+The other keyword arguments, such as `timeout`, are passed to `sqlite3.connect`. To use a
+[SQLite URI](https://www.sqlite.org/uri.html), pass it with `uri=True`. `isolation_level` and
+`autocommit` are not accepted, because the store manages its transactions.
+
 ### DuckDB
 
 `DuckDBStore` works the same way as `SQLiteStore` but is backed by [DuckDB](https://duckdb.org/)
-(requires the `duckdb` extra):
+(requires the `duckdb` extra). The other keyword arguments are passed to `duckdb.connect`:
 
 ```pycon
 >>> from persista.store import DuckDBStore
@@ -281,10 +288,52 @@ with SQLiteStore(Path("tmp/data.sqlite")) as store:
 
 ```
 
-:warning: Databases and tables written by the typed stores of earlier versions (which
-`SQLiteRecordStore` and `DuckDBRecordStore` also used) have another table layout. The stores
-cannot read them, although opening them does not raise. To keep the data, read it with the earlier
-version and write it to a new database or table.
+### Pickle Values and Read-Only Stores
+
+Pass `codec=PickleCodec()` to store Python types in either SQL store. The `value` column then holds
+bytes, so the database cannot read inside the values: `filter` reads and decodes every value.
+
+`read_only=True` opens an existing database without writing to it, and never creates a file or a
+directory. It raises if the database has no `store` table, and it cannot be used with an in-memory
+database.
+
+```pycon
+>>> import tempfile
+>>> from persista.store import PickleCodec, SQLiteStore
+>>> with tempfile.TemporaryDirectory() as tmpdir:
+...     with SQLiteStore(f"{tmpdir}/data.sqlite", codec=PickleCodec()) as store:
+...         store.set("1", {"tags": {"python"}})
+...     with SQLiteStore(f"{tmpdir}/data.sqlite", codec=PickleCodec(), read_only=True) as store:
+...         print(store.get("1"))
+{'tags': {'python'}}
+
+```
+
+:warning: Decoding a `pickle` payload can execute arbitrary code. Only use `PickleCodec` with a
+trusted database.
+
+A database is tied to its codec: opening a store raises `ValueError` if the existing `store` table
+does not have the columns of the codec (`value` is `JSON` for `JsonCodec` and `BLOB` for
+`PickleCodec`).
+
+:warning: The typed stores of earlier versions (which `SQLiteRecordStore` and `DuckDBRecordStore`
+also used) wrote another table layout, so opening such a table raises `ValueError`. To keep the data,
+read it with the earlier version and write it to a new database.
+
+### Concurrent Writes
+
+Each SQL store has one connection, used by both the sync and the async methods. A write with
+`on_conflict` set to `"raise"`, `"skip"` or `"merge"` is atomic against the other writers of the
+database:
+
+- **SQLite**: the read and the write run in one `BEGIN IMMEDIATE` transaction, which protects them
+  from other threads, stores and processes. A writer waits for the others up to `timeout` seconds (5
+  by default), then raises `sqlite3.OperationalError`. The stores of one process that share a cache
+  (`cache=shared`) wait for each other without time limit.
+- **DuckDB**: the read and the write run in one transaction, and the stores of one process that use
+  the same database file write one at a time. DuckDB allows only one process to write to a database.
+  A write made without a store, for example with `store.connection`, while a store writes the same
+  rows can make one of them raise `duckdb.TransactionException`.
 
 ### PostgreSQL
 
@@ -343,7 +392,8 @@ SEARCH store USING INDEX store_author (<expr>=?)
 - The index is saved in the database, so it is enough to create it once, with a store that can
   write. SQLite keeps it up to date on every write, which makes writes a little slower.
 - One index covers one field. A `filter` on several fields can use the index of one of them.
-- `PickleSQLiteStore` cannot be indexed this way, because SQLite cannot read inside its values.
+- A store with a `PickleCodec` cannot be indexed this way, because SQLite cannot read inside its
+  values.
 
 ### PostgreSQL
 
@@ -445,13 +495,12 @@ Use `PickleRedisStore` to store arbitrary Python objects using `pickle` instead 
 Every store also exposes `a`-prefixed asynchronous methods (`aget`, `aset`, `acount`, ...) that
 are coroutines (or async iterators), so they must be `await`ed and used from an `async` function.
 The same store instance can be used from both sync and async code -- there is no separate async
-class. Async methods are available on every store, including `InMemoryStore`, `SQLiteStore`
-(async methods use the `aiosqlite` extra when installed, falling back to a thread otherwise),
-`RedisStore`, and `PostgresStore` (requires the `psycopg` extra); `DuckDBStore` and `LmdbStore`
-also expose async methods, backed by a thread pool. The async methods of `InMemoryStore` run in a
-worker thread of the store, one call at a time, so calls that wait for the store do not fill the
-default executor of your application. Cancelling an async call that already runs in a thread does not
-stop it.
+class. Async methods are available on every store, including `RedisStore` and `PostgresStore`,
+which use the async driver of their library. The async methods of `InMemoryStore`, `SQLiteStore` and
+`DuckDBStore` run in a worker thread of the store, one call at a time, so calls that wait for the
+store do not fill the default executor of your application; `LmdbStore` and the file stores run them
+in the default executor. Cancelling an async call that already runs in a thread does not stop it.
+Iterating asynchronously takes one thread hop per batch, so a larger `batch_size` is faster.
 
 ```pycon
 >>> import asyncio
@@ -572,12 +621,13 @@ in mini-batches, which is useful when the source data does not fit comfortably i
 
 ```
 
-With `InMemoryStore`, a key that is present during a whole iteration is yielded exactly once, even
-if you write or delete keys during the iteration (for example, you can delete each batch after
-processing it), and a batch can be smaller than `batch_size`. A custom store must give the same
-guarantee in `_iter_batches`, and closing it, or an `InMemoryStore`, during an iteration raises
-`RuntimeError`. The SQLite and DuckDB stores do not give this guarantee yet: deleting keys while
-iterating over them can skip other keys.
+With `InMemoryStore`, `SQLiteStore` and `DuckDBStore`, a key that is present during a whole
+iteration is yielded exactly once, even if you write or delete keys during the iteration (for
+example, you can delete each batch after processing it). The SQL stores read the keys in order and
+start each batch after the last key of the previous one (keyset pagination). A batch can be smaller
+than `batch_size` with `InMemoryStore`. A custom store must give the same guarantee in
+`_iter_batches`. Closing one of these stores, or a custom store, during an iteration raises
+`RuntimeError`.
 
 ## Writing a Custom Store
 
@@ -677,11 +727,27 @@ class from that URI:
 
 ```
 
-`read_only` is honored by the SQLite, DuckDB, and LMDB stores (and their `Pickle` variants);
-it's accepted but ignored everywhere else. `to_uri`/`from_uri` do not preserve constructor
-options like `table` (Postgres stores) -- `from_uri` always reconstructs with the defaults.
-`InMemoryStore` and `NullStore` always round-trip to a fresh, empty store since they carry no
-reconnection information.
+`read_only` is honored by the SQLite, DuckDB, and LMDB stores (and `PickleLmdbStore`); it's
+accepted but ignored everywhere else. `InMemoryStore`, `NullStore` and the `":memory:"` databases of
+the SQL stores always round-trip to a fresh, empty store (with `read_only=True`, the in-memory SQL
+databases raise `ValueError`).
+
+A URI says where the data is, not how the store was configured. The scheme carries the codec of the
+SQL stores (`sqlite`, `sqlite+pickle`, `duckdb`, `duckdb+pickle`), as it does for the file and LMDB
+stores. Other constructor options, such as the `timeout` of `SQLiteStore` or the `table` of
+`PostgresStore`, are not part of the URI. `SQLiteStore.from_uri` and `DuckDBStore.from_uri` accept
+the other keyword arguments of the constructor, to pass them again; the other stores are
+reconstructed with the default options.
+
+```pycon
+>>> from persista.store import PickleCodec, SQLiteStore
+>>> uri = SQLiteStore(":memory:", codec=PickleCodec()).to_uri()
+>>> uri
+'sqlite+pickle:%3Amemory%3A'
+>>> SQLiteStore.from_uri(uri, timeout=10).closed
+True
+
+```
 
 If you don't know the concrete store class ahead of time, `store_from_uri` dispatches on the
 URI's scheme to the right class automatically:
@@ -749,18 +815,19 @@ arbitrary code. Only use it with a configuration from a trusted source.
 
 ## Choosing a Store
 
-| Store           | Backend                    | Persisted | Pickle values   | Async             |
-| --------------- | -------------------------- | --------- | --------------- | ----------------- |
-| `InMemoryStore` | Python `dict`              | No        | N/A             | Yes               |
-| `SQLiteStore`   | SQLite                     | Yes       | Yes (`Pickle…`) | Yes               |
-| `DuckDBStore`   | DuckDB                     | Yes       | No              | Yes (thread pool) |
-| `LmdbStore`     | LMDB                       | Yes       | Yes (`Pickle…`) | Yes (thread pool) |
-| `RedisStore`    | Redis                      | Yes       | Yes (`Pickle…`) | Yes               |
-| `PostgresStore` | PostgreSQL                 | Yes       | No              | Yes               |
-| `NullStore`     | None (discards everything) | No        | N/A             | Yes               |
+| Store           | Backend                    | Persisted | Pickle values   | Async               |
+| --------------- | -------------------------- | --------- | --------------- | ------------------- |
+| `InMemoryStore` | Python `dict`              | No        | N/A             | Yes                 |
+| `SQLiteStore`   | SQLite                     | Yes       | Yes (codec)     | Yes (worker thread) |
+| `DuckDBStore`   | DuckDB                     | Yes       | Yes (codec)     | Yes (worker thread) |
+| `LmdbStore`     | LMDB                       | Yes       | Yes (`Pickle…`) | Yes (thread pool)   |
+| `RedisStore`    | Redis                      | Yes       | Yes (`Pickle…`) | Yes                 |
+| `PostgresStore` | PostgreSQL                 | Yes       | No              | Yes                 |
+| `NullStore`     | None (discards everything) | No        | N/A             | Yes                 |
 
 Use `InMemoryStore` for tests and prototyping, `SQLiteStore`/`DuckDBStore` for local
-single-process persistence without a server, and `RedisStore`/`PostgresStore` when data needs to
+persistence without a server (SQLite can be shared by several processes, DuckDB allows one writing
+process), and `RedisStore`/`PostgresStore` when data needs to
 be shared across processes or machines. `NullStore` never actually stores anything -- every
 `get`/`aget` is a miss -- which is useful for plugging into `Cache` to disable caching entirely
 without changing any calling code. It uses `JsonCodec`, so the cached values must be representable

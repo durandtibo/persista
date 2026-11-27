@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from pytest_benchmark.fixture import BenchmarkFixture
 
 OPTIONAL_LIBRARIES = (
-    "aiosqlite",
     "duckdb",
     "faker",
     "httpx",

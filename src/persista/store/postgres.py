@@ -51,10 +51,8 @@ class BasePostgresStore(UnmigratedStore, MultilineDisplayMixin):
 
     Holds both a ``psycopg.Connection`` (opened eagerly in
     ``__init__``) and a ``psycopg.AsyncConnection`` (opened lazily,
-    on first async use, guarded by an ``asyncio.Lock``). Unlike
-    :class:`~persista.store.sqlite.BaseSQLiteStore` (where
-    ``aiosqlite`` is a separate optional package layered on stdlib
-    ``sqlite3``), ``psycopg`` bundles both ``psycopg.Connection`` and
+    on first async use, guarded by an ``asyncio.Lock``).
+    ``psycopg`` bundles both ``psycopg.Connection`` and
     ``psycopg.AsyncConnection`` in the same package, which is already
     a hard requirement for the sync side -- so every async method here
     always uses :class:`psycopg.AsyncConnection` directly, with no
@@ -67,8 +65,7 @@ class BasePostgresStore(UnmigratedStore, MultilineDisplayMixin):
     the full row and hand it to :meth:`_row_to_value` to turn it back
     into a value dict, which is what lets subclasses differ in how a
     value is laid out in the table without duplicating any of the
-    surrounding query logic. This mirrors
-    :class:`~persista.store.sqlite.BaseSQLiteStore`.
+    surrounding query logic.
 
     Subclasses only need to implement :meth:`_create_table_sql`,
     :meth:`_row_to_value`, :meth:`_build_filter_condition`,

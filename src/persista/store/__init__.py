@@ -3,12 +3,10 @@ r"""Contain stores."""
 from __future__ import annotations
 
 __all__ = [
-    "BaseDuckDBStore",
     "BaseFileStore",
     "BaseLmdbStore",
     "BasePostgresStore",
     "BaseRedisStore",
-    "BaseSQLiteStore",
     "BaseStore",
     "Codec",
     "DuckDBStore",
@@ -22,7 +20,6 @@ __all__ = [
     "PickleFileStore",
     "PickleLmdbStore",
     "PickleRedisStore",
-    "PickleSQLiteStore",
     "PostgresStore",
     "RedisStore",
     "SQLiteStore",
@@ -37,7 +34,7 @@ __all__ = [
 
 from persista.store.base import BaseStore
 from persista.store.codec import Codec, JsonCodec, PickleCodec
-from persista.store.duckdb import BaseDuckDBStore, DuckDBStore
+from persista.store.duckdb import DuckDBStore
 from persista.store.file import BaseFileStore, JsonFileStore, PickleFileStore
 from persista.store.in_memory import InMemoryStore
 from persista.store.keys import split_present_missing
@@ -46,7 +43,7 @@ from persista.store.null import NullStore
 from persista.store.postgres import BasePostgresStore, PostgresStore
 from persista.store.redis import BaseRedisStore, PickleRedisStore, RedisStore
 from persista.store.registry import register_scheme, store_from_uri
-from persista.store.sqlite import BaseSQLiteStore, PickleSQLiteStore, SQLiteStore
+from persista.store.sqlite import SQLiteStore
 from persista.store.types import OnConflict
 from persista.store.validation import (
     normalize_on_conflict,

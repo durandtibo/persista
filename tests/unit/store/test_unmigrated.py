@@ -3,12 +3,10 @@ from __future__ import annotations
 import pytest
 
 from persista.store import (
-    BaseDuckDBStore,
     BaseFileStore,
     BaseLmdbStore,
     BasePostgresStore,
     BaseRedisStore,
-    BaseSQLiteStore,
     BaseStore,
 )
 from persista.store.unmigrated import UnmigratedStore
@@ -60,14 +58,7 @@ def test_unmigrated_store_has_a_placeholder_for_each_abstract_primitive() -> Non
 
 @pytest.mark.parametrize(
     "cls",
-    [
-        BaseDuckDBStore,
-        BaseFileStore,
-        BaseLmdbStore,
-        BasePostgresStore,
-        BaseRedisStore,
-        BaseSQLiteStore,
-    ],
+    [BaseFileStore, BaseLmdbStore, BasePostgresStore, BaseRedisStore],
 )
 def test_unmigrated_store_subclasses_have_every_primitive(cls: type[BaseStore]) -> None:
     assert not cls.__abstractmethods__ & set(PRIMITIVES)

@@ -104,9 +104,10 @@ synchronous and `a`-prefixed asynchronous methods on every store:
 - Uniform API across backends: `get`/`aget`, `get_many`/`aget_many`, `set`/`aset`,
   `set_many`/`aset_many`, `delete`/`adelete`, `filter`/`afilter`, iteration
 - Backends: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`
-- Pickle-backed variants (`PickleSQLiteStore`, `PickleLmdbStore`, ...) for non-dict values
-- Codecs for `InMemoryStore`: JSON by default, which rejects the values that would lose data, or
-  `pickle` (`InMemoryStore(codec=PickleCodec())`) to keep Python types
+- Codecs for `InMemoryStore`, `SQLiteStore` and `DuckDBStore`: JSON by default, which rejects the
+  values that would lose data, or `pickle` (`SQLiteStore(path, codec=PickleCodec())`) to keep Python
+  types
+- Pickle-backed variants of the other stores (`PickleLmdbStore`, `PickleRedisStore`, ...)
 - Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`, `"merge"`)
 
 ### ⏱️ **TTL Caching**
@@ -195,18 +196,17 @@ pip install persista[redis,httpx]  # with Redis and httpx support
 
 **Optional dependencies**, enabled per-backend:
 
-| Extra       | Enables                         |
-| ----------- | ------------------------------- |
-| `aiosqlite` | Async SQLite store              |
-| `duckdb`    | DuckDB store                    |
-| `faker`     | Test data generation helpers    |
-| `httpx`     | Sync/async HTTP fetch utilities |
-| `lmdb`      | LMDB store                      |
-| `psycopg`   | PostgreSQL store                |
-| `redis`     | Redis store                     |
-| `requests`  | Sync HTTP fetch utilities       |
-| `rich`      | Rich-formatted output           |
-| `urllib3`   | urllib3-based HTTP utilities    |
+| Extra      | Enables                         |
+| ---------- | ------------------------------- |
+| `duckdb`   | DuckDB store                    |
+| `faker`    | Test data generation helpers    |
+| `httpx`    | Sync/async HTTP fetch utilities |
+| `lmdb`     | LMDB store                      |
+| `psycopg`  | PostgreSQL store                |
+| `redis`    | Redis store                     |
+| `requests` | Sync HTTP fetch utilities       |
+| `rich`     | Rich-formatted output           |
+| `urllib3`  | urllib3-based HTTP utilities    |
 
 For detailed installation instructions, see the [documentation](https://durandtibo.github.io/persista/).
 

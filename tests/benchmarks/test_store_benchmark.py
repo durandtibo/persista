@@ -96,6 +96,21 @@ def large_store(
         yield store
 
 
+async def aiter_all(store: BaseStore) -> int:
+    r"""Iterate over the whole store with ``aiter_batches``.
+
+    Args:
+        store: The store to read.
+
+    Returns:
+        The number of pairs.
+    """
+    count = 0
+    async for batch in store.aiter_batches():
+        count += len(batch)
+    return count
+
+
 async def aget_all(store: BaseStore, keys: list[str]) -> list[dict[str, Any] | None]:
     r"""Read the keys one after the other with ``aget``.
 
@@ -123,6 +138,15 @@ def test_aget_benchmark(benchmark: BenchmarkFixture, store: BaseStore) -> None:
         assert len(benchmark(lambda: runner.run(aget_all(store, keys)))) == 100
 
 
+def test_iter_batches_benchmark(benchmark: BenchmarkFixture, store: BaseStore) -> None:
+    assert benchmark(lambda: sum(len(batch) for batch in store.iter_batches())) == 100
+
+
+def test_aiter_batches_benchmark(benchmark: BenchmarkFixture, store: BaseStore) -> None:
+    with asyncio.Runner() as runner:
+        assert benchmark(lambda: runner.run(aiter_all(store))) == 100
+
+
 def test_get_many_benchmark(benchmark: BenchmarkFixture, store: BaseStore) -> None:
     assert len(benchmark(store.get_many, list(ITEMS))) == 100
 
@@ -134,6 +158,13 @@ def test_filter_benchmark(benchmark: BenchmarkFixture, store: BaseStore) -> None
 @pytest.mark.timeout(600)
 def test_filter_large_benchmark(benchmark: BenchmarkFixture, large_store: BaseStore) -> None:
     assert len(benchmark(lambda: list(large_store.filter(author="author-42")))) == 100
+
+
+@pytest.mark.timeout(600)
+def test_iter_batches_large_benchmark(benchmark: BenchmarkFixture, large_store: BaseStore) -> None:
+    assert benchmark(lambda: sum(len(batch) for batch in large_store.iter_batches(1_000))) == (
+        NUM_ROWS
+    )
 
 
 @pytest.mark.parametrize("name", ["in_memory", "sqlite"])

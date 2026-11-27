@@ -82,10 +82,9 @@ class BaseStore(ABC):
     a list, and a value that would lose data raises.
 
     .. note::
-        ``SQLiteStore``, ``DuckDBStore``, ``LmdbStore``, ``RedisStore``,
-        ``PostgresStore``, the file stores and their pickle variants do
-        not use the primitives below yet: they implement the public
-        methods themselves (see
+        ``LmdbStore``, ``RedisStore``, ``PostgresStore``, the file stores
+        and their pickle variants do not use the primitives below yet:
+        they implement the public methods themselves (see
         :class:`~persista.store.unmigrated.UnmigratedStore`), and they
         do not take a codec.
 
@@ -1193,9 +1192,20 @@ class BaseStore(ABC):
             A missing field is equal to ``None``.
         """
         decode = self._codec.decode
+        matches = self._matches
         values = (decode(payload) for payload in batch.values())
-        return [
-            value
-            for value in values
-            if all(value.get(name) == expected for name, expected in fields.items())
-        ]
+        return [value for value in values if matches(value, fields)]
+
+    @staticmethod
+    def _matches(value: Mapping[str, Any], fields: Mapping[str, Any]) -> bool:
+        r"""Indicate whether a value matches a filter.
+
+        Args:
+            value: A decoded value.
+            fields: The value that each field must be equal to.
+
+        Returns:
+            ``True`` if every field of ``value`` is equal to the expected
+            one. A missing field is equal to ``None``.
+        """
+        return all(value.get(name) == expected for name, expected in fields.items())

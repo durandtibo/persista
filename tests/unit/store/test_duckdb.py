@@ -1,50 +1,39 @@
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Generator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.store import DuckDBStore
+from persista.store import DuckDBStore, PickleCodec
+from persista.store.duckdb import _get_database_lock
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
     from pathlib import Path
-
-    from persista.store import BaseDuckDBStore
 
 duckdb = pytest.importorskip("duckdb")
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
-
-@pytest.fixture(scope="module")
-def store_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    return tmp_path_factory.mktemp("store")
-
-
-@pytest.fixture(scope="module")
-def store_cls() -> type[BaseDuckDBStore]:
-    return DuckDBStore
+@pytest.fixture
+def store() -> Generator[DuckDBStore, None, None]:
+    with DuckDBStore() as store:
+        yield store
 
 
 @pytest.fixture
-def store(store_cls: type[BaseDuckDBStore]) -> Generator[BaseDuckDBStore, None, None]:
-    with store_cls(":memory:") as store:
-        yield store
+def path(tmp_path: Path) -> Path:
+    r"""Return the path of a database that contains one value."""
+    path = tmp_path / "data.duckdb"
+    with DuckDBStore(path) as store:
+        store.set("1", {"a": 1})
+    return path
 
 
-@pytest.fixture(scope="module")
-def store_read_only(
-    store_path: Path, items: dict[str, dict[str, Any]], store_cls: type[BaseDuckDBStore]
-) -> Generator[BaseDuckDBStore, None, None]:
-    path = store_path / f"data_{store_cls.__name__}.duckdb"
-    with store_cls(path) as store:
-        store.set_many(items)
-    with store_cls(path, read_only=True) as store:
-        yield store
+def create_table(path: Path, columns: str) -> None:
+    r"""Create the ``store`` table of a database with some columns."""
+    with duckdb.connect(path) as connection:
+        connection.execute(f"CREATE TABLE store ({columns})")
 
 
 #################################
@@ -55,894 +44,434 @@ def store_read_only(
 # --- constructor ---
 
 
-def test_init_defaults_to_in_memory(store_cls: type[BaseDuckDBStore]) -> None:
-    with store_cls() as store:
-        assert store.count() == 0
+def test_init_defaults_to_in_memory() -> None:
+    assert DuckDBStore()._database == ":memory:"
 
 
-def test_init_accepts_duckdb_connect_kwargs(store_cls: type[BaseDuckDBStore]) -> None:
-    with store_cls(":memory:", read_only=False) as store:
-        assert store.count() == 0
+def test_init_options_are_keyword_only() -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        DuckDBStore(":memory:", PickleCodec())
 
 
-def test_init_creates_file_backed_store(store_path: Path, store_cls: type[BaseDuckDBStore]) -> None:
-    path = store_path / f"init_{store_cls.__name__}.duckdb"
-    with store_cls(path) as store:
-        store.set("1", {"text": "hello"})
-        assert store.count() == 1
-        assert path.exists()
+def test_init_accepts_duckdb_connect_kwargs() -> None:
+    with DuckDBStore(config={"threads": 1}) as store:
+        assert store.connection.execute("SELECT current_setting('threads')").fetchone() == (1,)
 
 
-def test_init_read_only_can_read_existing_data(store_read_only: BaseDuckDBStore) -> None:
-    assert store_read_only.count() == 4
+def test_init_does_not_create_directories(tmp_path: Path) -> None:
+    DuckDBStore(tmp_path / "nested" / "data.duckdb")
+    assert not (tmp_path / "nested").exists()
 
 
-def test_init_read_only_rejects_writes(store_read_only: BaseDuckDBStore) -> None:
-    with pytest.raises(duckdb.Error, match=r"read-only"):
-        store_read_only.set("99", {"text": "x"})
+def test_init_makes_path_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert DuckDBStore("data.duckdb")._database == (tmp_path / "data.duckdb").resolve()
 
 
-# --- repr/str ---
+def test_init_read_only_in_memory_database() -> None:
+    with pytest.raises(ValueError, match=r"read_only needs a database file"):
+        DuckDBStore(read_only=True)
 
 
-def test_repr(store: BaseDuckDBStore) -> None:
-    assert repr(store).startswith(f"{type(store).__name__}(")
+# --- open / close ---
 
 
-def test_str(store: BaseDuckDBStore) -> None:
-    assert str(store).startswith(f"{type(store).__name__}(")
+def test__open() -> None:
+    store = DuckDBStore()
+    store._open()
+    assert store._table_columns() == [("key", "VARCHAR", True), ("value", "JSON", False)]
+    store._close()
 
 
-def test_repr_after_close_does_not_raise(store: BaseDuckDBStore) -> None:
+def test_open_creates_missing_parent_directories(tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "dirs" / "data.duckdb"
+    with DuckDBStore(path):
+        assert path.is_file()
+
+
+def test_reopen_in_memory_store_is_empty(store: DuckDBStore) -> None:
+    store.set("1", {})
     store.close()
-    assert repr(store).startswith(f"{type(store).__name__}(")
-
-
-# --- set ---
-
-
-def test_set_increases_count(store: BaseDuckDBStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.count() == 1
-
-
-def test_set_stores_value(store: BaseDuckDBStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.get("1") == {"text": "hello"}
-
-
-def test_set_default_overwrites_existing(store: BaseDuckDBStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"})
-    assert store.count() == 1
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_on_conflict_raise(store: BaseDuckDBStore) -> None:
-    store.set("1", {"text": "original"})
-    with pytest.raises(KeyError, match=r"1"):
-        store.set("1", {"text": "updated"}, on_conflict="raise")
-    assert store.get("1") == {"text": "original"}
-
-
-def test_set_on_conflict_skip(store: BaseDuckDBStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"}, on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-
-
-def test_set_on_conflict_overwrite(store: BaseDuckDBStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"}, on_conflict="overwrite")
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_on_conflict_merge(store: BaseDuckDBStore) -> None:
-    store.set("1", {"text": "original", "author": "Alice"})
-    store.set("1", {"text": "updated"}, on_conflict="merge")
-    assert store.get("1") == {"text": "updated", "author": "Alice"}
-
-
-def test_set_on_conflict_new_key_is_unaffected(store: BaseDuckDBStore) -> None:
-    store.set("1", {"text": "hello"}, on_conflict="raise")
-    assert store.get("1") == {"text": "hello"}
-
-
-def test_set_on_conflict_invalid_raises(store: BaseDuckDBStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        store.set("1", {"text": "hello"}, on_conflict="bogus")
-
-
-# --- set_many ---
-
-
-def test_set_many_increases_count(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.count() == len(items)
-
-
-def test_set_many_empty_is_no_op(store: BaseDuckDBStore) -> None:
-    store.set_many({})
+    store.open()
     assert store.count() == 0
 
 
-def test_set_many_default_overwrites_existing(store: BaseDuckDBStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}})
-    assert store.count() == 1
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_many_on_conflict_raise(store: BaseDuckDBStore) -> None:
-    store.set_many({"1": {"text": "original"}, "2": {"text": "other"}})
-    with pytest.raises(KeyError, match=r"1"):
-        store.set_many({"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise")
-    # nothing from the conflicting batch should have been written
-    assert store.get("1") == {"text": "original"}
-    assert store.get("3") is None
-
-
-def test_set_many_on_conflict_skip(store: BaseDuckDBStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "new"}
-
-
-def test_set_many_on_conflict_overwrite(store: BaseDuckDBStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="overwrite")
-    assert store.get("1") == {"text": "updated"}
-    assert store.get("2") == {"text": "new"}
-
-
-def test_set_many_on_conflict_merge(store: BaseDuckDBStore) -> None:
-    store.set_many({"1": {"text": "original", "author": "Alice"}})
-    store.set_many({"1": {"text": "updated"}}, on_conflict="merge")
-    assert store.get("1") == {"text": "updated", "author": "Alice"}
-
-
-def test_set_many_on_conflict_invalid_raises(store: BaseDuckDBStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")
-
-
-# --- set_batches ---
-
-
-def test_set_batches_empty_is_no_op(store: BaseDuckDBStore) -> None:
-    store.set_batches([])
-    assert store.count() == 0
-
-
-def test_set_batches_writes_all_pairs(store: BaseDuckDBStore) -> None:
-    store.set_batches([("1", {"v": 1}), ("2", {"v": 2}), ("3", {"v": 3})], batch_size=2)
-    assert store.count() == 3
-    assert store.get("2") == {"v": 2}
-
-
-def test_set_batches_consumes_a_generator(store: BaseDuckDBStore) -> None:
-    def gen() -> Iterator[tuple[str, dict[str, int]]]:
-        for i in range(5):
-            yield str(i), {"v": i}
-
-    store.set_batches(gen(), batch_size=2)
-    assert store.count() == 5
-
-
-def test_set_batches_on_conflict_skip(store: BaseDuckDBStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set_batches([("1", {"text": "updated"}), ("2", {"text": "new"})], on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "new"}
-
-
-# --- count ---
-
-
-def test_count_empty_store(store: BaseDuckDBStore) -> None:
-    assert store.count() == 0
-
-
-def test_count_after_set_many(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.count() == len(items)
-
-
-# --- get ---
-
-
-def test_get_existing_value(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.get("1") == items["1"]
-
-
-def test_get_missing_key_returns_none(store: BaseDuckDBStore) -> None:
-    assert store.get("nonexistent") is None
-
-
-# --- get_many ---
-
-
-def test_get_many_returns_correct_length(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert len(store.get_many(["1", "2", "99"])) == 3
-
-
-def test_get_many_returns_none_for_missing(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.get_many(["1", "99", "2"])
-    assert result[1] is None
-
-
-def test_get_many_preserves_order(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.get_many(["3", "1", "2"])
-    assert result == [items["3"], items["1"], items["2"]]
-
-
-def test_get_many_empty_list_returns_empty_list(store: BaseDuckDBStore) -> None:
-    assert store.get_many([]) == []
-
-
-# --- filter ---
-
-
-def test_filter_no_args_returns_all(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert len(store.filter()) == len(items)
-
-
-def test_filter_single_field(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
-    assert len(result) == 2
-
-
-def test_filter_multiple_fields(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(author="Alice", category="Programming")
-    assert len(result) == 2
-
-
-def test_filter_no_match_returns_empty(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter(author="Charlie") == []
-
-
-def test_filter_rejects_malicious_field_name(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    """A field name is interpolated into the SQL (only the value is
-    bound), so anything but a plain identifier must be rejected to
-    prevent SQL injection."""
-    store.set_many(items)
-    with pytest.raises(ValueError, match="Invalid filter field name"):
-        store.filter(**{"x') OR 1=1 OR ('": "nonmatching"})
-
-
-def test_filter_preserves_full_value(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.filter(author="Bob", category="History")
-    expected = [v for v in items.values() if v["author"] == "Bob"]
-    assert sorted(result, key=lambda v: v["title"]) == sorted(expected, key=lambda v: v["title"])
-
-
-def test_filter_empty_store_returns_empty(store: BaseDuckDBStore) -> None:
-    assert store.filter(author="Alice") == []
-
-
-def test_filter_integer_field_value(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.filter(year=2022)
-    assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
-
-
-def test_filter_integer_value_no_match_returns_empty(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter(year=9999) == []
-
-
-def test_filter_matches_explicit_json_null(store: BaseDuckDBStore) -> None:
-    """``NULL = ?`` never matches even when the bound parameter is
-    ``NULL``, so filtering on an explicit ``None`` value must use ``IS
-    NULL`` instead."""
-    store.set("1", {"author": None, "title": "Untitled"})
-    store.set("2", {"author": "Alice", "title": "Titled"})
-    assert store.filter(author=None) == [{"author": None, "title": "Untitled"}]
-
-
-# --- filter_items ---
-
-
-def test_filter_items_no_args_returns_all(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter_items() == items
-
-
-def test_filter_items_single_field(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.filter_items(author="Alice")
-    assert result == {"1": items["1"], "2": items["2"]}
-
-
-def test_filter_items_no_match_returns_empty(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter_items(author="Charlie") == {}
-
-
-def test_filter_items_empty_store_returns_empty(store: BaseDuckDBStore) -> None:
-    assert store.filter_items(author="Alice") == {}
-
-
-async def test_afilter_items_single_field(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = await store.afilter_items(author="Alice")
-    assert result == {"1": items["1"], "2": items["2"]}
-
-
-# --- delete ---
-
-
-def test_delete_removes_value(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete("1")
-    assert store.count() == len(items) - 1
-    assert store.get("1") is None
-
-
-def test_delete_nonexistent_is_silent(store: BaseDuckDBStore) -> None:
-    store.delete("nonexistent")
-
-
-# --- delete_many ---
-
-
-def test_delete_many_removes_values(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many(["1", "3"])
-    assert store.count() == len(items) - 2
-    assert store.get("1") is None
-    assert store.get("3") is None
-
-
-def test_delete_many_preserves_other_values(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many(["1", "3"])
-    assert store.get("2") is not None
-    assert store.get("4") is not None
-
-
-def test_delete_many_empty_list_is_no_op(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many([])
-    assert store.count() == len(items)
-
-
-def test_delete_many_nonexistent_keys_are_silent(store: BaseDuckDBStore) -> None:
-    store.delete_many(["99", "100"])
-
-
-def test_delete_many_single_key(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete_many(["2"])
-    assert store.count() == len(items) - 1
-    assert store.get("2") is None
-
-
-# --- clear ---
-
-
-def test_clear_removes_all_values(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.clear()
-    assert store.count() == 0
-    assert list(store.keys()) == []
-
-
-def test_clear_empty_store_is_no_op(store: BaseDuckDBStore) -> None:
-    store.clear()
-    assert store.count() == 0
-
-
-def test_clear_returns_none(store: BaseDuckDBStore) -> None:
-    assert store.clear() is None
-
-
-def test_clear_then_set_works(store: BaseDuckDBStore) -> None:
-    store.set("1", {"text": "hello"})
-    store.clear()
-    store.set("2", {"text": "world"})
-    assert store.count() == 1
-    assert store.get("2") == {"text": "world"}
-
-
-# --- contains ---
-
-
-def test_contains_true_when_key_present(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.contains("1")
-
-
-def test_contains_false_when_key_missing(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert not store.contains("99")
-
-
-def test_contains_false_when_store_empty(store: BaseDuckDBStore) -> None:
-    assert not store.contains("1")
-
-
-# --- contains_many ---
-
-
-def test_contains_many_all_found(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
-
-
-def test_contains_many_all_missing(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.contains_many(["99", "100"]) == [False, False]
-
-
-def test_contains_many_mixed(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
-
-
-def test_contains_many_empty_input_returns_empty_lists(store: BaseDuckDBStore) -> None:
-    assert store.contains_many([]) == []
-
-
-def test_contains_many_empty_store_returns_all_missing(store: BaseDuckDBStore) -> None:
-    assert store.contains_many(["1", "2"]) == [False, False]
-
-
-def test_contains_many_returns_list_of_bools(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.contains_many(["1", "99"])
-    assert isinstance(result, list)
-    assert all(isinstance(flag, bool) for flag in result)
-
-
-# --- columns_info ---
-
-
-def test_get_columns_info_returns_dict(store: BaseDuckDBStore) -> None:
-    result = store.get_columns_info()
-    assert isinstance(result, dict)
-
-
-def test_get_columns_info_includes_key_column(store: BaseDuckDBStore) -> None:
-    assert store._key_column in store.get_columns_info()
-
-
-def test_get_columns_info_values_are_strings(store: BaseDuckDBStore) -> None:
-    result = store.get_columns_info()
-    assert all(isinstance(v, str) for v in result.values())
-
-
-def test_get_columns_info_non_empty_for_created_table(store: BaseDuckDBStore) -> None:
-    result = store.get_columns_info()
-    assert len(result) > 0
-
-
-def test_show_columns_info_returns_none(store: BaseDuckDBStore) -> None:
-    assert store.show_columns_info() is None
-
-
-# --- keys ---
-
-
-def test_keys_empty_store_yields_nothing(store: BaseDuckDBStore) -> None:
-    assert list(store.keys()) == []
-
-
-def test_keys_returns_all_keys(store: BaseDuckDBStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert sorted(store.keys()) == sorted(items.keys())
-
-
-# --- values ---
-
-
-def test_values_empty_store_yields_nothing(store: BaseDuckDBStore) -> None:
-    assert list(store.values()) == []
-
-
-def test_values_returns_all_values(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = list(store.values())
-    assert len(result) == len(items)
-    assert {v["title"] for v in result} == {v["title"] for v in items.values()}
-
-
-def test_values_is_lazy_generator(store: BaseDuckDBStore) -> None:
-    assert isinstance(store.values(), Iterator)
-
-
-# --- iter_batches ---
-
-
-def test_iter_batches_empty_store_yields_nothing(store: BaseDuckDBStore) -> None:
-    assert list(store.iter_batches()) == []
-
-
-def test_iter_batches_returns_generator(store: BaseDuckDBStore) -> None:
-    result = store.iter_batches()
-    assert isinstance(result, Iterator)
-
-
-def test_iter_batches_default_batch_size(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches())
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-def test_iter_batches_yields_correct_batch_sizes(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=2))
-    assert [len(b) for b in batches] == [2, 2]
-
-
-def test_iter_batches_last_batch_may_be_smaller(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=3))
-    assert [len(b) for b in batches] == [3, 1]
-
-
-def test_iter_batches_batch_size_larger_than_store(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=100))
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-def test_iter_batches_batch_size_one(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=1))
-    assert [len(b) for b in batches] == [1, 1, 1, 1]
-
-
-def test_iter_batches_returns_all_key_value_pairs(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    for batch in store.iter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
-
-
-def test_iter_batches_batches_are_dicts(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=2))
-    assert all(isinstance(batch, dict) for batch in batches)
-
-
-def test_iter_batches_zero_batch_size_raises(store: BaseDuckDBStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        list(store.iter_batches(batch_size=0))
-
-
-def test_iter_batches_negative_batch_size_raises(store: BaseDuckDBStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        list(store.iter_batches(batch_size=-1))
-
-
-def test_iter_batches_error_raised_before_any_query(store: BaseDuckDBStore) -> None:
-    gen = store.iter_batches(batch_size=0)
-    with pytest.raises(ValueError, match="batch_size"):
-        next(gen)
-
-
-def test_iter_batches_does_not_mutate_store(
-    store: BaseDuckDBStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    list(store.iter_batches(batch_size=2))
-    assert store.count() == len(items)
-
-
-def test_iter_batches_paginates_instead_of_loading_everything(store: BaseDuckDBStore) -> None:
-    """iter_batches must page through the table with LIMIT/OFFSET rather
-    than fetchall()-ing the whole table up front, so it stays bounded in
-    memory regardless of table size."""
-    n = 25
-    store.set_many({str(i): {"a": i} for i in range(n)})
-    batches = list(store.iter_batches(batch_size=10))
-    assert [len(batch) for batch in batches] == [10, 10, 5]
-    all_pairs = {key: value for batch in batches for key, value in batch.items()}
-    assert all_pairs == {str(i): {"a": i} for i in range(n)}
-
-
-def test_iter_batches_no_duplicate_or_skipped_rows_across_many_batches(
-    store: BaseDuckDBStore,
-) -> None:
-    n = 103
-    store.set_many({str(i): {"a": i} for i in range(n)})
-    seen: list[str] = []
-    for batch in store.iter_batches(batch_size=7):
-        seen.extend(batch.keys())
-    assert sorted(seen, key=int) == [str(i) for i in range(n)]
-    assert len(seen) == len(set(seen))
-
-
-# --- close ---
-
-
-def test_close_closes_underlying_connection(store: BaseDuckDBStore) -> None:
-    store.close()
-    with pytest.raises(duckdb.Error):
-        store._conn.execute("SELECT 1")
-
-
-def test_close_is_idempotent(store: BaseDuckDBStore) -> None:
-    store.close()
-    store.close()  # should not raise
-
-
-def test_get_before_open_raises(store_cls: type[BaseDuckDBStore]) -> None:
-    store = store_cls(":memory:")
-    with pytest.raises(RuntimeError, match="not open"):
-        store.get("1")
-
-
-def test_close_returns_none(store: BaseDuckDBStore) -> None:
-    assert store.close() is None
-
-
-# --- closed ---
-
-
-def test_closed_false_before_close(store: BaseDuckDBStore) -> None:
-    assert not store.closed
-
-
-def test_closed_true_after_close(store: BaseDuckDBStore) -> None:
-    store.close()
+def test_reopen_file_store_keeps_values(path: Path) -> None:
+    with DuckDBStore(path) as store:
+        assert store.get("1") == {"a": 1}
+
+
+@pytest.mark.parametrize(
+    "columns",
+    [
+        pytest.param("key VARCHAR PRIMARY KEY, title VARCHAR, extra JSON", id="typed_table"),
+        pytest.param("key VARCHAR PRIMARY KEY, value VARCHAR, extra JSON", id="typed_value_field"),
+        pytest.param("id VARCHAR PRIMARY KEY, extra JSON", id="typed_record_table"),
+        pytest.param("key VARCHAR PRIMARY KEY, value BLOB NOT NULL", id="pickle_table"),
+        pytest.param("key VARCHAR, value JSON", id="no_primary_key"),
+    ],
+)
+def test_open_table_with_other_layout(tmp_path: Path, columns: str) -> None:
+    path = tmp_path / "data.duckdb"
+    create_table(path, columns)
+    store = DuckDBStore(path)
+    with pytest.raises(ValueError, match=r"does not match the codec"):
+        store.open()
     assert store.closed
 
 
-def test_connection_raises_when_not_open(store_cls: type[BaseDuckDBStore]) -> None:
-    store = store_cls(":memory:")
-    with pytest.raises(RuntimeError, match="is not open"):
-        _ = store._connection
+def test_open_failure_closes_connection(tmp_path: Path) -> None:
+    path = tmp_path / "data.duckdb"
+    create_table(path, "x VARCHAR")
+    store = DuckDBStore(path)
+    with pytest.raises(ValueError, match=r"does not match the codec"):
+        store.open()
+    assert store._conn is None
 
 
-# --- context manager ---
+def test_open_not_a_database_leaves_store_closed(tmp_path: Path) -> None:
+    path = tmp_path / "data.duckdb"
+    path.write_text("not a database" * 1000)
+    store = DuckDBStore(path)
+    with pytest.raises(duckdb.Error, match=r"not a valid DuckDB database file"):
+        store.open()
+    assert store.closed
 
 
-def test_context_manager_returns_self(
-    store: BaseDuckDBStore, store_cls: type[BaseDuckDBStore]
-) -> None:
-    assert isinstance(store, store_cls)
+def test_set_does_not_write_into_typed_table(tmp_path: Path) -> None:
+    path = tmp_path / "data.duckdb"
+    create_table(path, "key VARCHAR PRIMARY KEY, title VARCHAR")
+    with (
+        pytest.raises(ValueError, match=r"does not match the codec"),
+        DuckDBStore(path) as store,
+    ):
+        store.set("1", {"title": "a"})
+    with duckdb.connect(path) as connection:
+        assert connection.execute("SELECT * FROM store").fetchall() == []
 
 
-def test_context_manager_closes_on_normal_exit(store_cls: type[BaseDuckDBStore]) -> None:
-    with store_cls(":memory:") as store:
-        store.set("1", {"text": "hello"})
-        assert store.count() == 1
-
-    with pytest.raises(duckdb.Error):
-        store._conn.execute("SELECT 1")
-
-
-def test_context_manager_closes_on_exception(store_cls: type[BaseDuckDBStore]) -> None:
-    msg = "boom"
-    with pytest.raises(ValueError, match="boom"), store_cls(":memory:") as store:
-        raise ValueError(msg)
-
-    with pytest.raises(duckdb.Error):
-        store._conn.execute("SELECT 1")
+def test_open_pickle_table_with_json_codec(tmp_path: Path) -> None:
+    path = tmp_path / "data.duckdb"
+    with DuckDBStore(path, codec=PickleCodec()):
+        pass
+    with pytest.raises(ValueError, match=r"does not match the codec 'json'"):
+        DuckDBStore(path).open()
 
 
-def test_context_manager_usable_for_reads_and_writes(store_cls: type[BaseDuckDBStore]) -> None:
-    with store_cls(":memory:") as store:
-        store.set_many(
-            {
-                "1": {"text": "hello", "author": "Alice"},
-                "2": {"text": "world", "author": "Bob"},
-            }
-        )
-        assert store.count() == 2
-        assert store.filter(author="Alice")[0]["text"] == "hello"
-        store.delete("1")
-        assert store.count() == 1
+def test__close(store: DuckDBStore) -> None:
+    connection = store.connection
+    store._close()
+    with pytest.raises(duckdb.ConnectionException, match=r"already closed"):
+        connection.execute("SELECT 1")
 
 
-def test_context_manager_multiple_open_close_in_memory(store_cls: type[BaseDuckDBStore]) -> None:
-    duckdb_store = store_cls(":memory:")
-    for i in range(3):
-        with duckdb_store as store:
-            assert store.count() == 0
-            store.set(str(i), {"text": "hello"})
-            assert store.count() == 1
+def test__close_without_open() -> None:
+    store = DuckDBStore()
+    store._close()
+    assert store._conn is None
 
 
-def test_context_manager_multiple_open_close_persistent(
-    tmp_path: Path, store_cls: type[BaseDuckDBStore]
-) -> None:
-    duckdb_store = store_cls(tmp_path / "data.duckdb")
-    for i in range(3):
-        with duckdb_store as store:
-            store.set(str(i), {"text": "hello"})
-            assert store.count() == i + 1
+# --- read-only ---
 
 
-async def test_async_context_manager_reopens_after_close(
-    store_cls: type[BaseDuckDBStore],
-) -> None:
-    """``async with`` on a closed store must reopen the connection the
-    same way the sync ``with`` does, rather than operating on a stale,
-    closed connection."""
-    duckdb_store = store_cls(":memory:")
-    duckdb_store.close()
-    assert duckdb_store.closed
-    async with duckdb_store as store:
-        assert not store.closed
-        await store.aset("1", {"text": "hello"})
-        assert await store.acount() == 1
-    assert duckdb_store.closed
+def test_read_only_reads_existing_values(path: Path) -> None:
+    with DuckDBStore(path, read_only=True) as store:
+        assert store.get("1") == {"a": 1}
 
 
-async def test_async_context_manager_reentry_on_open_store_does_not_reset(
-    store_cls: type[BaseDuckDBStore],
-) -> None:
-    """``__aenter__`` on a store that isn't closed must be a no-op -- it
-    should not reopen the connection or reset its contents."""
-
-    async with store_cls(":memory:") as store:
-        await store.aset("1", {"text": "hello"})
-        async with store as reentered:
-            assert reentered is store
-            assert not store.closed
-            assert await store.acount() == 1
-
-
-# --- to_uri / from_uri ---
-
-
-def test_to_uri_from_uri_round_trips_file_data(
-    store_path: Path, store_cls: type[BaseDuckDBStore], items: dict[str, dict[str, Any]]
-) -> None:
-    path = store_path / f"to_uri_{store_cls.__name__}.duckdb"
-    with store_cls(path) as store:
-        store.set_many(items)
-        uri = store.to_uri()
-    with store_cls.from_uri(uri) as reloaded:
-        assert reloaded.count() == len(items)
+@pytest.mark.parametrize(
+    "write",
+    [
+        pytest.param(lambda s: s.set("2", {}), id="set"),
+        pytest.param(lambda s: s.set("2", {}, on_conflict="raise"), id="update"),
+        pytest.param(lambda s: s.delete("1"), id="delete"),
+        pytest.param(lambda s: s.clear(), id="clear"),
+    ],
+)
+def test_read_only_rejects_writes(path: Path, write: Any) -> None:
+    with (
+        DuckDBStore(path, read_only=True) as store,
+        pytest.raises(duckdb.Error, match=r"read-only"),
+    ):
+        write(store)
 
 
-def test_to_uri_from_uri_round_trips_in_memory_data(
-    store_cls: type[BaseDuckDBStore], items: dict[str, dict[str, Any]]
-) -> None:
-    with store_cls(":memory:") as store:
-        store.set_many(items)
-        # :memory: never round-trips data -- each connection is a fresh DB.
-        with store_cls.from_uri(store.to_uri()) as reloaded:
-            assert reloaded.count() == 0
+@pytest.mark.parametrize("name", ["data.duckdb", "nested/data.duckdb"])
+def test_read_only_does_not_create_file_or_directory(tmp_path: Path, name: str) -> None:
+    with pytest.raises(duckdb.IOException, match=r"database does not exist"):
+        DuckDBStore(tmp_path / name, read_only=True).open()
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_from_uri_read_only(
-    store_path: Path, store_cls: type[BaseDuckDBStore], items: dict[str, dict[str, Any]]
-) -> None:
-    path = store_path / f"to_uri_ro_{store_cls.__name__}.duckdb"
-    with store_cls(path) as store:
-        store.set_many(items)
-        uri = store.to_uri()
-    with store_cls.from_uri(uri, read_only=True) as reloaded:
-        assert reloaded.count() == len(items)
-        with pytest.raises(duckdb.InvalidInputException):
-            reloaded.set("new", {"a": 1})
+def test_read_only_database_without_table(tmp_path: Path) -> None:
+    path = tmp_path / "data.duckdb"
+    duckdb.connect(path).close()
+    with pytest.raises(ValueError, match=r"has no table 'store'"):
+        DuckDBStore(path, read_only=True).open()
 
 
-# --- async methods ---
-
-# --- aget / aset ---
+# --- URIs ---
 
 
-async def test_duckdb_store_aget_aset_round_trip(store: BaseDuckDBStore) -> None:
-    await store.aset("1", {"a": 1})
-    assert await store.aget("1") == {"a": 1}
+@pytest.mark.parametrize(
+    ("codec", "uri"),
+    [(None, "duckdb:%3Amemory%3A"), (PickleCodec(), "duckdb+pickle:%3Amemory%3A")],
+)
+def test_to_uri(codec: PickleCodec | None, uri: str) -> None:
+    assert DuckDBStore(codec=codec).to_uri() == uri
 
 
-# --- afilter ---
+def test_from_uri_pickle_codec() -> None:
+    assert isinstance(DuckDBStore.from_uri("duckdb+pickle::memory:")._codec, PickleCodec)
 
 
-async def test_duckdb_store_afilter(store: BaseDuckDBStore) -> None:
-    await store.aset_many({"1": {"author": "Alice"}, "2": {"author": "Bob"}})
-    assert await store.afilter(author="Alice") == [{"author": "Alice"}]
+def test_from_uri_passes_kwargs() -> None:
+    store = DuckDBStore.from_uri("duckdb::memory:", config={"threads": 1})
+    assert store._kwargs == {"config": {"threads": 1}}
 
 
-# --- acount ---
-
-
-async def test_duckdb_store_acount(store: BaseDuckDBStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    assert await store.acount() == 2
-
-
-async def test_duckdb_store_concurrent_async_access_does_not_corrupt(
-    store: BaseDuckDBStore,
-) -> None:
-    """Regression test: async calls run via ThreadedAsyncStoreMixin on
-    worker threads, but DuckDB connections aren't safe for concurrent
-    use from multiple threads; concurrent async calls must not corrupt
-    the store's query state or crash the underlying driver."""
-
-    async def _writer(i: int) -> None:
-        await store.aset(str(i), {"a": i})
-
-    await asyncio.gather(*(_writer(i) for i in range(50)))
-    assert await store.acount() == 50
-    for i in range(50):
-        assert await store.aget(str(i)) == {"a": i}
+def test_uri_of_path_reconnects(path: Path) -> None:
+    with DuckDBStore.from_uri(DuckDBStore(path).to_uri(), read_only=True) as store:
+        assert store.get("1") == {"a": 1}
 
 
 # --- connection ---
 
 
-def test_connection_executes_sql(store: BaseDuckDBStore) -> None:
-    store.set("a", {"x": 1})
+def test_connection_executes_sql(store: DuckDBStore) -> None:
+    store.set("a", {})
     assert store.connection.execute("SELECT COUNT(*) FROM store").fetchone()[0] == 1
 
 
-def test_connection_before_open_raises(store_cls: type[BaseDuckDBStore]) -> None:
-    with pytest.raises(RuntimeError, match="not open"):
-        _ = store_cls(":memory:").connection
+def test_connection_before_open_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"DuckDBStore is not open"):
+        _ = DuckDBStore().connection
+
+
+# --- primitives on DuckDB ---
+
+
+@pytest.mark.parametrize("codec", [None, PickleCodec()])
+def test__put_many_and_get_many(codec: PickleCodec | None) -> None:
+    with DuckDBStore(codec=codec) as store:
+        store.set_many({"1": {"a": 1}, "2": {"a": 2}})
+        assert store.get_many(["2", "missing", "1"]) == [{"a": 2}, None, {"a": 1}]
+
+
+@pytest.mark.parametrize("codec", [None, PickleCodec()])
+def test__update(codec: PickleCodec | None) -> None:
+    with DuckDBStore(codec=codec) as store:
+        store.set("1", {"a": 1})
+        store.set_many({"1": {"b": 1}, "2": {"b": 2}}, on_conflict="merge")
+        assert store.get_many(["1", "2"]) == [{"a": 1, "b": 1}, {"b": 2}]
+
+
+def test__delete_many(store: DuckDBStore) -> None:
+    store.set_many({"1": {}, "2": {}, "3": {}})
+    store.delete_many(["1", "missing", "3"])
+    assert list(store.keys()) == ["2"]
+
+
+def test__contains_many(store: DuckDBStore) -> None:
+    store.set_many({"1": {}, "2": {}})
+    assert store.contains_many(["2", "missing", "1"]) == [True, False, True]
+
+
+def test__clear(store: DuckDBStore) -> None:
+    store.set_many({"1": {}, "2": {}})
+    store.clear()
+    assert store.count() == 0
+
+
+def test__iter_batches(store: DuckDBStore) -> None:
+    store.set_many({"b": {}, "a": {}, "": {}})
+    assert [list(batch) for batch in store._iter_batches(2)] == [["", "a"], ["b"]]
+
+
+def test__iter_batches_delete_of_yielded_keys(store: DuckDBStore) -> None:
+    store.set_many({str(i): {} for i in range(10)})
+    visited: list[str] = []
+    for batch in store.iter_batches(batch_size=3):
+        visited.extend(batch)
+        store.delete_many(list(batch))
+    assert visited == [str(i) for i in range(10)]
+
+
+def test__get_many_many_keys(store: DuckDBStore) -> None:
+    store.set_many({str(i): {} for i in range(1000)})
+    assert len(store._get_many([str(i) for i in range(1000)])) == 1000
+
+
+# --- transactions ---
+
+
+def test__fetch(store: DuckDBStore) -> None:
+    assert store._fetch("SELECT ?, ?", [1, "a"]) == [(1, "a")]
+
+
+def test__execute_commits(path: Path) -> None:
+    with DuckDBStore(path) as store:
+        store._execute("DELETE FROM store WHERE key = ?", ["1"])
+    with DuckDBStore(path) as store:
+        assert store.count() == 0
+
+
+def test__executemany(store: DuckDBStore) -> None:
+    store._executemany("INSERT INTO store VALUES (?, ?)", [("1", "{}"), ("2", "{}")])
+    assert store.count() == 2
+
+
+def test__transaction_commits(path: Path) -> None:
+    with DuckDBStore(path) as store:
+        with store._transaction():
+            store._execute("DELETE FROM store")
+        assert store.connection.cursor().execute("SELECT COUNT(*) FROM store").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("error", [ValueError, KeyboardInterrupt])
+def test__transaction_rolls_back(store: DuckDBStore, error: type[BaseException]) -> None:
+    def fail() -> None:
+        with store._transaction():
+            store._execute("INSERT INTO store VALUES ('1', '{}')")
+            msg = "stop"
+            raise error(msg)
+
+    with pytest.raises(error, match=r"stop"):
+        fail()
+    assert store.count() == 0
+
+
+def test__transaction_already_ended_keeps_first_error(store: DuckDBStore) -> None:
+    def fail() -> None:
+        with store._transaction():
+            store.connection.rollback()
+            msg = "stop"
+            raise ValueError(msg)
+
+    with pytest.raises(ValueError, match=r"stop"):
+        fail()
+
+
+def test_set_many_error_writes_nothing(store: DuckDBStore) -> None:
+    # The value column is NOT NULL.
+    with pytest.raises(duckdb.ConstraintException, match=r"NOT NULL constraint failed"):
+        store._put_many({"1": "{}", "2": None})
+    assert store.count() == 0
+
+
+def test_write_inside_open_transaction_of_the_connection_raises(store: DuckDBStore) -> None:
+    store.connection.begin()
+    with pytest.raises(duckdb.TransactionException, match=r"within a transaction"):
+        store.set_many({"1": {}, "2": {}})
+
+
+# --- write lock ---
+
+
+def test_write_lock_in_memory() -> None:
+    with DuckDBStore() as first, DuckDBStore() as second:
+        assert first._write_lock is not second._write_lock
+
+
+def test_write_lock_same_file(path: Path) -> None:
+    with DuckDBStore(path) as first, DuckDBStore(path) as second:
+        assert first._write_lock is second._write_lock
+
+
+def test_write_lock_other_files(tmp_path: Path) -> None:
+    with DuckDBStore(tmp_path / "a") as first, DuckDBStore(tmp_path / "b") as second:
+        assert first._write_lock is not second._write_lock
+
+
+def test_update_holds_the_write_lock(path: Path) -> None:
+    acquired: list[bool] = []
+    with DuckDBStore(path) as store, ThreadPoolExecutor(1) as executor:
+        lock = store._write_lock
+
+        def plan(_existing: dict) -> dict:
+            # Another thread cannot take the lock during the update.
+            acquired.append(executor.submit(lock.acquire, blocking=False).result(timeout=10))
+            return {}
+
+        store._update(["1"], plan)
+    assert acquired == [False]
+
+
+# --- schema and filter ---
+
+
+def test__table_columns(store: DuckDBStore) -> None:
+    assert store._table_columns() == [("key", "VARCHAR", True), ("value", "JSON", False)]
+
+
+def test__table_columns_no_table(store: DuckDBStore) -> None:
+    store.connection.execute("DROP TABLE store")
+    assert store._table_columns() == []
+
+
+def test__table_columns_ignores_other_schema(store: DuckDBStore) -> None:
+    store.connection.execute("DROP TABLE store")
+    store.connection.execute("CREATE SCHEMA other")
+    store.connection.execute("CREATE TABLE other.store (x INTEGER)")
+    assert store._table_columns() == []
+
+
+def test__filter_expr(store: DuckDBStore) -> None:
+    assert store._filter_expr("author") == "json_extract_string(value, '$.author')"
+
+
+def test__filter_expr_invalid_field(store: DuckDBStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid filter field name"):
+        store._filter_expr("a') OR 1 --")
+
+
+@pytest.mark.parametrize(
+    ("value", "keys"),
+    [
+        pytest.param("1", ["int", "str"], id="str_matches_int"),
+        pytest.param(1, ["int", "str"], id="int_matches_str"),
+        pytest.param(None, ["absent", "null"], id="none"),
+    ],
+)
+def test_filter_items_matches_in_sql(store: DuckDBStore, value: Any, keys: list[str]) -> None:
+    store.set_many({"int": {"v": 1}, "str": {"v": "1"}, "null": {"v": None}, "absent": {}})
+    assert sorted(store.filter_items(v=value)) == keys
+
+
+async def test_afilter(store: DuckDBStore) -> None:
+    store.set_many({"1": {"a": 1}, "2": {"a": 2}})
+    assert await store.afilter(a=2) == [{"a": 2}]
+
+
+# --- repr ---
+
+
+def test_repr(store: DuckDBStore) -> None:
+    assert repr(store) == (
+        "DuckDBStore(\n  (database): :memory:\n  (closed): False\n  (count): 0\n)"
+    )
+
+
+########################################
+#     Tests for _get_database_lock     #
+########################################
+
+
+def test__get_database_lock_same_file(tmp_path: Path) -> None:
+    path = tmp_path / "data"
+    path.touch()
+    link = tmp_path / "link"
+    link.symlink_to(path)
+    assert _get_database_lock(path) is _get_database_lock(link)
+
+
+def test__get_database_lock_other_files(tmp_path: Path) -> None:
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.touch()
+    second.touch()
+    assert _get_database_lock(first) is not _get_database_lock(second)
+
+
+def test__get_database_lock_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match=r"data"):
+        _get_database_lock(tmp_path / "data")

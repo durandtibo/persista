@@ -51,7 +51,6 @@ PACKAGE = "persista"
 
 # Extra name -> module that the extra installs.
 EXTRA_MODULES = {
-    "aiosqlite": "aiosqlite",
     "duckdb": "duckdb",
     "faker": "faker",
     "httpx": "httpx",
