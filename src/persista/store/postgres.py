@@ -16,7 +16,7 @@ from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.async_close import close_async_connection_from_sync
-from persista.store.base import BaseStore
+from persista.store.unmigrated import UnmigratedStore
 from persista.store.validation import (
     aresolve_conflicts,
     normalize_on_conflict,
@@ -46,7 +46,7 @@ _LOCK_KEYS_QUERY = (
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class BasePostgresStore(BaseStore, MultilineDisplayMixin):
+class BasePostgresStore(UnmigratedStore, MultilineDisplayMixin):
     r"""Define a base class for Postgres-backed key-value stores.
 
     Holds both a ``psycopg.Connection`` (opened eagerly in
@@ -268,16 +268,18 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
         by_key = {row[0]: self._row_to_value(row) for row in rows}
         return [by_key.get(key) for key in keys]
 
-    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
+    def set(
+        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
+    ) -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
 
     async def aset(
-        self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         await self.aset_many({key: value}, on_conflict=on_conflict)
 
     def set_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         self._check_open()
         if not items:
@@ -299,7 +301,7 @@ class BasePostgresStore(BaseStore, MultilineDisplayMixin):
             self._set_many(to_write)
 
     async def aset_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         if not items:
             return

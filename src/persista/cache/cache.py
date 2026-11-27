@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from coola.display import MultilineDisplayMixin
 
 from persista.cache.utils import make_call_key
+from persista.store.codec import PickleCodec
 from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
@@ -51,9 +52,17 @@ class Cache(MultilineDisplayMixin):
     Each entry is wrapped as ``{"value": value, "expires_at":
     expires_at}`` before being written to the store, since
     :class:`~persista.store.BaseStore` only accepts ``dict``
-    values. If the backing store is one that serializes values (e.g.
-    a SQLite- or Redis-backed store), cached values must be
-    JSON-serializable.
+    values. The codec of the backing store decides which values can be
+    cached, and a hit returns what the codec reads back:
+
+    - the default store uses :class:`~persista.store.PickleCodec`: any
+      value that can be pickled is cached, with its type;
+    - a store with the :class:`~persista.store.JsonCodec` (for example
+      ``InMemoryStore()``) only accepts values that JSON can represent,
+      and returns a tuple as a list;
+    - the other stores serialize values as described in their
+      documentation (for example, a SQLite-backed store needs
+      JSON-serializable values).
 
     ``expires_at`` is a Unix timestamp (``time.time()``), not a
     monotonic clock reading, because entries may be read back by a
@@ -74,7 +83,8 @@ class Cache(MultilineDisplayMixin):
 
     Args:
         store: The backing store. Defaults to a new
-            :class:`~persista.store.in_memory.InMemoryStore`.
+            :class:`~persista.store.in_memory.InMemoryStore` with the
+            :class:`~persista.store.PickleCodec`.
         default_ttl: The default time-to-live, in seconds, applied to
             entries whose ``ttl`` is not explicitly set on
             :meth:`set` / :meth:`get_or_compute` / :meth:`memoize`.
@@ -104,7 +114,7 @@ class Cache(MultilineDisplayMixin):
         if default_ttl is not None and default_ttl < 0:
             msg = f"default_ttl must be non-negative, got {default_ttl}"
             raise ValueError(msg)
-        self._store: BaseStore = store if store is not None else InMemoryStore()
+        self._store: BaseStore = store if store is not None else InMemoryStore(codec=PickleCodec())
         self._default_ttl = default_ttl
 
     @property
@@ -278,9 +288,8 @@ class Cache(MultilineDisplayMixin):
 
         Args:
             key: The key to set.
-            value: The value to cache. Must be JSON-serializable if
-                the backing store serializes values (see the class
-                docstring).
+            value: The value to cache. The codec of the backing
+                store must accept it (see the class docstring).
             ttl: The time-to-live, in seconds, before the entry
                 expires. Defaults to ``self._default_ttl`` when not
                 given. ``None`` means the entry never expires. ``0``
@@ -408,9 +417,8 @@ class Cache(MultilineDisplayMixin):
 
         Args:
             key: The key to set.
-            value: The value to cache. Must be JSON-serializable if
-                the backing store serializes values (see the class
-                docstring).
+            value: The value to cache. The codec of the backing
+                store must accept it (see the class docstring).
             ttl: The time-to-live, in seconds, before the entry
                 expires. Defaults to ``self._default_ttl`` when not
                 given. ``None`` means the entry never expires. ``0``
@@ -695,9 +703,8 @@ class Cache(MultilineDisplayMixin):
 
         Args:
             items: A dict mapping each key to the value to cache
-                under it. Values must be JSON-serializable if the
-                backing store serializes values (see the class
-                docstring).
+                under it. The codec of the backing store must accept
+                the values (see the class docstring).
             ttl: The time-to-live, in seconds, before the entries
                 expire. See :meth:`set`.
 
@@ -734,9 +741,8 @@ class Cache(MultilineDisplayMixin):
 
         Args:
             items: A dict mapping each key to the value to cache
-                under it. Values must be JSON-serializable if the
-                backing store serializes values (see the class
-                docstring).
+                under it. The codec of the backing store must accept
+                the values (see the class docstring).
             ttl: The time-to-live, in seconds, before the entries
                 expire. See :meth:`aset`.
 
@@ -1061,8 +1067,8 @@ class Cache(MultilineDisplayMixin):
         equal arguments share a cached result. Call arguments must be
         serializable with ``strategy`` (see
         ``ignore_non_serializable`` for the only exception); the
-        return value must additionally be JSON-serializable if the
-        backing store serializes values (see the class docstring).
+        codec of the backing store must additionally accept the return
+        value (see the class docstring).
         Because the key is based on names rather than object
         identity, two distinct functions defined with the same module
         and qualified name (e.g. two calls to the same factory
@@ -1161,8 +1167,8 @@ class Cache(MultilineDisplayMixin):
         equal arguments share a cached result. Call arguments must be
         serializable with ``strategy`` (see
         ``ignore_non_serializable`` for the only exception); the
-        return value must additionally be JSON-serializable if the
-        backing store serializes values (see the class docstring).
+        codec of the backing store must additionally accept the return
+        value (see the class docstring).
         Because the key is based on names rather than object
         identity, two distinct functions defined with the same module
         and qualified name (e.g. two calls to the same factory

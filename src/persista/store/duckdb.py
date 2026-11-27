@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 
 from coola.display import MultilineDisplayMixin
 
-from persista.store.base import BaseStore
 from persista.store.threaded import ThreadedAsyncStoreMixin
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
@@ -39,7 +38,7 @@ if TYPE_CHECKING or is_duckdb_available():  # pragma: no cover
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
+class BaseDuckDBStore(ThreadedAsyncStoreMixin, MultilineDisplayMixin):
     r"""Define a base class for DuckDB-backed key-value stores.
 
     Subclasses only need to implement :meth:`_select_columns`,
@@ -219,11 +218,13 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         by_key = dict(self._row_to_kv(row) for row in rows)
         return [by_key.get(key) for key in keys]
 
-    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
+    def set(
+        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
+    ) -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
 
     def set_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         self._check_open()
         if not items:

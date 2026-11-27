@@ -94,8 +94,27 @@ True
 
 ```
 
-By default, `Cache` stores entries in an `InMemoryStore`. Pass any other `BaseStore` to persist
-cached values, e.g. to share a cache across processes with `RedisStore`:
+By default, `Cache` stores entries in an `InMemoryStore` with the
+[`PickleCodec`](store.md#values-and-codecs): any value that can be pickled is cached, a hit returns
+it with its types, and each hit returns a new copy. A value that cannot be pickled, such as a lambda,
+a generator, a lock, or an instance of a class defined inside a function, raises an error.
+
+```pycon
+>>> from persista.cache import Cache
+>>> with Cache() as cache:
+...     cache.set("point", (1, {2}))
+...     cache.get("point")
+(1, {2})
+
+```
+
+The codec of the backing store decides which values can be cached. For example, a cache over
+`InMemoryStore()`, which uses `JsonCodec`, returns a tuple as a list and rejects a set.
+`NullStore`, which disables caching, also uses `JsonCodec`: it rejects the values that JSON cannot
+represent, although it does not keep them.
+
+Pass any other `BaseStore` to persist cached values, e.g. to share a cache across processes with
+`RedisStore`:
 
 ```python
 from persista.cache import Cache
@@ -499,7 +518,7 @@ hello
 
 ```
 
-A configuration without a `store` key builds a cache with a new `InMemoryStore`, and needs a single
+A configuration without a `store` key builds a cache with the default store, and needs a single
 call: `resolve_object({"_target_": "persista.cache.Cache"}, cls=Cache)`. Only use `resolve_object`
 with a configuration from a trusted source, because it imports and calls whatever `_target_` names.
 See [building a store from a configuration](store.md#building-a-store-from-a-configuration).

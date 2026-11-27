@@ -1,5 +1,5 @@
-r"""Provide validation helpers for the ``on_conflict`` parameter used by
-:class:`~persista.store.BaseStore` write methods."""
+r"""Provide validation helpers for the arguments of
+:class:`~persista.store.BaseStore` methods."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ __all__ = [
     "resolve_conflicts",
     "validate_batch_size",
     "validate_field_name",
+    "validate_key",
+    "validate_keys",
     "validate_on_conflict",
     "validate_table_name",
 ]
@@ -22,7 +24,7 @@ from typing import TYPE_CHECKING, Any, cast, get_args
 from persista.store.types import OnConflict
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable, Iterable, Mapping
 
     from persista.store.base import BaseStore
 
@@ -79,6 +81,71 @@ def validate_on_conflict(on_conflict: str) -> None:
     if on_conflict not in ON_CONFLICT_VALUES:
         msg = f"Invalid on_conflict value: {on_conflict!r}. Valid values are: {ON_CONFLICT_VALUES}"
         raise ValueError(msg)
+
+
+def validate_key(key: str) -> str:
+    """Validate a key of a store.
+
+    Args:
+        key: The key to validate.
+
+    Returns:
+        The key. An instance of a subclass of ``str`` (for example a
+        ``str`` enum) is converted to a ``str``.
+
+    Raises:
+        TypeError: If ``key`` is not a ``str``.
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import validate_key
+        >>> validate_key("user:1")
+        'user:1'
+        >>> validate_key(1)
+        Traceback (most recent call last):
+            ...
+        TypeError: A key must be a str, not int: 1
+
+        ```
+    """
+    if type(key) is str:
+        return key
+    if not isinstance(key, str):
+        msg = f"A key must be a str, not {type(key).__name__}: {key!r}"
+        raise TypeError(msg)
+    return str.__str__(key)
+
+
+def validate_keys(keys: Iterable[str]) -> list[str]:
+    """Validate several keys of a store.
+
+    Args:
+        keys: The keys to validate. It is not modified.
+
+    Returns:
+        A new list with the keys, in the same order and with the same
+        duplicates. See :func:`validate_key`.
+
+    Raises:
+        TypeError: If ``keys`` is a single ``str``, or if a key is not a
+            ``str``.
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import validate_keys
+        >>> validate_keys(("user:1", "user:2"))
+        ['user:1', 'user:2']
+
+        ```
+    """
+    if isinstance(keys, str):
+        msg = f"keys must be a list of keys, not a single str: {keys!r}"
+        raise TypeError(msg)
+    keys = list(keys)
+    # Fast path: nothing to convert or to reject.
+    if set(map(type, keys)) <= {str}:
+        return keys
+    return [validate_key(key) for key in keys]
 
 
 def validate_field_name(name: str) -> None:
@@ -148,8 +215,9 @@ def resolve_conflicts(
     """Resolve ``items`` against existing keys for a non-``"overwrite"``
     ``on_conflict`` strategy.
 
-    Shared by every :class:`~persista.store.BaseStore` backend's
-    ``set_many``: callers handle the ``"overwrite"`` case themselves
+    Shared by the ``set_many`` of the backends that implement it
+    themselves (:class:`~persista.store.BaseStore` uses
+    :func:`~persista.store.plan.build_plan` instead): callers handle the ``"overwrite"`` case themselves
     (writing ``items`` as-is, without needing to check for conflicts)
     and use this helper for ``"raise"``/``"skip"``/``"merge"``.
 

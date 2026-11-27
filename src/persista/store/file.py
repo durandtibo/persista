@@ -16,7 +16,6 @@ from coola.io import load_json, load_pickle, save_json, save_pickle
 from coola.utils.batching import batchify
 from coola.utils.path import sanitize_path
 
-from persista.store.base import BaseStore
 from persista.store.threaded import ThreadedAsyncStoreMixin
 from persista.store.uri import decode_path_uri, encode_path_uri
 from persista.store.validation import (
@@ -36,7 +35,7 @@ if TYPE_CHECKING:
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
+class BaseFileStore(ThreadedAsyncStoreMixin, MultilineDisplayMixin):
     r"""Define a base class for file-based key-value stores.
 
     Each value is persisted as its own file in a directory, using
@@ -131,11 +130,13 @@ class BaseFileStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin):
     def get_many(self, keys: list[str]) -> list[dict[str, Any] | None]:
         return [self.get(key) for key in keys]
 
-    def set(self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite") -> None:
+    def set(
+        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
+    ) -> None:
         self.set_many({key: value}, on_conflict=on_conflict)
 
     def set_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
         self._check_open()
         if not items:

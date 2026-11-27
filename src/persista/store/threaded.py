@@ -9,7 +9,7 @@ __all__ = ["ThreadedAsyncStoreMixin", "athread_iter"]
 import asyncio
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from persista.store.base import BaseStore
+from persista.store.unmigrated import UnmigratedStore
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator, Mapping
@@ -57,12 +57,12 @@ async def athread_iter(sync_iter_factory: Callable[[], Iterator[_T]]) -> AsyncIt
         yield item
 
 
-class ThreadedAsyncStoreMixin(BaseStore):
+class ThreadedAsyncStoreMixin(UnmigratedStore):
     r"""Provide every ``a``-prefixed async method as an
     ``asyncio.to_thread`` wrapper around the corresponding sync method.
 
     Mix this into a :class:`~persista.store.BaseStore` subclass whose
-    backend has no native async driver (in-memory, file, LMDB, DuckDB):
+    backend has no native async driver (file, LMDB, DuckDB):
     the subclass only needs to implement the sync side, and this mixin
     supplies a fully-conformant async side for free by running each sync
     call in a worker thread. ``akeys``/``aiter_batches`` additionally
@@ -71,9 +71,12 @@ class ThreadedAsyncStoreMixin(BaseStore):
     key/batch at a time rather than materializing the whole store in
     memory.
 
-    Must be listed before ``BaseStore`` in the MRO (e.g. ``class
-    Foo(ThreadedAsyncStoreMixin, BaseStore)``) so its concrete methods
-    satisfy ``BaseStore``'s abstract async methods.
+    It is a subclass of
+    :class:`~persista.store.unmigrated.UnmigratedStore`, so a store
+    only needs this one base class (``class
+    Foo(ThreadedAsyncStoreMixin)``). It is an internal class, used by the
+    stores that do not implement the primitives of
+    :class:`~persista.store.BaseStore` yet.
     """
 
     async def aget(self, key: str) -> dict[str, Any] | None:
@@ -83,14 +86,14 @@ class ThreadedAsyncStoreMixin(BaseStore):
         return await asyncio.to_thread(self.get_many, keys)
 
     async def aset(
-        self, key: str, value: dict[str, Any], on_conflict: OnConflict = "overwrite"
+        self, key: str, value: dict[str, Any], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
-        await asyncio.to_thread(self.set, key, value, on_conflict)
+        await asyncio.to_thread(self.set, key, value, on_conflict=on_conflict)
 
     async def aset_many(
-        self, items: Mapping[str, dict[str, Any]], on_conflict: OnConflict = "overwrite"
+        self, items: Mapping[str, dict[str, Any]], *, on_conflict: OnConflict = "overwrite"
     ) -> None:
-        await asyncio.to_thread(self.set_many, items, on_conflict)
+        await asyncio.to_thread(self.set_many, items, on_conflict=on_conflict)
 
     async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:
         return await asyncio.to_thread(lambda: self.filter(**field_filters))

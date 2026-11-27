@@ -14,6 +14,9 @@ The tests below are parametrized over every available backend (stores
 whose optional dependency is missing, or whose server is unreachable, are
 skipped rather than omitted) so that a single test body runs -- and must
 pass -- identically for every implementation.
+
+The contract of the stores that implement the primitives of
+``BaseStore`` is tested in more detail in ``test_contract.py``.
 """
 
 from __future__ import annotations
@@ -186,6 +189,56 @@ def test_set_on_conflict_merge(store: BaseStore) -> None:
 def test_set_on_conflict_invalid_raises(store: BaseStore) -> None:
     with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
         store.set("1", {"text": "hello"}, on_conflict="bogus")
+
+
+def test_set_on_conflict_is_keyword_only(store: BaseStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        store.set("1", {"text": "hello"}, "skip")
+
+
+def test_set_many_on_conflict_is_keyword_only(store: BaseStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        store.set_many({"1": {"text": "hello"}}, "skip")
+
+
+def test_set_batches_on_conflict_is_keyword_only(store: BaseStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        store.set_batches([("1", {"text": "hello"})], 32, "skip")
+
+
+async def test_aset_on_conflict_is_keyword_only(store: BaseStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        await store.aset("1", {"text": "hello"}, "skip")
+
+
+async def test_aset_many_on_conflict_is_keyword_only(store: BaseStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        await store.aset_many({"1": {"text": "hello"}}, "skip")
+
+
+async def test_aset_batches_on_conflict_is_keyword_only(store: BaseStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        await store.aset_batches([("1", {"text": "hello"})], 32, "skip")
+
+
+def test_set_batches_empty_closed_store_raises(unopened_store: BaseStore) -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        unopened_store.set_batches([])
+
+
+async def test_aset_batches_empty_closed_store_raises(unopened_store: BaseStore) -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        await unopened_store.aset_batches([])
+
+
+def test_set_batches_empty_invalid_on_conflict_raises(store: BaseStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        store.set_batches([], on_conflict="bogus")
+
+
+async def test_aset_batches_empty_invalid_on_conflict_raises(store: BaseStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        await store.aset_batches([], on_conflict="bogus")
 
 
 # --- get_many ---
