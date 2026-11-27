@@ -1,19 +1,26 @@
 from __future__ import annotations
 
+import functools
 import logging
 import pickle
+import threading
+from typing import TYPE_CHECKING
 
 import pytest
 
 from persista.cache.utils import (
     is_json_serializable,
     is_picklable,
+    make_call_key,
     make_json_key,
     make_key,
     make_pickle_key,
     split_get_many,
     split_try_get_many,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -61,22 +68,51 @@ def test_make_json_key_non_json_serializable_argument() -> None:
         make_json_key("func", (Custom(),), {})
 
 
-def test_make_json_key_non_json_serializable_argument_ignored() -> None:
-    class Custom:
-        pass
+def test_make_json_key_ignore_non_serializable_positional_argument_raises() -> None:
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        make_json_key("func", (object(),), {}, ignore_non_serializable=True)
 
-    assert make_json_key("func", (Custom(),), {}, ignore_non_serializable=True) == make_json_key(
-        "func", (), {}, ignore_non_serializable=True
+
+def test_make_json_key_ignore_non_serializable_unhashable_positional_argument_raises() -> None:
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        make_json_key("func", ([object()],), {}, ignore_non_serializable=True)
+
+
+def test_make_json_key_non_json_serializable_kwarg_value_ignored() -> None:
+    assert make_json_key(
+        "func", (), {"a": 1, "obj": object()}, ignore_non_serializable=True
+    ) == make_json_key("func", (), {"a": 1, "obj": object()}, ignore_non_serializable=True)
+
+
+def test_make_json_key_ignored_kwarg_name_stays_in_key() -> None:
+    assert make_json_key(
+        "func", (), {"a": object()}, ignore_non_serializable=True
+    ) != make_json_key("func", (), {"b": object()}, ignore_non_serializable=True)
+
+
+def test_make_json_key_ignored_kwarg_differs_from_absent_kwarg() -> None:
+    assert make_json_key(
+        "func", (), {"a": 1, "obj": object()}, ignore_non_serializable=True
+    ) != make_json_key("func", (), {"a": 1}, ignore_non_serializable=True)
+
+
+def test_make_json_key_ignored_kwarg_differs_from_none_value() -> None:
+    assert make_json_key("func", (), {"obj": object()}, ignore_non_serializable=True) != (
+        make_json_key("func", (), {"obj": None}, ignore_non_serializable=True)
     )
 
 
-def test_make_json_key_non_json_serializable_kwarg_ignored() -> None:
-    class Custom:
-        pass
-
+def test_make_json_key_ignored_kwargs_order_independent() -> None:
     assert make_json_key(
-        "func", (), {"a": 1, "obj": Custom()}, ignore_non_serializable=True
-    ) == make_json_key("func", (), {"a": 1}, ignore_non_serializable=True)
+        "func", (), {"a": object(), "b": object()}, ignore_non_serializable=True
+    ) == make_json_key("func", (), {"b": object(), "a": object()}, ignore_non_serializable=True)
+
+
+def test_make_json_key_ignore_non_serializable_does_not_mutate_kwargs() -> None:
+    obj = object()
+    kwargs = {"a": 1, "obj": obj}
+    make_json_key("func", (), kwargs, ignore_non_serializable=True)
+    assert kwargs == {"a": 1, "obj": obj}
 
 
 def test_make_json_key_ignore_non_serializable_keeps_serializable_args() -> None:
@@ -86,12 +122,9 @@ def test_make_json_key_ignore_non_serializable_keeps_serializable_args() -> None
 
 
 def test_make_json_key_ignore_non_serializable_different_serializable_values() -> None:
-    class Custom:
-        pass
-
-    assert make_json_key("func", (1, Custom()), {}, ignore_non_serializable=True) != make_json_key(
-        "func", (2, Custom()), {}, ignore_non_serializable=True
-    )
+    assert make_json_key(
+        "func", (1,), {"obj": object()}, ignore_non_serializable=True
+    ) != make_json_key("func", (2,), {"obj": object()}, ignore_non_serializable=True)
 
 
 def test_make_json_key_ignore_non_serializable_default_false() -> None:
@@ -102,20 +135,14 @@ def test_make_json_key_ignore_non_serializable_default_false() -> None:
         make_json_key("func", (), {"obj": Custom()})
 
 
-def test_make_json_key_non_json_serializable_unhashable_argument_ignored() -> None:
-    assert make_json_key("func", ([object()],), {}, ignore_non_serializable=True) == make_json_key(
-        "func", (), {}, ignore_non_serializable=True
-    )
-
-
 def test_make_json_key_json_serializable_unhashable_argument() -> None:
     assert make_json_key("func", ([1, 2],), {}) == make_json_key("func", ([1, 2],), {})
 
 
 def test_make_json_key_non_json_serializable_unhashable_kwarg_ignored() -> None:
     assert make_json_key(
-        "func", (), {"a": 1, "obj": {"x": object()}}, ignore_non_serializable=True
-    ) == make_json_key("func", (), {"a": 1}, ignore_non_serializable=True)
+        "func", (), {"obj": {"x": object()}}, ignore_non_serializable=True
+    ) == make_json_key("func", (), {"obj": object()}, ignore_non_serializable=True)
 
 
 ###########################
@@ -162,16 +189,36 @@ def test_make_pickle_key_non_picklable_argument() -> None:
         make_pickle_key("func", (lambda x: x,), {})
 
 
-def test_make_pickle_key_non_picklable_argument_ignored() -> None:
-    assert make_pickle_key(
-        "func", (lambda x: x,), {}, ignore_non_serializable=True
-    ) == make_pickle_key("func", (), {}, ignore_non_serializable=True)
+def test_make_pickle_key_ignore_non_serializable_positional_argument_raises() -> None:
+    with pytest.raises((pickle.PicklingError, TypeError, AttributeError), match=r"pickle"):
+        make_pickle_key("func", (threading.Lock(),), {}, ignore_non_serializable=True)
 
 
-def test_make_pickle_key_non_picklable_kwarg_ignored() -> None:
+def test_make_pickle_key_non_picklable_kwarg_value_ignored() -> None:
     assert make_pickle_key(
         "func", (), {"a": 1, "obj": lambda x: x}, ignore_non_serializable=True
-    ) == make_pickle_key("func", (), {"a": 1}, ignore_non_serializable=True)
+    ) == make_pickle_key(
+        "func", (), {"a": 1, "obj": threading.Lock()}, ignore_non_serializable=True
+    )
+
+
+def test_make_pickle_key_ignored_kwarg_name_stays_in_key() -> None:
+    assert make_pickle_key(
+        "func", (), {"a": lambda x: x}, ignore_non_serializable=True
+    ) != make_pickle_key("func", (), {"b": lambda x: x}, ignore_non_serializable=True)
+
+
+def test_make_pickle_key_ignored_kwarg_differs_from_absent_kwarg() -> None:
+    assert make_pickle_key(
+        "func", (), {"a": 1, "obj": lambda x: x}, ignore_non_serializable=True
+    ) != make_pickle_key("func", (), {"a": 1}, ignore_non_serializable=True)
+
+
+def test_make_pickle_key_ignore_non_serializable_does_not_mutate_kwargs() -> None:
+    lock = threading.Lock()
+    kwargs = {"a": 1, "obj": lock}
+    make_pickle_key("func", (), kwargs, ignore_non_serializable=True)
+    assert kwargs == {"a": 1, "obj": lock}
 
 
 def test_make_pickle_key_ignore_non_serializable_keeps_serializable_args() -> None:
@@ -185,10 +232,9 @@ def test_make_pickle_key_ignore_non_serializable_default_false() -> None:
         make_pickle_key("func", (), {"obj": lambda x: x})
 
 
-def test_make_pickle_key_non_picklable_unhashable_argument_ignored() -> None:
-    assert make_pickle_key(
-        "func", ([lambda x: x],), {}, ignore_non_serializable=True
-    ) == make_pickle_key("func", (), {}, ignore_non_serializable=True)
+def test_make_pickle_key_ignore_non_serializable_unhashable_positional_argument_raises() -> None:
+    with pytest.raises((pickle.PicklingError, TypeError, AttributeError), match=r"pickle"):
+        make_pickle_key("func", ([threading.Lock()],), {}, ignore_non_serializable=True)
 
 
 def test_make_pickle_key_picklable_unhashable_argument() -> None:
@@ -213,12 +259,9 @@ def test_make_key_strategy_pickle() -> None:
 
 
 def test_make_key_strategy_json_supports_ignore_non_serializable() -> None:
-    class Custom:
-        pass
-
     assert make_key(
-        "func", (Custom(),), {}, strategy="json", ignore_non_serializable=True
-    ) == make_key("func", (), {}, strategy="json", ignore_non_serializable=True)
+        "func", (), {"a": object()}, strategy="json", ignore_non_serializable=True
+    ) == make_json_key("func", (), {"a": object()}, ignore_non_serializable=True)
 
 
 def test_make_key_strategy_json_non_serializable_raises() -> None:
@@ -311,6 +354,77 @@ def test_is_picklable(value: object, expected: bool) -> None:
 )
 def test_is_picklable_repeated_calls_are_consistent(value: object) -> None:
     assert is_picklable(value) is is_picklable(value)
+
+
+#########################
+#     make_call_key     #
+#########################
+
+
+def _load(x: int = 0) -> int:
+    return x
+
+
+def _function_of_module(module: str | None) -> Callable[[], None]:
+    """Return a function whose ``__module__`` is ``module``."""
+
+    def load() -> None:
+        pass
+
+    load.__module__ = module
+    return load
+
+
+def test_make_call_key_uses_module_and_qualified_name() -> None:
+    assert make_call_key(_load, (1,), {"y": 2}) == make_key(f"{__name__}:_load", (1,), {"y": 2})
+
+
+def test_make_call_key_same_qualname_different_modules() -> None:
+    assert make_call_key(_function_of_module("a"), (), {}) != make_call_key(
+        _function_of_module("b"), (), {}
+    )
+
+
+def test_make_call_key_same_module_and_qualname() -> None:
+    assert make_call_key(_function_of_module("a"), (), {}) == make_call_key(
+        _function_of_module("a"), (), {}
+    )
+
+
+def test_make_call_key_without_module() -> None:
+    func = _function_of_module(None)
+    assert make_call_key(func, (), {}) == make_key(f":{func.__qualname__}", (), {})
+
+
+def test_make_call_key_without_qualname_uses_repr() -> None:
+    func = functools.partial(_load, 1)
+    assert make_call_key(func, (), {}) == make_key(f"functools:{func!r}", (), {})
+
+
+def test_make_call_key_different_args() -> None:
+    assert make_call_key(_load, (1,), {}) != make_call_key(_load, (2,), {})
+
+
+def test_make_call_key_pickle_strategy() -> None:
+    assert make_call_key(_load, (1,), {}, strategy="pickle") == make_pickle_key(
+        f"{__name__}:_load", (1,), {}
+    )
+
+
+def test_make_call_key_unknown_strategy() -> None:
+    with pytest.raises(ValueError, match=r"Unknown strategy: 'yaml'"):
+        make_call_key(_load, (), {}, strategy="yaml")
+
+
+def test_make_call_key_ignore_non_serializable_kwarg() -> None:
+    assert make_call_key(_load, (), {"x": object()}, ignore_non_serializable=True) == make_call_key(
+        _load, (), {"x": object()}, ignore_non_serializable=True
+    )
+
+
+def test_make_call_key_ignore_non_serializable_positional_argument_raises() -> None:
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        make_call_key(_load, (object(),), {}, ignore_non_serializable=True)
 
 
 ########################

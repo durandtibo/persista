@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = [
     "is_json_serializable",
     "is_picklable",
+    "make_call_key",
     "make_json_key",
     "make_key",
     "make_pickle_key",
@@ -15,9 +16,12 @@ __all__ = [
 import json
 import pickle
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from coola.hashing import hash_bytes
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def is_json_serializable(value: Any) -> bool:
@@ -88,23 +92,23 @@ def make_json_key(
     ``func_name``, ``args``, and ``kwargs`` are JSON-serialized (with
     ``kwargs`` keys sorted, so key order doesn't affect the result)
     and hashed. ``args`` and the values in ``kwargs`` must be
-    JSON-serializable, unless ``ignore_non_serializable`` is set.
+    JSON-serializable. With ``ignore_non_serializable``, only the
+    values of keyword arguments may be left out.
 
     Args:
-        func_name: The name of the function being cached, typically
-            its ``__qualname__``.
+        func_name: A name that identifies the function being cached.
         args: The positional arguments the function was called with.
-            Must be JSON-serializable, unless ``ignore_non_serializable``
-            is set.
+            Must be JSON-serializable, even if
+            ``ignore_non_serializable`` is set.
         kwargs: The keyword arguments the function was called with.
             Must be JSON-serializable, unless ``ignore_non_serializable``
             is set.
-        ignore_non_serializable: If ``True``, positional arguments and
-            keyword argument values that are not JSON-serializable are
-            dropped before computing the key, instead of raising an
-            error. This means calls that only differ in a non-serializable
-            argument (e.g. a logger or a client instance) map to the
-            same key.
+        ignore_non_serializable: If ``True``, the values of keyword
+            arguments that are not JSON-serializable are left out of the
+            key, instead of raising an error. The names of these
+            arguments stay in the key, so calls that only differ in such
+            a value (e.g. a logger or a client instance) map to the same
+            key. Positional arguments are never left out.
 
     Returns:
         A hash of ``func_name``, ``args``, and ``kwargs``, stable
@@ -112,9 +116,9 @@ def make_json_key(
         order.
 
     Raises:
-        TypeError: If ``args`` or ``kwargs`` contains a value that is
-            not JSON-serializable and ``ignore_non_serializable`` is
-            ``False``.
+        TypeError: If ``args`` contains a value that is not
+            JSON-serializable, or if ``kwargs`` does and
+            ``ignore_non_serializable`` is ``False``.
 
     Example:
         ```pycon
@@ -128,10 +132,14 @@ def make_json_key(
 
         ```
     """
+    ignored: list[str] = []
     if ignore_non_serializable:
-        args = tuple(a for a in args if is_json_serializable(a))
-        kwargs = {k: v for k, v in kwargs.items() if is_json_serializable(v)}
-    raw = json.dumps({"func": func_name, "args": args, "kwargs": kwargs}, sort_keys=True)
+        ignored = sorted(k for k, v in kwargs.items() if not is_json_serializable(v))
+        kwargs = {k: v for k, v in kwargs.items() if k not in ignored}
+    payload: dict[str, Any] = {"func": func_name, "args": args, "kwargs": kwargs}
+    if ignored:
+        payload["ignored"] = ignored
+    raw = json.dumps(payload, sort_keys=True)
     return hash_bytes(raw.encode())
 
 
@@ -207,20 +215,19 @@ def make_pickle_key(
     version (pickle's format can change across versions).
 
     Args:
-        func_name: The name of the function being cached, typically
-            its ``__qualname__``.
+        func_name: A name that identifies the function being cached.
         args: The positional arguments the function was called with.
-            Must be picklable, unless ``ignore_non_serializable`` is
+            Must be picklable, even if ``ignore_non_serializable`` is
             set.
         kwargs: The keyword arguments the function was called with.
             Must be picklable, unless ``ignore_non_serializable`` is
             set.
-        ignore_non_serializable: If ``True``, positional arguments and
-            keyword argument values that are not picklable are
-            dropped before computing the key, instead of raising an
-            error. This means calls that only differ in a
-            non-picklable argument (e.g. a logger or a client
-            instance) map to the same key.
+        ignore_non_serializable: If ``True``, the values of keyword
+            arguments that are not picklable are left out of the key,
+            instead of raising an error. The names of these arguments
+            stay in the key, so calls that only differ in such a value
+            (e.g. a logger or a client instance) map to the same key.
+            Positional arguments are never left out.
 
     Returns:
         A hash of ``func_name``, ``args``, and ``kwargs``, stable
@@ -228,9 +235,11 @@ def make_pickle_key(
         order.
 
     Raises:
-        pickle.PicklingError: If ``args`` or ``kwargs`` contains a
-            value that cannot be pickled and ``ignore_non_serializable``
-            is ``False``.
+        pickle.PicklingError: If ``args`` contains a value that cannot
+            be pickled, or if ``kwargs`` does and
+            ``ignore_non_serializable`` is ``False``. Depending on the
+            value, ``pickle`` raises ``TypeError`` or
+            ``AttributeError`` instead.
 
     Example:
         ```pycon
@@ -246,10 +255,14 @@ def make_pickle_key(
 
         ```
     """
+    ignored: list[str] = []
     if ignore_non_serializable:
-        args = tuple(a for a in args if is_picklable(a))
-        kwargs = {k: v for k, v in kwargs.items() if is_picklable(v)}
-    raw = pickle.dumps((func_name, args, sorted(kwargs.items())))
+        ignored = sorted(k for k, v in kwargs.items() if not is_picklable(v))
+        kwargs = {k: v for k, v in kwargs.items() if k not in ignored}
+    payload: tuple[Any, ...] = (func_name, args, sorted(kwargs.items()))
+    if ignored:
+        payload = (*payload, ignored)
+    raw = pickle.dumps(payload)
     return hash_bytes(raw)
 
 
@@ -264,10 +277,9 @@ def make_key(
     arguments, using the given serialization strategy.
 
     Args:
-        func_name: The name of the function being cached, typically
-            its ``__qualname__``.
+        func_name: A name that identifies the function being cached.
         args: The positional arguments the function was called with.
-            Must be serializable with ``strategy``, unless
+            Must be serializable with ``strategy``, even if
             ``ignore_non_serializable`` is set.
         kwargs: The keyword arguments the function was called with.
             Must be serializable with ``strategy``, unless
@@ -275,12 +287,13 @@ def make_key(
         strategy: The serialization strategy used to compute the key.
             Either ``"json"`` (see ``make_json_key``) or ``"pickle"``
             (see ``make_pickle_key``).
-        ignore_non_serializable: If ``True``, positional arguments and
-            keyword argument values that are not serializable with
-            ``strategy`` are dropped before computing the key, instead
-            of raising an error. This means calls that only differ in
-            a non-serializable argument (e.g. a logger or a client
-            instance) map to the same key.
+        ignore_non_serializable: If ``True``, the values of keyword
+            arguments that are not serializable with ``strategy`` are
+            left out of the key, instead of raising an error. The names
+            of these arguments stay in the key, so calls that only
+            differ in such a value (e.g. a logger or a client instance)
+            map to the same key. Positional arguments are never left
+            out.
 
     Returns:
         A hash of ``func_name``, ``args``, and ``kwargs``, stable
@@ -289,12 +302,14 @@ def make_key(
 
     Raises:
         ValueError: If ``strategy`` is not ``"json"`` or ``"pickle"``.
-        TypeError: If ``strategy`` is ``"json"`` and ``args`` or
-            ``kwargs`` contains a value that is not JSON-serializable
+        TypeError: If ``strategy`` is ``"json"`` and ``args`` contains
+            a value that is not JSON-serializable, or ``kwargs`` does
             and ``ignore_non_serializable`` is ``False``.
         pickle.PicklingError: If ``strategy`` is ``"pickle"`` and
-            ``args`` or ``kwargs`` contains a value that cannot be
-            pickled and ``ignore_non_serializable`` is ``False``.
+            ``args`` contains a value that cannot be pickled, or
+            ``kwargs`` does and ``ignore_non_serializable`` is
+            ``False``. Depending on the value, ``pickle`` raises
+            ``TypeError`` or ``AttributeError`` instead.
 
     Example:
         ```pycon
@@ -318,6 +333,70 @@ def make_key(
         )
     msg = f"Unknown strategy: {strategy!r}. Expected 'json' or 'pickle'."
     raise ValueError(msg)
+
+
+def make_call_key(
+    func: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    strategy: str = "json",
+    ignore_non_serializable: bool = False,
+) -> str:
+    """Derive the cache key of one call of a function.
+
+    The function is identified by its module and its qualified name
+    (``__module__`` and ``__qualname__``), so functions with the same
+    name in different modules do not share their keys. A callable
+    without a ``__qualname__`` is identified by its ``repr`` instead.
+
+    Args:
+        func: The function being called.
+        args: The positional arguments the function was called with.
+            See ``make_key``.
+        kwargs: The keyword arguments the function was called with.
+            See ``make_key``.
+        strategy: The serialization strategy used to compute the key.
+            See ``make_key``.
+        ignore_non_serializable: Whether to leave out of the key the
+            values of keyword arguments that are not serializable. See
+            ``make_key``.
+
+    Returns:
+        A hash of the module and qualified name of ``func``, ``args``,
+        and ``kwargs``.
+
+    Raises:
+        ValueError: If ``strategy`` is not ``"json"`` or ``"pickle"``.
+        TypeError: If an argument cannot be serialized. See
+            ``make_key``.
+        pickle.PicklingError: If ``strategy`` is ``"pickle"`` and an
+            argument cannot be pickled. See ``make_key``.
+
+    Example:
+        ```pycon
+        >>> from persista.cache.utils import make_call_key
+        >>> def add(x, y):
+        ...     return x + y
+        ...
+        >>> make_call_key(add, (1, 2), {}) == make_call_key(add, (1, 2), {})
+        True
+        >>> make_call_key(add, (1, 2), {}) == make_call_key(add, (1, 3), {})
+        False
+
+        ```
+    """
+    module = getattr(func, "__module__", None) or ""
+    qualname = getattr(func, "__qualname__", None) or repr(func)
+    # ":" cannot appear in a module or qualified name, so the two parts
+    # cannot be confused.
+    return make_key(
+        f"{module}:{qualname}",
+        args,
+        kwargs,
+        strategy=strategy,
+        ignore_non_serializable=ignore_non_serializable,
+    )
 
 
 def split_get_many(

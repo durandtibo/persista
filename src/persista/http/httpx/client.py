@@ -25,28 +25,103 @@ if TYPE_CHECKING:
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+# Headers that describe the transfer of a content, not the decoded content.
+_TRANSFER_HEADERS = frozenset({"content-encoding", "content-length", "transfer-encoding"})
 
-def _cache_key(method: str, url: str, kwargs: dict[str, Any]) -> str:
-    """Derive a cache key for an HTTP request.
+
+def _prepare_cache_lookup(
+    client: httpx.Client | httpx.AsyncClient,
+    method: str,
+    url: str,
+    kwargs: dict[str, Any],
+) -> tuple[httpx.Request, str] | None:
+    """Build the request and the cache key of a call, if its response can
+    be cached.
+
+    A response cannot be cached if the request is authenticated (an
+    ``auth`` of the client or of the call, or credentials in the URL),
+    if its body is streamed (including a multipart upload), if the
+    client has request event hooks (they can change the request after
+    the key is computed), or if the call passes ``extensions`` (they can
+    change how the request is sent).
 
     Args:
+        client: The client that sends the request.
         method: The HTTP method, e.g. ``"GET"``.
-        url: The full URL being requested.
-        kwargs: The request kwargs (e.g. ``params``, ``json``) used to
-            derive the key. Values that are not JSON-serializable
-            (e.g. an ``auth`` object) are dropped.
+        url: The URL passed to the call, possibly relative to the
+            ``base_url`` of the client.
+        kwargs: The other arguments of the call, as accepted by
+            :meth:`httpx.Client.request`. Not modified. Its values are
+            read once more when the request is sent, so ``headers`` must
+            not be a one-shot iterable.
 
     Returns:
-        A stable cache key for the request.
+        A ``(request, key)`` tuple, where ``request`` is the request
+        built by the client and ``key`` its cache key, or ``None`` if
+        the response must not be cached.
     """
-    return make_key(f"{method.upper()} {url}", (), kwargs, ignore_non_serializable=True)
+    # A multipart upload is streamed. It is checked before the request
+    # is built, so that a one-shot iterable of files is not consumed.
+    if client.event_hooks["request"] or kwargs.get("extensions") or kwargs.get("files"):
+        return None
+    auth: Any = kwargs.get("auth", httpx.USE_CLIENT_DEFAULT)
+    if auth is httpx.USE_CLIENT_DEFAULT:
+        auth = client.auth
+    if auth is not None:
+        return None
+    follow_redirects: Any = kwargs.get("follow_redirects", httpx.USE_CLIENT_DEFAULT)
+    if follow_redirects is httpx.USE_CLIENT_DEFAULT:
+        follow_redirects = client.follow_redirects
+    build_kwargs = {k: v for k, v in kwargs.items() if k not in ("auth", "follow_redirects")}
+    request = client.build_request(method, url, **build_kwargs)
+    if request.url.userinfo:
+        return None
+    try:
+        key = _cache_key(request, follow_redirects=follow_redirects)
+    except httpx.RequestNotRead:
+        return None
+    return request, key
+
+
+def _cache_key(request: httpx.Request, *, follow_redirects: bool) -> str:
+    """Derive the cache key of a request.
+
+    Args:
+        request: The request, built by the client that sends it, so that
+            it contains the final URL and all the headers.
+        follow_redirects: Whether redirects are followed, since this
+            changes the response of a redirected request.
+
+    Returns:
+        A hash of the method, URL, headers (names are case-insensitive),
+        body, and ``follow_redirects``.
+
+    Raises:
+        httpx.RequestNotRead: If the body of the request is streamed.
+    """
+    # latin-1 maps every byte to one character, so no information is lost.
+    headers = [
+        (name.lower().decode("latin-1"), value.decode("latin-1"))
+        for name, value in request.headers.raw
+    ]
+    body = base64.b64encode(request.content).decode("ascii")
+    return make_key(
+        "persista.http.httpx",
+        (request.method, str(request.url), headers, body, follow_redirects),
+        {},
+    )
 
 
 def _response_to_entry(response: httpx.Response) -> dict[str, Any]:
     """Convert a response to a JSON-serializable cache entry.
 
+    The content is stored decoded, so the headers that describe how it
+    was transferred (``content-encoding``, ``content-length`` and
+    ``transfer-encoding``) are not stored.
+
     Args:
-        response: The response to convert.
+        response: The response to convert. Its content must have been
+            read.
 
     Returns:
         A dict with the response's status code, headers, and
@@ -54,25 +129,31 @@ def _response_to_entry(response: httpx.Response) -> dict[str, Any]:
     """
     return {
         "status_code": response.status_code,
-        "headers": dict(response.headers),
+        "headers": {
+            name: value
+            for name, value in response.headers.items()
+            if name.lower() not in _TRANSFER_HEADERS
+        },
         "content": base64.b64encode(response.content).decode("ascii"),
     }
 
 
-def _entry_to_response(entry: dict[str, Any]) -> httpx.Response:
+def _entry_to_response(entry: dict[str, Any], request: httpx.Request) -> httpx.Response:
     """Reconstruct a response from a cache entry.
 
     Args:
         entry: A cache entry produced by :func:`_response_to_entry`.
+        request: The request that the response answers.
 
     Returns:
-        An :class:`httpx.Response` equivalent to the one that was
-        cached.
+        An :class:`httpx.Response` with the status code, headers, and
+        content of the one that was cached, and ``request`` attached.
     """
     return httpx.Response(
         status_code=entry["status_code"],
         headers=entry["headers"],
         content=base64.b64decode(entry["content"]),
+        request=request,
     )
 
 
@@ -82,10 +163,25 @@ class HttpClient:
 
     Retry behavior is delegated to :func:`~persista.http.httpx.send_request`.
     Caching is opt-in: it is only performed when ``cache`` is given, and
-    only for methods listed in ``cacheable_methods``. Cached entries store
-    the response's status code, headers, and content, so a cache hit
-    reconstructs an :class:`httpx.Response` equivalent to the one that
-    was cached. Only successful (2xx) responses are cached.
+    only for methods listed in ``cacheable_methods``. Only successful
+    (2xx) responses are cached.
+
+    A cached response is served only for a request with the same method,
+    final URL (including the ``base_url`` and parameters of the client),
+    headers (including those of the client and the cookies), body, and
+    redirect setting, as built by
+    :meth:`httpx.Client.build_request`. The cache is not used at all for
+    a request that has an ``auth`` (of the client or of the call) or
+    credentials in its URL, a streaming body (including ``files``
+    uploads), or ``extensions``, nor for a client with request event
+    hooks. The ``Cache-Control``, ``ETag`` and ``Vary`` headers are not
+    interpreted.
+
+    A response from the cache has the status code, headers and content of
+    the one that was cached, except the ``content-encoding``,
+    ``content-length`` and ``transfer-encoding`` headers (the content is
+    stored decoded, and ``content-length`` is that of the decoded
+    content). Its ``request`` is the request of the current call.
 
     Args:
         timeout: Default request timeout in seconds per attempt.
@@ -164,11 +260,18 @@ class HttpClient:
         """
         method = method.upper()
         cache = self._cache
-        cacheable = cache is not None and method in self._cacheable_methods
-        key = _cache_key(method, url, kwargs) if cacheable else None
-        if cache is not None and key is not None and (entry := cache.get(key)) is not None:
-            logger.debug("Serving %s %s from cache", method, url)
-            return _entry_to_response(entry)
+        lookup = None
+        if cache is not None and method in self._cacheable_methods:
+            if "headers" in kwargs:
+                # The headers are read twice (for the key and to send the
+                # request), so a one-shot iterable must be materialized.
+                kwargs["headers"] = httpx.Headers(kwargs["headers"])
+            lookup = _prepare_cache_lookup(self._client, method, url, kwargs)
+        if cache is not None and lookup is not None:
+            request, key = lookup
+            if (entry := cache.get(key)) is not None:
+                logger.debug("Serving %s %s from cache", method, url)
+                return _entry_to_response(entry, request)
 
         response = send_request(
             method=method,
@@ -181,8 +284,8 @@ class HttpClient:
             client=self._client,
             **kwargs,
         )
-        if cache is not None and key is not None and response.is_success:
-            cache.set(key, _response_to_entry(response))
+        if cache is not None and lookup is not None and response.is_success:
+            cache.set(lookup[1], _response_to_entry(response))
         return response
 
     def get(self, url: str, **kwargs: Any) -> httpx.Response:
@@ -296,11 +399,18 @@ class AsyncHttpClient:
         """
         method = method.upper()
         cache = self._cache
-        cacheable = cache is not None and method in self._cacheable_methods
-        key = _cache_key(method, url, kwargs) if cacheable else None
-        if cache is not None and key is not None and (entry := await cache.aget(key)) is not None:
-            logger.debug("Serving %s %s from cache", method, url)
-            return _entry_to_response(entry)
+        lookup = None
+        if cache is not None and method in self._cacheable_methods:
+            if "headers" in kwargs:
+                # The headers are read twice (for the key and to send the
+                # request), so a one-shot iterable must be materialized.
+                kwargs["headers"] = httpx.Headers(kwargs["headers"])
+            lookup = _prepare_cache_lookup(self._client, method, url, kwargs)
+        if cache is not None and lookup is not None:
+            request, key = lookup
+            if (entry := await cache.aget(key)) is not None:
+                logger.debug("Serving %s %s from cache", method, url)
+                return _entry_to_response(entry, request)
 
         response = await send_request_async(
             method=method,
@@ -313,8 +423,8 @@ class AsyncHttpClient:
             client=self._client,
             **kwargs,
         )
-        if cache is not None and key is not None and response.is_success:
-            await cache.aset(key, _response_to_entry(response))
+        if cache is not None and lookup is not None and response.is_success:
+            await cache.aset(lookup[1], _response_to_entry(response))
         return response
 
     async def get(self, url: str, **kwargs: Any) -> httpx.Response:

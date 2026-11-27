@@ -194,8 +194,8 @@ store is still accessed synchronously; only the function is awaited:
 
 ## Memoizing Functions with `Cache.memoize`
 
-`Cache.memoize` is a decorator that caches a function's return value, keyed on the function name
-and its arguments. It works on both sync and `async def` functions:
+`Cache.memoize` is a decorator that caches a function's return value, keyed on the module and
+name of the function and on its arguments. It works on both sync and `async def` functions:
 
 ```pycon
 >>> from persista.cache import Cache
@@ -223,11 +223,13 @@ via `make_key` (see [Cache Keys](#cache-keys) below):
   across Python versions and processes, but requires every argument to be JSON-serializable.
   `"pickle"` supports a broader range of argument types, at the cost of a key that is only stable
   within a single Python version.
-- `ignore_non_serializable`: if `True`, positional arguments and keyword argument values that
-  aren't serializable with `strategy` are silently dropped before computing the key, instead of
-  raising an error. This is useful when a function takes an argument that will never be
-  serializable (e.g. a logger or a client instance) but shouldn't prevent caching — calls that
-  differ only in that argument then share the same cache entry.
+- `ignore_non_serializable`: if `True`, the values of keyword arguments that aren't serializable
+  with `strategy` are left out of the key, instead of raising an error. This is useful when a
+  function takes an argument that will never be serializable (e.g. a logger or a client instance)
+  but shouldn't prevent caching: calls that differ only in the value of that argument then share the
+  same cache entry. The argument must be passed by keyword: a positional argument is never left out,
+  so a call with a non-serializable positional argument raises an error. This includes `self` when
+  a method is decorated.
 
 ```pycon
 >>> from persista.cache import Cache
@@ -398,8 +400,15 @@ affects both:
 
 ## Cache Keys
 
-Internally, `memoize`, `cached`, and `async_cached` derive a cache key from the function's
-qualified name and its arguments using `make_key`, which serializes `(func, args, kwargs)` with
+Internally, `memoize`, `amemoize`, `cached`, and `async_cached` derive a cache key with
+`make_call_key`, which identifies the function by its module and qualified name (`__module__` and
+`__qualname__`) and passes them with the arguments to `make_key`. Functions with the same name in
+different modules therefore have different keys, while two functions with the same module and
+qualified name (e.g. two closures returned by the same factory) share their keys. A decorated bound
+method is identified by the name of the method, not by its instance, which is not part of its
+arguments: decorate it only if the result does not depend on the instance.
+
+`make_key` serializes the name, `args`, and `kwargs` with
 sorted keyword argument keys and hashes the result. Calls with the same arguments (regardless of
 keyword argument order) map to the same key:
 
@@ -432,23 +441,36 @@ True
 
 By default, an argument that isn't serializable with `strategy` raises an error when the key is
 computed — meaning the decorated function can't be called with that argument at all. Pass
-`ignore_non_serializable=True` to instead silently drop non-serializable positional arguments and
-keyword argument values before computing the key:
+`ignore_non_serializable=True` to instead leave the values of non-serializable keyword arguments
+out of the key:
 
 ```pycon
 >>> import threading
 >>> from persista.cache.utils import make_key
->>> make_key("add", (1, threading.Lock()), {}, ignore_non_serializable=True) == make_key(
-...     "add", (1,), {}, ignore_non_serializable=True
-... )
+>>> make_key(
+...     "add", (1,), {"lock": threading.Lock()}, ignore_non_serializable=True
+... ) == make_key("add", (1,), {"lock": threading.Lock()}, ignore_non_serializable=True)
 True
 
 ```
 
 This is useful for arguments that will never be serializable (e.g. a logger or a client instance)
-but that shouldn't block caching. Note that since the argument is dropped rather than incorporated
-into the key, calls that differ _only_ in such an argument are treated as the same call and share
-a cached result — make sure that's the behavior you want before enabling it for a given argument.
+but that shouldn't block caching. The name of the argument stays in the key, but its value does
+not, so calls that differ _only_ in such a value are treated as the same call and share a cached
+result — make sure that's the behavior you want before enabling it for a given function.
+
+Positional arguments are never left out, because the remaining arguments would shift and different
+calls would share a key:
+
+```pycon
+>>> import threading
+>>> from persista.cache.utils import make_key
+>>> make_key("add", (1, threading.Lock()), {}, ignore_non_serializable=True)
+Traceback (most recent call last):
+...
+TypeError: Object of type lock is not JSON serializable...
+
+```
 
 ## API Reference
 

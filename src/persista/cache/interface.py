@@ -15,7 +15,7 @@ import inspect
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from persista.cache.cache import _UNSET, Cache
-from persista.cache.utils import make_key
+from persista.cache.utils import make_call_key
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -81,24 +81,6 @@ def set_cache(cache: Cache) -> None:
     _state["cache"] = cache
 
 
-def _make_call_key(
-    func: Callable[..., Any],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    strategy: str,
-    ignore_non_serializable: bool,
-) -> str:
-    """Derive a cache key for one call, shared by :func:`cached` and
-    :func:`async_cached`'s wrappers."""
-    return make_key(
-        getattr(func, "__qualname__", repr(func)),
-        args,
-        kwargs,
-        strategy=strategy,
-        ignore_non_serializable=ignore_non_serializable,
-    )
-
-
 def cached(
     ttl: float | None = _UNSET,
     strategy: str = "json",
@@ -111,9 +93,9 @@ def cached(
     shared cache via :func:`set_cache` also changes where
     already-decorated functions store their results.
 
-    The cache key is derived from the decorated function's qualified
-    name (``__qualname__``) and call arguments, via
-    :func:`~persista.cache.utils.make_key`.
+    The cache key is derived from the decorated function's module and
+    qualified name (``__module__`` and ``__qualname__``) and call
+    arguments, via :func:`~persista.cache.utils.make_call_key`.
 
     Args:
         ttl: The time-to-live, in seconds, applied to cached results.
@@ -122,10 +104,10 @@ def cached(
         strategy: The serialization strategy used to compute the
             cache key. Either ``"json"`` or ``"pickle"``. See
             :func:`~persista.cache.utils.make_key`.
-        ignore_non_serializable: If ``True``, positional arguments and
-            keyword argument values that are not serializable with
-            ``strategy`` are dropped before computing the key, instead
-            of raising an error. See
+        ignore_non_serializable: If ``True``, the values of keyword
+            arguments that are not serializable with ``strategy`` are
+            left out of the key, instead of raising an error.
+            Positional arguments are never left out. See
             :func:`~persista.cache.utils.make_key`.
 
     Returns:
@@ -159,7 +141,13 @@ def cached(
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 cache = get_cache()
-                key = _make_call_key(func, args, kwargs, strategy, ignore_non_serializable)
+                key = make_call_key(
+                    func,
+                    args,
+                    kwargs,
+                    strategy=strategy,
+                    ignore_non_serializable=ignore_non_serializable,
+                )
                 return await cache.aget_or_compute(key, func, args, kwargs, ttl=ttl)
 
             return cast("Callable[..., T]", async_wrapper)
@@ -167,7 +155,13 @@ def cached(
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> T:
             cache = get_cache()
-            key = _make_call_key(func, args, kwargs, strategy, ignore_non_serializable)
+            key = make_call_key(
+                func,
+                args,
+                kwargs,
+                strategy=strategy,
+                ignore_non_serializable=ignore_non_serializable,
+            )
             return cache.get_or_compute(key, func, args, kwargs, ttl=ttl)
 
         return wrapper
@@ -187,9 +181,9 @@ def async_cached(
     shared cache via :func:`set_cache` also changes where
     already-decorated functions store their results.
 
-    The cache key is derived from the decorated function's qualified
-    name (``__qualname__``) and call arguments, via
-    :func:`~persista.cache.utils.make_key`.
+    The cache key is derived from the decorated function's module and
+    qualified name (``__module__`` and ``__qualname__``) and call
+    arguments, via :func:`~persista.cache.utils.make_call_key`.
 
     Args:
         ttl: The time-to-live, in seconds, applied to cached results.
@@ -198,10 +192,10 @@ def async_cached(
         strategy: The serialization strategy used to compute the
             cache key. Either ``"json"`` or ``"pickle"``. See
             :func:`~persista.cache.utils.make_key`.
-        ignore_non_serializable: If ``True``, positional arguments and
-            keyword argument values that are not serializable with
-            ``strategy`` are dropped before computing the key, instead
-            of raising an error. See
+        ignore_non_serializable: If ``True``, the values of keyword
+            arguments that are not serializable with ``strategy`` are
+            left out of the key, instead of raising an error.
+            Positional arguments are never left out. See
             :func:`~persista.cache.utils.make_key`.
 
     Returns:
@@ -237,7 +231,13 @@ def async_cached(
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             cache = get_cache()
-            key = _make_call_key(func, args, kwargs, strategy, ignore_non_serializable)
+            key = make_call_key(
+                func,
+                args,
+                kwargs,
+                strategy=strategy,
+                ignore_non_serializable=ignore_non_serializable,
+            )
             return await cache.aget_or_compute(key, func, args, kwargs, ttl=ttl)
 
         return wrapper

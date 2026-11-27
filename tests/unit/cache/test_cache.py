@@ -715,13 +715,46 @@ def test_memoize_ignore_non_serializable(cache: Cache) -> None:
     calls = []
 
     @cache.memoize(strategy="json", ignore_non_serializable=True)
-    def func(x: int, _obj: object) -> int:
+    def func(x: int, _obj: object = None) -> int:
         calls.append(x)
         return x * 2
 
-    assert func(1, object()) == 2
-    assert func(1, object()) == 2  # different object, but shares the cache entry
+    assert func(1, _obj=object()) == 2
+    assert func(1, _obj=object()) == 2  # different object, but shares the cache entry
     assert calls == [1]
+
+
+def test_memoize_ignore_non_serializable_positional_argument_raises(cache: Cache) -> None:
+    @cache.memoize(ignore_non_serializable=True)
+    def func(first: object, second: object) -> str:
+        return f"{type(first).__name__}-{type(second).__name__}"
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        func(1, threading.Lock())
+
+
+def test_memoize_ignore_non_serializable_self_raises(cache: Cache) -> None:
+    class Loader:
+        @cache.memoize(ignore_non_serializable=True)
+        def load(self, x: int) -> int:
+            return x
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        Loader().load(1)
+
+
+def test_memoize_same_qualname_different_modules(cache: Cache) -> None:
+    def make_func(module: str) -> Callable[[int], str]:
+        def load(_x: int) -> str:
+            return module
+
+        load.__module__ = module
+        return cache.memoize()(load)
+
+    first = make_func("first")
+    second = make_func("second")
+    first(1)
+    assert second(1) == "second"
 
 
 def test_memoize_kwargs(cache: Cache) -> None:
@@ -761,8 +794,8 @@ def test_memoize_two_caches_do_not_share_entries() -> None:
 
 
 def test_memoize_shared_across_functions_with_same_qualname(cache: Cache) -> None:
-    # keys are derived from __qualname__, which is the same for both
-    # closures below, so their cached results collide
+    # keys are derived from __module__ and __qualname__, which are the
+    # same for both closures below, so their cached results collide
     calls = []
 
     def make_func() -> Callable[[int], int]:
@@ -884,13 +917,48 @@ async def test_memoize_ignore_non_serializable_async(cache: Cache) -> None:
     calls = []
 
     @cache.memoize(strategy="json", ignore_non_serializable=True)
-    async def func(x: int, _obj: object) -> int:
+    async def func(x: int, _obj: object = None) -> int:
         calls.append(x)
         return x * 2
 
-    assert await func(1, object()) == 2
-    assert await func(1, object()) == 2  # different object, but shares the cache entry
+    assert await func(1, _obj=object()) == 2
+    assert await func(1, _obj=object()) == 2  # different object, but shares the cache entry
     assert calls == [1]
+
+
+async def test_memoize_ignore_non_serializable_positional_argument_raises_async(
+    cache: Cache,
+) -> None:
+    @cache.memoize(ignore_non_serializable=True)
+    async def func(first: object, second: object) -> str:
+        return f"{type(first).__name__}-{type(second).__name__}"
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        await func(1, threading.Lock())
+
+
+async def test_memoize_ignore_non_serializable_self_raises_async(cache: Cache) -> None:
+    class Loader:
+        @cache.memoize(ignore_non_serializable=True)
+        async def load(self, x: int) -> int:
+            return x
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        await Loader().load(1)
+
+
+async def test_memoize_same_qualname_different_modules_async(cache: Cache) -> None:
+    def make_func(module: str) -> Callable[[int], Coroutine[None, None, str]]:
+        async def load(_x: int) -> str:
+            return module
+
+        load.__module__ = module
+        return cache.memoize()(load)
+
+    first = make_func("first")
+    second = make_func("second")
+    await first(1)
+    assert await second(1) == "second"
 
 
 async def test_memoize_kwargs_async(cache: Cache) -> None:
@@ -1490,13 +1558,46 @@ async def test_amemoize_ignore_non_serializable(cache: Cache) -> None:
     calls = []
 
     @cache.amemoize(strategy="json", ignore_non_serializable=True)
-    async def func(x: int, _obj: object) -> int:
+    async def func(x: int, _obj: object = None) -> int:
         calls.append(x)
         return x * 2
 
-    assert await func(1, object()) == 2
-    assert await func(1, object()) == 2  # different object, shares the cache entry
+    assert await func(1, _obj=object()) == 2
+    assert await func(1, _obj=object()) == 2  # different object, but shares the cache entry
     assert calls == [1]
+
+
+async def test_amemoize_ignore_non_serializable_positional_argument_raises(cache: Cache) -> None:
+    @cache.amemoize(ignore_non_serializable=True)
+    async def func(first: object, second: object) -> str:
+        return f"{type(first).__name__}-{type(second).__name__}"
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        await func(1, threading.Lock())
+
+
+async def test_amemoize_ignore_non_serializable_self_raises(cache: Cache) -> None:
+    class Loader:
+        @cache.amemoize(ignore_non_serializable=True)
+        async def load(self, x: int) -> int:
+            return x
+
+    with pytest.raises(TypeError, match=r"not JSON serializable"):
+        await Loader().load(1)
+
+
+async def test_amemoize_same_qualname_different_modules(cache: Cache) -> None:
+    def make_func(module: str) -> Callable[[int], Coroutine[None, None, str]]:
+        async def load(_x: int) -> str:
+            return module
+
+        load.__module__ = module
+        return cache.amemoize()(load)
+
+    first = make_func("first")
+    second = make_func("second")
+    await first(1)
+    assert await second(1) == "second"
 
 
 async def test_amemoize_kwargs(cache: Cache) -> None:
@@ -1532,8 +1633,8 @@ async def test_amemoize_two_caches_do_not_share_entries() -> None:
 
 
 async def test_amemoize_shared_across_functions_with_same_qualname(cache: Cache) -> None:
-    # keys are derived from __qualname__, which is the same for both
-    # closures below, so their cached results collide
+    # keys are derived from __module__ and __qualname__, which are the
+    # same for both closures below, so their cached results collide
     calls = []
 
     def make_func() -> Callable[[int], Coroutine[None, None, int]]:
