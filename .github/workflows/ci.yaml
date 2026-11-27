@@ -5,18 +5,21 @@
 # separate full test run.
 #
 # Deliberately NOT called from here, each standalone with its own trigger:
+#   - ci-benchmark-import.yaml: runs daily to track the import time.
 #   - ci-benchmark.yaml: runs nightly on its own schedule instead of gating
 #     every PR/push, since a benchmark regression isn't a merge blocker.
-#   - ci-verify-workflows.yaml: lints .github/workflows/* itself, so it
-#     triggers on workflow-file changes rather than every PR/push.
+#   - ci-verify-workflows.yaml: lints .github/workflows/* itself, so it has its
+#     own trigger instead of being part of this workflow.
+# See .github/GUIDELINES.md for the naming/prefix and runs-on/timeout
+# conventions shared across every workflow in this directory.
 #
 # The individual check jobs below call out to per-check reusable workflows
 # (ci-build.yaml, ci-format.yaml, ...) instead of inlining their steps here,
 # so each check can still be run/tested on its own (workflow_dispatch) and to
-# keep this file short. Job ids are load-bearing: main's branch protection
-# requires status checks named "format / format", "pre-commit / pre-commit"
-# and "type-checking / type-checking", derived from the job id here plus the
-# job id in the called workflow - keep both in sync if either is renamed.
+# keep this file short. Job ids are load-bearing: the ruleset of main
+# requires the status check named "pre-commit / pre-commit", derived from the
+# job id here plus the job id in the called workflow - keep both in sync if
+# either is renamed.
 
 name: CI
 on:
@@ -27,18 +30,23 @@ on:
   schedule:
     - cron: "10 9 * * *" # Run nightly at 9:10 AM UTC to catch issues from external changes
   workflow_dispatch: # to trigger manually
+  workflow_call: # to allow other workflows to run the CI
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  # Load the shared python-version/OS matrix once, and pass it down to every
-  # job below that needs it.
+  # Load the shared python-version/OS matrix from the default config of
+  # durandtibo/workflow-config-action
+  # once, and pass it down to every job below that needs it.
   get-matrix:
+    permissions:
+      contents: read
     uses: ./.github/workflows/lib-get-test-matrix.yaml
 
   # Validate package can be built and installed correctly
   build:
+    permissions:
+      contents: read
     needs: get-matrix
     uses: ./.github/workflows/ci-build.yaml
     with:
@@ -46,28 +54,40 @@ jobs:
 
   # Check for circular import dependencies
   cyclic-imports:
+    permissions:
+      contents: read
     uses: ./.github/workflows/ci-cyclic-imports.yaml
 
   # Run doctests on code examples
   doctest:
+    permissions:
+      contents: read
     uses: ./.github/workflows/ci-doctest.yaml
     secrets: inherit
 
   # Verify code formatting and linting
   format:
+    permissions:
+      contents: read
     uses: ./.github/workflows/ci-format.yaml
 
   # Check type annotations with ty
   type-checking:
+    permissions:
+      contents: read
     uses: ./.github/workflows/ci-type-checking.yaml
 
   # Run pre-commit hooks for code quality
   pre-commit:
+    permissions:
+      contents: read
     uses: ./.github/workflows/ci-pre-commit.yaml
 
   # Run unit and integration tests across multiple Python versions and OS.
   # secrets: inherit is required so the "all" job can upload coverage to Codecov.
   test:
+    permissions:
+      contents: read
     needs: get-matrix
     uses: ./.github/workflows/ci-test.yaml
     with:
@@ -76,6 +96,8 @@ jobs:
 
   # Test compatibility with different dependency versions
   test-deps:
+    permissions:
+      contents: read
     needs: get-matrix
     uses: ./.github/workflows/ci-test-deps.yaml
     with:

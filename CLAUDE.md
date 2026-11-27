@@ -11,6 +11,8 @@
 - Lint and format before committing: `.venv/bin/ruff check src tests` and
   `.venv/bin/ruff format src tests`. Fix the issues raised by ruff. Ignoring an issue (`noqa`, a
   changed rule set) is not fixing it.
+- `make format` and `make lint` format and lint the YAML, Makefile, shell, TOML and Markdown
+  files (and the workflows with `actionlint`); CI runs both.
 - Type check with `.venv/bin/ty check`. Fix the issues raised by ty. Ignoring an issue
   (`type: ignore`, `ty: ignore`, a cast that hides the problem) is not fixing it. CI also runs
   `pyright` (`inv types.check --complete`). Both check `src` (`ty` also checks `dev`), not `tests`.
@@ -200,8 +202,9 @@ when you add, rename or remove a workflow.
 
 - The file name starts with a prefix that gives the role of the workflow:
   - `ci-`: quality and test checks of the repository source. Most are reusable workflows
-    (`workflow_call`) called from `ci.yaml`. `ci-benchmark.yaml` (scheduled) and
-    `ci-verify-workflows.yaml` are standalone and not called from `ci.yaml`.
+    (`workflow_call`, plus `workflow_dispatch` to run one alone) called from `ci.yaml`.
+    `ci-benchmark*.yaml` (scheduled) and `ci-verify-workflows.yaml` (every PR) are standalone
+    and not called from `ci.yaml`.
   - `lib-`: reusable helpers that compute an output for other workflows (test matrix, package
     dependencies, extras, versions).
   - `nightly-`: scheduled tests of the _published_ PyPI package, not of the source.
@@ -212,18 +215,21 @@ when you add, rename or remove a workflow.
     documentation are triggered by version tags (`v*.*.*`) or manually, the development
     documentation by a push to `main`. They do not run `ci.yaml`, so check that CI passes on the
     commit before tagging.
-  - `security-`: dependency review of PRs and scorecard.
+  - `security-`: dependency review of PRs, scheduled dependency audit and scorecard.
 - `ci.yaml` is the single entry point of the checks (pull request, push to `main`, nightly).
   It calls `lib-get-test-matrix.yaml` once and passes the matrix (`test-matrix` input) to the
   test workflows, so the Python versions and OS are defined in one place. To add a check,
   create a `ci-<name>.yaml` reusable workflow and add a job in `ci.yaml`.
-- The job ids of `ci.yaml` and of the workflows it calls name the status checks required by the
-  branch protection of `main`: do not rename them.
-- Conventions: a header comment that says what the workflow does and when it runs; the minimum
-  permissions; `timeout-minutes` on every job; actions pinned to a commit SHA with a `# ratchet:`
-  comment (`bot-pin-action.yaml` maintains them).
+- The job ids of `ci.yaml` and of the workflows it calls name the status checks of the ruleset
+  of `main` (`pre-commit / pre-commit` is required): do not rename them.
+- Conventions: a header comment that says what the workflow does and when it runs; `permissions: {}`
+  at the workflow level and the minimum permissions per job; `timeout-minutes`
+  on every job; actions pinned to a commit SHA with a `# ratchet:` comment (`bot-pin-action.yaml`
+  maintains them).
 - `ci-verify-workflows.yaml` lints the workflows: check your changes with `actionlint` when
   available.
+- Set `permissions` on every job (including jobs that call a reusable workflow). Every workflow
+  has `permissions: {}` at the workflow level (it grants nothing), never a grant.
 
 ## Releases
 

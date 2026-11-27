@@ -3,7 +3,7 @@ name: Get Package Extras
 # This reusable workflow wraps the extract-pyproject-metadata-action composite
 # action so its output can be used from a job's `strategy.matrix` (a `uses:`
 # composite action alone can't be, since it produces a step output, not a job
-# output).
+# output). It also exposes the project name.
 #
 # Usage:
 #   jobs:
@@ -29,6 +29,9 @@ on:
         type: string
         default: "[]"
     outputs:
+      name:
+        description: "Project name, from pyproject.toml's [project].name"
+        value: ${{ jobs.get-extras.outputs.name }}
       extras:
         description: "JSON array of extra names from pyproject.toml's [project.optional-dependencies], plus extra-values"
         value: ${{ jobs.get-extras.outputs.extras }}
@@ -40,21 +43,23 @@ on:
         type: string
         default: "[]"
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   get-extras:
+    permissions:
+      contents: read
     runs-on: ubuntu-slim
     timeout-minutes: 2
     outputs:
+      name: ${{ steps.extras.outputs.name }}
       extras: ${{ steps.extras.outputs.extras }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
 
-      - name: Get package extras
+      - name: Get package name and extras
         id: extras
-        uses: durandtibo/extract-pyproject-metadata-action@4661b78698e6ceb7e04cf60bbdd52addf85a2889 # ratchet:durandtibo/extract-pyproject-metadata-action@v0.2
+        uses: durandtibo/extract-pyproject-metadata-action@aa5867876178387ad9d5da757d157c5febfaef5d # ratchet:durandtibo/extract-pyproject-metadata-action@v0.3.1
         with:
           extra-values: ${{ inputs.extra-values }}

@@ -13,15 +13,16 @@ on:
         type: string
         required: true
       test-matrix:
-        description: "JSON test matrix from get-test-matrix.yaml, loaded once by the caller"
+        description: "JSON test matrix from lib-get-test-matrix.yaml, loaded once by the caller"
         required: true
         type: string
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   test:
+    permissions:
+      contents: read
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
     strategy:
@@ -39,15 +40,21 @@ jobs:
 
       # Install uv package manager
       - name: Install uv and set the python version
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # ratchet:astral-sh/setup-uv@v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # ratchet:astral-sh/setup-uv@v10.4.0
         with:
           python-version: ${{ matrix.python-version }}
           activate-environment: true
 
+      - name: Get package name
+        id: metadata
+        uses: durandtibo/extract-pyproject-metadata-action@aa5867876178387ad9d5da757d157c5febfaef5d # ratchet:durandtibo/extract-pyproject-metadata-action@v0.3.1
+
       # Install the package from PyPI
       - name: Install package
+        env:
+          PACKAGE_NAME: ${{ steps.metadata.outputs.name }}
         run: |
-          uv pip install persista
+          uv pip install "$PACKAGE_NAME"
 
       # Install specific version of dependency for compatibility testing
       - name: Install valid package version

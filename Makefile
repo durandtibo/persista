@@ -1,17 +1,14 @@
 SHELL = /bin/bash
 
-include .make/help.mk
-include .make/makefile.mk
-include .make/markdown.mk
-include .make/self.mk
-include .make/shell.mk
-include .make/uv.mk
-include .make/yaml.mk
+include .make/all.mk
 
-.DEFAULT_GOAL := help
+.PHONY: clean
+clean: ## Remove the generated coverage reports and caches
+	rm -rf coverage.xml .coverage htmlcov .pytest_cache .ruff_cache .hypothesis
 
-.PHONY: format
-format: format-yaml format-makefile format-shell format-markdown ## Format all files
+.PHONY: all
+all: lint test ## Run the linters and the tests
 
-.PHONY: lint
-lint: lint-yaml lint-makefile lint-shell lint-markdown ## Lint all files
+.PHONY: test
+test: ## Run the unit tests
+	pytest tests/unit -q

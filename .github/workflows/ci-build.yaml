@@ -7,17 +7,18 @@ on:
   workflow_call:
     inputs:
       test-matrix:
-        description: "JSON test matrix from get-test-matrix.yaml, loaded once by the caller"
+        description: "JSON test matrix from lib-get-test-matrix.yaml, loaded once by the caller"
         required: true
         type: string
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   # Load the extras from pyproject.toml's [project.optional-dependencies],
   # plus "" for a baseline "no extra" build.
   get-extras:
+    permissions:
+      contents: read
     uses: ./.github/workflows/lib-get-package-extras.yaml
     with:
       extra-values: '[""]'
@@ -28,6 +29,8 @@ jobs:
   # two into one matrix would need an `include:` fan-out plus conditional
   # steps for little gain, since the two jobs vary orthogonal axes.
   build:
+    permissions:
+      contents: read
     needs: get-extras
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -43,37 +46,26 @@ jobs:
       - name: Verify Build
         uses: durandtibo/verify-uv-build-action@88da014d506b5f0b4f657d4ba8920061ab785620 # ratchet:durandtibo/verify-uv-build-action@v0.0.7
         with:
-          package-name: persista
+          package-name: ${{ needs.get-extras.outputs.name }}
           package-extra: ${{ matrix.package-extra }}
           package-dependencies: ""
           dist-type: ${{ matrix.dist-type }}
       - name: Run package checks
         shell: bash
+        env:
+          PACKAGE_EXTRA: ${{ matrix.package-extra }}
         run: |2
 
           set -euo pipefail
           echo "🔍 Running package checks..."
-          python tests/package_checks.py
+          python tests/package/checks.py --extra "$PACKAGE_EXTRA"
 
           echo "✅ Package checks passed"
-      - name: Check optional packages installation
-        if: ${{ matrix.package-extra != '' }}
-        shell: bash
-        env:
-          PACKAGE_EXTRA: ${{ matrix.package-extra }}
-        run: |
-          set -euo pipefail
-          echo "🔍 Verifying if $PACKAGE_EXTRA is installed..."
-
-          if ! uv pip list | grep -qE "^${PACKAGE_EXTRA}\s"; then
-            echo "❌ Error: Package '$PACKAGE_EXTRA' not found in installed packages"
-            echo "Installed packages:"
-            uv pip list
-            exit 1
-          fi
-          echo "✅ Package '$PACKAGE_EXTRA' is installed"
 
   build-all:
+    permissions:
+      contents: read
+    needs: get-extras
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -88,23 +80,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # ratchet:actions/checkout@v7
       - name: Install uv and set the python version
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # ratchet:astral-sh/setup-uv@v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # ratchet:astral-sh/setup-uv@v10.4.0
         with:
           python-version: ${{ matrix.python-version }}
           activate-environment: true
       - name: Verify Build
         uses: durandtibo/verify-uv-build-action@88da014d506b5f0b4f657d4ba8920061ab785620 # ratchet:durandtibo/verify-uv-build-action@v0.0.7
         with:
-          package-name: persista
+          package-name: ${{ needs.get-extras.outputs.name }}
           package-extra: all
           package-dependencies: ""
           dist-type: ${{ matrix.dist-type }}
           verify-sdist-extra: false
       - name: Run package checks
+        env:
+          # The extras are not installed for the sdist (verify-sdist-extra: false)
+          PACKAGE_EXTRA: ${{ matrix.dist-type == 'wheel' && 'all' || '' }}
         run: |2
 
           set -euo pipefail
           echo "🔍 Running package checks..."
-          python tests/package_checks.py
+          python tests/package/checks.py --extra "$PACKAGE_EXTRA"
 
           echo "✅ Package checks passed"
