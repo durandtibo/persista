@@ -26,30 +26,30 @@ shared piece of code) instead of by the discipline of each backend or caller.
 
 ### 1.1 The package
 
-| Property                                  | Statement                                                                                                                                                           | Enforced by                                    |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| One contract                              | A caller can change the backend of a store, and so of a cache or a record store, without changing the calling code or the results.                                  | `BaseStore` public methods, the contract tests |
-| Sync and async parity                     | Every operation that touches a backend has a sync method and an `a`-prefixed twin with the same arguments, results and errors.                                      | `BaseStore`, the contract tests                |
-| No silent wrong result                    | An input that cannot be handled raises. It is never dropped, coerced differently per backend, or confused with another input.                                       | validation in one place                        |
-| Explicit lifecycle                        | A constructor does not connect. `open`/`aopen` do. A closed object raises `RuntimeError` on every operation, including with an empty input.                         | `BaseStore`                                    |
-| Optional libraries stay optional and lazy | Outside `testing` (which needs `pytest`), `import persista.<subpackage>` needs no optional library and imports none. A missing library is reported when it is used. | the `check_*` helpers, an import test          |
-| Layered                                   | `utils` ← `store` ← `cache` ← `http`; `store` ← `record`. `testing` is imported by nobody in `src`.                                                                 | `lint-imports`                                 |
-| Secrets stay private                      | A password in a URL or connection string never appears in a `repr`, a log message or an error.                                                                      | the stores' `repr`, tests                      |
+| Property                                  | Statement                                                                                                                                                                                                                          | Enforced by                                    |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| One contract                              | A caller can change the backend of a store, and so of a cache or a record store, without changing the calling code. The same call gives the same result, except for the documented limits of a backend (section 1.7), which raise. | `BaseStore` public methods, the contract tests |
+| Sync and async parity                     | Every operation that touches a backend has a sync method and an `a`-prefixed twin with the same arguments, results and errors.                                                                                                     | `BaseStore`, the contract tests                |
+| No silent wrong result                    | An input that cannot be handled raises. It is never dropped, coerced differently per backend, or confused with another input.                                                                                                      | validation in one place                        |
+| Explicit lifecycle                        | A constructor does not connect. `open`/`aopen` do. A closed object raises `RuntimeError` on every operation, including with an empty input.                                                                                        | `BaseStore`                                    |
+| Optional libraries stay optional and lazy | Outside `testing` (which needs `pytest`), `import persista.<subpackage>` needs no optional library and imports none. A missing library is reported when it is used.                                                                | the `check_*` helpers, an import test          |
+| Layered                                   | `utils` ← `store` ← `cache` ← `http`; `store` ← `record`. `testing` is imported by nobody in `src`.                                                                                                                                | `lint-imports`                                 |
+| Secrets stay private                      | A password in a URL or connection string never appears in a `repr`, a log message or an error. `to_uri` is the one exception: it returns what is needed to reconnect.                                                              | the stores' `repr`, tests                      |
 
 ### 1.2 `persista.store`
 
-| Property             | Statement                                                                                                                                                                              | Enforced by                      |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| Key domain           | A key is a non-empty `str` of at most 511 UTF-8 bytes, without NUL, compared byte for byte (case-sensitive). Any other key raises `ValueError` on every backend.                       | `BaseStore`                      |
-| Value domain         | A value is a `dict` that the codec of the store can encode (`json` by default, `pickle` on request).                                                                                   | the codec                        |
-| Round trip           | `get(key)` returns `codec.decode(codec.encode(value))`: the same result on every backend that uses the same codec, including the in-memory store.                                      | the codec, applied by the base   |
-| Isolation            | Mutating a value that was passed to a store or returned by it never changes the stored value.                                                                                          | the codec (only payloads stored) |
-| Atomic conflicts     | `raise`, `skip` and `merge` are atomic against every other writer of the same data: threads, tasks, instances and processes. With `raise`, a conflict writes nothing.                  | `_update` of each backend        |
-| One filter semantics | `filter` matches on the equality of top-level fields with JSON types (`True` is not `1`, `"1"` is not `1`, `1` is `1.0`); `None` matches a null or absent field. Any field name works. | one Python predicate in the base |
-| Stable iteration     | A key present during a whole iteration is yielded exactly once, even if other keys are written or deleted during the iteration. The values in memory are bounded by `batch_size`.      | each `_iter_batches`             |
-| Durable              | No TTL: a value stays until it is deleted or the store is cleared. (`InMemoryStore` and `NullStore` are not persistent.)                                                               | the base                         |
-| Owned data           | A store only reads, counts and clears the data under its own path, table or namespace.                                                                                                 | the constructor arguments        |
-| Small extension      | A new backend implements the primitives (about ten methods) and inherits validation, codec, conflicts, filtering and async twins.                                                      | `BaseStore`                      |
+| Property             | Statement                                                                                                                                                                                            | Enforced by                      |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| Key domain           | A key is a `str`, compared exactly (case-sensitive). A backend that accepts fewer keys documents it and raises `ValueError` before it writes; its limit does not apply to the other backends.        | `BaseStore`, each backend        |
+| Value domain         | A value is a `dict` that the codec of the store can encode (`json` by default, `pickle` on request).                                                                                                 | the codec                        |
+| Round trip           | `get(key)` returns `codec.decode(codec.encode(value))`: the same result on every backend that uses the same codec, including the in-memory store. A value that would lose data raises (decision D5). | the codec, applied by the base   |
+| Isolation            | Mutating a value that was passed to a store or returned by it never changes the stored value.                                                                                                        | the codec (only payloads stored) |
+| Atomic conflicts     | `raise`, `skip` and `merge` are atomic against every other writer of the same data: threads, tasks, instances and processes. With `raise`, a conflict writes nothing.                                | `_update` of each backend        |
+| One filter semantics | `filter` matches on the equality of top-level fields with JSON types (`True` is not `1`, `"1"` is not `1`, `1` is `1.0`); `None` matches a null or absent field. Any field name works.               | one Python predicate in the base |
+| Stable iteration     | A key present during a whole iteration is yielded exactly once, even if other keys are written or deleted during the iteration. The values in memory are bounded by `batch_size`.                    | each `_iter_batches`             |
+| Durable              | No TTL: a value stays until it is deleted or the store is cleared. (`InMemoryStore` and `NullStore` are not persistent.)                                                                             | the base                         |
+| Owned data           | A store only reads, counts and clears the data under its own path, table or namespace.                                                                                                               | the constructor arguments        |
+| Small extension      | A new backend implements the primitives (about ten methods) and its two URI methods, and inherits validation, codec, conflicts, filtering and async twins.                                           | `BaseStore`                      |
 
 ### 1.3 `persista.cache`
 
@@ -73,12 +73,12 @@ shared piece of code) instead of by the discipline of each backend or caller.
 
 ### 1.5 `persista.http`
 
-| Property      | Statement                                                                                                                                     | Enforced by        |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| Transparent   | A request behaves as with the wrapped `httpx` client (its timeout, base URL, headers and authentication), plus retries and an optional cache. | the client wrapper |
-| Safe retries  | Only idempotent methods are retried unless the caller says otherwise. The delay is bounded and never negative.                                | one retry policy   |
-| Sound cache   | A cached response is served only for a request with the same method, final URL, headers and body. An authenticated request is not cached.     | the cache key      |
-| Same response | A response from the cache has the same status, content and usable methods (`json`, `raise_for_status`) as the original.                       | entry conversion   |
+| Property      | Statement                                                                                                                                                         | Enforced by        |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| Transparent   | A request behaves as with the wrapped `httpx` client or `requests` session (timeout, headers, authentication), plus retries and, with `httpx`, an optional cache. | the client wrapper |
+| Safe retries  | Only idempotent methods are retried unless the caller says otherwise. The delay is bounded and never negative.                                                    | one retry policy   |
+| Sound cache   | A cached response is served only for a request with the same method, final URL, headers and body. An authenticated request is not cached.                         | the cache key      |
+| Same response | A response from the cache has the same status, content and usable methods (`json`, `raise_for_status`) as the original.                                           | entry conversion   |
 
 ### 1.6 `persista.utils` and `persista.testing`
 
@@ -87,6 +87,15 @@ holds the `pytest` marks that skip the tests of a missing optional library.
 
 ### 1.7 Not guaranteed, and documented as such
 
+- **Backend limits.** These do not restrict the other backends:
+
+  | Backend         | Limit                                                                                                                |
+  | --------------- | -------------------------------------------------------------------------------------------------------------------- |
+  | `LmdbStore`     | a key has 1 to 511 UTF-8 bytes: the empty key and a 600-character key fail **[verified]**                            |
+  | `FileStore`     | the encoded file name limits the key: 217 ASCII characters or 36 `é` today on macOS **[verified]** (see decision D6) |
+  | `PostgresStore` | a key cannot contain NUL, and the primary key index limits its length **[reading]**                                  |
+
+- **URIs** do not describe a whole store (section 4.4).
 - **Multi-key writes in `FileStore`** are atomic per file only, and its `raise`, `skip` and `merge`
   are atomic within one instance only.
 - **Transactions** across several calls.
@@ -122,29 +131,29 @@ section 1 hold only where each copy remembered them.
 
 ### 3.1 Stores
 
-| #   | Finding                                                                                                                                                                                                                                                                                                                                  | Status                              |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| S1  | **`filter` depends on the backend.** DuckDB matches `b="1"` to `1` and `b=1` to `"1"`, and raises `ConversionException` for `b=1` on a boolean. A list value raises in SQLite and matches elsewhere. A field name such as `x-y` raises in SQL stores and works in the others.                                                            | [verified]                          |
-| S2  | **PostgreSQL `filter(field=None)` matches nothing**: it builds `value->>'field' = NULL::text`. The local backends match a null or absent field. `value->>` also makes `"1"` match `1`.                                                                                                                                                   | [reading]                           |
-| S3  | **`raise` is not atomic across writers.** Two `SQLiteStore` instances on one file both succeed in 200 of 200 trials (the lock is per instance, with no transaction). On one instance, `set` and `aset` both succeed in 199 of 200 trials (two connections, two locks).                                                                   | [verified]                          |
-| S4  | **PostgreSQL conflicts.** Overwrites and deletes take no advisory lock, so they can interleave with a `merge`. Concurrent `aset_many` calls with `raise`/`skip`/`merge` open transactions on the same async connection, which nest or fail.                                                                                              | [reading]                           |
-| S5  | **`SQLiteStore(":memory:")` loses data between sync and async** when `aiosqlite` is installed: the async connection is another database. `set` then `aget` returns `None`, and the reverse.                                                                                                                                              | [verified]                          |
-| S6  | **Event loops.** A `SQLiteStore` whose async lock was contended in one `asyncio.run` raises `RuntimeError: ... bound to a different event loop` in the next one. The Redis and PostgreSQL async clients are also created once and reused.                                                                                                | [verified] SQLite, [reading] others |
-| S7  | **Iteration skips data.** Deleting the yielded keys during `iter_batches` visits 6 of 10 keys on the SQLite and DuckDB stores (`LIMIT ... OFFSET`), 10 of 10 on the others.                                                                                                                                                              | [verified]                          |
-| S8  | **Isolation.** Mutating a value returned by `InMemoryStore.values()` changes the stored value (`get` copies, `iter_batches` does not). The `data` property exposes the internal dict.                                                                                                                                                    | [verified]                          |
-| S9  | **Round trip.** A tuple and an `int` key survive `InMemoryStore` and the pickle store, and become a list and a `str` in the JSON stores. NaN is accepted by the local JSON stores (PostgreSQL rejects it).                                                                                                                               | [verified], PostgreSQL [reading]    |
-| S10 | **Keys.** `JsonFileStore` merges `"a"` and `"A"` on a case-insensitive file system (macOS), and fails on a 600-character key. LMDB rejects the empty key and the 600-character key. The others accept all of them.                                                                                                                       | [verified]                          |
-| S11 | **Closed stores.** `InMemoryStore` and `JsonFileStore` accept `get_many([])` and `delete_many([])` when closed, as does `aget_many([])` of SQLite. An invalid `on_conflict` with empty items raises only in `InMemoryStore`.                                                                                                             | [verified]                          |
-| S12 | **Typed stores diverge.** A `None` field is dropped on read; SQLite returns `True` as `1` and accepts `"abc"` in an `INTEGER` column that DuckDB rejects.                                                                                                                                                                                | [verified]                          |
-| S13 | **Typed stores corrupt data.** Reopening a `TypedSQLiteStore` with the schema in another order swaps the values of two fields. `from_uri` loses the schema: SQLite raises `JSONDecodeError`, DuckDB returns the value without its typed fields. The field names `extra`, `_key_` and, in SQLite, `order` fail with a raw database error. | [verified]                          |
-| S14 | **Redis owns no namespace.** Two stores on one database share the keys, `clear` of one empties the other, and `__keys__` is a forbidden key.                                                                                                                                                                                             | [fake]                              |
-| S15 | **Secrets in `repr` and logs**: the Redis URL and the PostgreSQL factory print the password; Redis logs its URL; `to_uri` of PostgreSQL returns it.                                                                                                                                                                                      | [verified] repr, [reading] others   |
-| S16 | **`repr` runs a query** (`COUNT(*)`, `SCARD`, a directory scan) on an open store.                                                                                                                                                                                                                                                        | [reading]                           |
-| S17 | **`open` failures** leak the connection of the PostgreSQL store and leave a DuckDB store marked open.                                                                                                                                                                                                                                    | [reading]                           |
-| S18 | **Native async SQLite costs more than it gives**: one `aget` takes 68 µs with `aiosqlite` and 48 µs with `asyncio.to_thread(store.get)` (one run, 3,000 calls). The second connection causes S3, S5, S6 and `async_close.py`.                                                                                                            | [verified]                          |
-| S19 | **Eager drivers.** `import persista.store` takes about 120 ms and imports every installed driver (psycopg 37 ms, DuckDB 33 ms, Redis 26 ms).                                                                                                                                                                                             | [verified]                          |
-| S20 | **Duplication.** `_check_open` is written in 8 modules although `check_is_open` exists; the pickle variants are separate classes in 4 backends; `filter_items` exists only on the SQL stores and is found with `getattr`.                                                                                                                | [reading]                           |
-| S21 | **URIs are lossy**: `value_schema` and `table` are not kept, and 2 or more classes share a scheme, so `store_from_uri` cannot rebuild them. `SQLiteStore.to_uri()` of `:memory:` comes back as a shared-cache database.                                                                                                                  | [reading], `:memory:` [verified]    |
+| #   | Finding                                                                                                                                                                                                                                                                                                                                              | Status                              |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| S1  | **`filter` depends on the backend.** DuckDB matches `b="1"` to `1` and `b=1` to `"1"`, and raises `ConversionException` for `b=1` on a boolean. A list value raises in SQLite and matches elsewhere. A field name such as `x-y` raises in SQL stores and works in the others.                                                                        | [verified]                          |
+| S2  | **PostgreSQL `filter(field=None)` matches nothing**: it builds `value->>'field' = NULL::text`. The local backends match a null or absent field. `value->>` also makes `"1"` match `1`.                                                                                                                                                               | [reading]                           |
+| S3  | **`raise` is not atomic across writers.** Two `SQLiteStore` instances on one file both succeed in 200 of 200 trials (the lock is per instance, with no transaction). On one instance, `set` and `aset` both succeed in 199 of 200 trials (two connections, two locks).                                                                               | [verified]                          |
+| S4  | **PostgreSQL conflicts.** Overwrites and deletes take no advisory lock, so they can interleave with a `merge`. Concurrent `aset_many` calls with `raise`/`skip`/`merge` open transactions on the same async connection, which nest or fail.                                                                                                          | [reading]                           |
+| S5  | **`SQLiteStore(":memory:")` loses data between sync and async** when `aiosqlite` is installed: the async connection is another database. `set` then `aget` returns `None`, and the reverse.                                                                                                                                                          | [verified]                          |
+| S6  | **Event loops.** A `SQLiteStore` whose async lock was contended in one `asyncio.run` raises `RuntimeError: ... bound to a different event loop` in the next one. The Redis and PostgreSQL async clients are also created once and reused.                                                                                                            | [verified] SQLite, [reading] others |
+| S7  | **Iteration skips data.** Deleting the yielded keys during `iter_batches` visits 6 of 10 keys on the SQLite and DuckDB stores (`LIMIT ... OFFSET`), 10 of 10 on the others.                                                                                                                                                                          | [verified]                          |
+| S8  | **Isolation.** Mutating a value returned by `InMemoryStore.values()` changes the stored value (`get` copies, `iter_batches` does not). The `data` property exposes the internal dict.                                                                                                                                                                | [verified]                          |
+| S9  | **Round trip.** A tuple and an `int` key survive `InMemoryStore` and the pickle store, and become a list and a `str` in the JSON stores, where `{1: "int", "1": "str"}` **silently loses one entry**. NaN and infinity are accepted by the local JSON stores (PostgreSQL rejects them). A lone surrogate is stored by SQLite and rejected by DuckDB. | [verified], PostgreSQL [reading]    |
+| S10 | **Keys.** `JsonFileStore` merges `"a"` and `"A"` on a case-insensitive file system (macOS). A key that a backend cannot store raises a library error (`OSError`, `BadValsizeError`) instead of `ValueError`, and the limits are not documented.                                                                                                      | [verified]                          |
+| S11 | **Closed stores.** `InMemoryStore` and `JsonFileStore` accept `get_many([])` and `delete_many([])` when closed, as does `aget_many([])` of SQLite. An invalid `on_conflict` with empty items raises only in `InMemoryStore`.                                                                                                                         | [verified]                          |
+| S12 | **Typed stores diverge.** A `None` field is dropped on read; SQLite returns `True` as `1` and accepts `"abc"` in an `INTEGER` column that DuckDB rejects.                                                                                                                                                                                            | [verified]                          |
+| S13 | **Typed stores corrupt data.** Reopening a `TypedSQLiteStore` with the schema in another order swaps the values of two fields. `from_uri` loses the schema: SQLite raises `JSONDecodeError`, DuckDB returns the value without its typed fields. The field names `extra`, `_key_` and, in SQLite, `order` fail with a raw database error.             | [verified]                          |
+| S14 | **Redis owns no namespace.** Two stores on one database share the keys, `clear` of one empties the other, and `__keys__` is a forbidden key.                                                                                                                                                                                                         | [fake]                              |
+| S15 | **Secrets in `repr` and logs**: the Redis URL and the PostgreSQL factory print the password; Redis logs its URL.                                                                                                                                                                                                                                     | [verified] repr, [reading] log      |
+| S16 | **`repr` runs a query** (`COUNT(*)`, `SCARD`, a directory scan) on an open store.                                                                                                                                                                                                                                                                    | [reading]                           |
+| S17 | **`open` failures** leak the connection of the PostgreSQL store and leave a DuckDB store marked open.                                                                                                                                                                                                                                                | [reading]                           |
+| S18 | **Native async SQLite gives little**: `aiosqlite` is slower for sequential `aget`, equal for concurrent reads, bulk reads and writes, and faster only for iteration in small batches (numbers in section 9.2). Its second connection causes S3, S5, S6 and part of `async_close.py`.                                                                 | [verified]                          |
+| S19 | **Eager drivers.** `import persista.store` takes about 120 ms and imports every installed driver (psycopg 37 ms, DuckDB 33 ms, Redis 26 ms).                                                                                                                                                                                                         | [verified]                          |
+| S20 | **Duplication.** `_check_open` is written in 8 modules although `check_is_open` exists; the pickle variants are separate classes in 4 backends; `filter_items` exists only on the SQL stores and is found with `getattr`.                                                                                                                            | [reading]                           |
+| S21 | **URI limitations are only partly stated.** `value_schema` and `table` are not kept (documented), shared schemes cannot be dispatched (documented), and `SQLiteStore(":memory:").to_uri()` comes back as a shared-cache database instead of a private one.                                                                                           | [reading], `:memory:` [verified]    |
 
 ### 3.2 Cache
 
@@ -168,7 +177,7 @@ section 1 hold only where each copy remembered them.
 | H4  | **`timeout` is ignored** when a client is given, so `HttpClient(client, timeout=1)` has no effect.                                                                                       | [verified]                   |
 | H5  | **`POST` is retried** (4 requests for one call), unlike the `requests` helper, which retries `GET` only.                                                                                 | [verified]                   |
 | H6  | `Retry-After: -1` raises `ValueError` from `sleep`; a date value is ignored; the delay has no maximum.                                                                                   | [verified] negative          |
-| H7  | **Two libraries and 12 functions** for one feature: `requests.py`, then 931 lines of `httpx` wrappers that differ by the method name.                                                    | [reading]                    |
+| H7  | **Repetition**: 931 lines of `httpx` functions that differ by the method name, and retry rules that differ from those of the `requests` helper (H5).                                     | [reading]                    |
 
 ### 3.4 Records
 
@@ -261,17 +270,19 @@ Rules of the contract:
 4. `_filter_candidates` returns a **superset** of the matches; the base applies the predicate to the
    decoded values. SQL stores push down the `str` and `int` conditions whose field name is a safe
    identifier. A push-down can make `filter` faster but never change its result.
-5. The default async primitive runs the sync one with `asyncio.to_thread`. The base holds one lock
-   per instance around the primitives of a backend that is not thread-safe. Iteration takes the
-   lock per batch, not across a `yield`.
+5. The default async primitive runs the sync one in a thread. A backend that is not thread-safe
+   has one lock per instance around its primitives, and one worker thread of its own for the async
+   calls, so that calls waiting for the store do not fill the default executor of the application.
+   Iteration takes the lock per batch, not across a `yield`.
 6. Only Redis and PostgreSQL override the async primitives with their native drivers. Their client
    belongs to the event loop that created it and is replaced in another loop. `close()` raises
    `RuntimeError` while an async client is open: call `aclose()`. `async_close.py` is deleted.
 
 Public methods: `get`, `get_many`, `contains`, `contains_many`, `set`, `set_many`, `set_batches`,
 `delete`, `delete_many`, `clear`, `filter`, `iter_batches`, `keys`, `values`, `count`, `open`,
-`close`, `closed`, and the `a`-prefixed twins. One change of signature: `filter(**fields)` returns
-`dict[str, dict]` (key to value), which removes `filter_items`. `on_conflict` becomes keyword-only.
+`close`, `closed`, `to_uri`, the class method `from_uri`, and the `a`-prefixed twins. One change of
+signature: `filter(**fields)` returns `dict[str, dict]` (key to value), which removes
+`filter_items`. `on_conflict` becomes keyword-only.
 
 ### 4.2 Codec
 
@@ -302,8 +313,8 @@ existing table does not match the codec raises on `open`.
 
 - **SQLite and DuckDB** have one connection per instance, so sync and async see the same data
   (S3, S5). `from_path` is replaced by `read_only`, which never creates a file or a directory.
-- **FileStore** names a file by the SHA-256 of its key and stores the key inside it, which fixes
-  both key bugs of S10. Listing the keys reads the files.
+- **FileStore** escapes the upper-case letters of a key in its file name, so that two keys never
+  differ only by case (S10, decision D6). A name that is too long raises `ValueError`.
 - **Redis** stores `<namespace>:v:<key>` and the set `<namespace>:keys`. There is no reserved key.
 - **PostgreSQL**: every write and delete takes the advisory locks of its keys (`clear` locks the
   table), and each async operation uses the connection exclusively (an `asyncio.Lock`), so
@@ -311,21 +322,39 @@ existing table does not match the codec raises on `open`.
 - `repr` shows the location without credentials and runs no query (S15, S16).
 - Each driver is imported in `_open`, after the `check_*` call (S19).
 
-### 4.4 Removed from `persista.store`
+### 4.4 URIs
 
-| Removed                                                                                                | Replacement                                                    |
-| ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| `TypedSQLiteStore`, `TypedDuckDBStore`, `TypedPostgresStore`                                           | the JSON stores (decision D1)                                  |
-| the 4 `Pickle*Store` classes, `JsonFileStore`                                                          | `codec=PickleCodec()`, `FileStore`                             |
-| `Base*Store` of each backend, `ThreadedAsyncStoreMixin`                                                | `BaseStore`                                                    |
-| `to_uri`, `from_uri`, `registry.py`, `uri.py`                                                          | a constructor, or `coola.factory.resolve_object` (decision D4) |
-| `store.factory` (18 classes), `resolve.py`                                                             | the same `resolve_object` configuration (decision D3)          |
-| `async_close.py`, the `aiosqlite` extra                                                                | rule 6 of section 4.1 (decision D2)                            |
-| `filter_items`, `split_present_missing`, `get_columns_info`, `show_columns_info`, `InMemoryStore.data` | `filter`, two comprehensions, the native connection            |
+`to_uri`, `from_uri`, `store_from_uri` and `register_scheme` stay (decision D4). A URI says **where
+the data is**, not how the store was configured. The user guide and the docstrings state:
+
+| Limitation                   | Detail                                                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Constructor options are lost | `table`, `namespace`, `map_size` and the driver arguments are not in the URI. `Class.from_uri(uri, **kwargs)` passes them again.            |
+| Codec of the server stores   | The scheme carries the codec of the local stores (`sqlite+pickle`, `file+json`, ...). `redis://` and `postgresql://` do not: pass `codec=`. |
+| Dispatch builds the default  | `store_from_uri` uses the class registered for the scheme with its default options. For other options, call `Class.from_uri`.               |
+| In-memory data               | `memory://`, `null://` and the `:memory:` databases give a new, empty store.                                                                |
+| `read_only`                  | Honoured by SQLite, DuckDB and LMDB; ignored by the others.                                                                                 |
+| Credentials                  | The URI of a server store contains the password. Treat it as a secret.                                                                      |
+| Machine-specific paths       | A local path is made absolute, so the URI is valid on a machine with the same files.                                                        |
+
+`from_uri` gains `**kwargs`: without it, a Redis store with the pickle codec could no longer be built
+from its URI once the pickle classes are gone. With decision D1, the `sqlite+typed` and
+`duckdb+typed` schemes disappear.
+
+### 4.5 Removed from `persista.store`
+
+| Removed                                                                                                | Replacement                                         |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
+| `TypedSQLiteStore`, `TypedDuckDBStore`, `TypedPostgresStore`                                           | the JSON stores (decision D1)                       |
+| the 4 `Pickle*Store` classes, `JsonFileStore`                                                          | `codec=PickleCodec()`, `FileStore`                  |
+| `Base*Store` of each backend, `ThreadedAsyncStoreMixin`                                                | `BaseStore`                                         |
+| `store.factory` (18 classes), `resolve.py`                                                             | `coola.factory.resolve_object` (decision D3)        |
+| `async_close.py`, the `aiosqlite` extra                                                                | rule 6 of section 4.1 (decision D2)                 |
+| `filter_items`, `split_present_missing`, `get_columns_info`, `show_columns_info`, `InMemoryStore.data` | `filter`, two comprehensions, the native connection |
 
 The native handles stay (`connection`, `client`, `environment`).
 
-### 4.5 Cache
+### 4.6 Cache
 
 ```python
 class Cache:
@@ -363,7 +392,7 @@ class Cache:
   `ignore_non_serializable`, the key and split helpers of `cache.utils`, the cache factories and
   `resolve_cache`. `MISSING` stays.
 
-### 4.6 Records
+### 4.7 Records
 
 - `Record(id, metadata)`: frozen, metadata copied behind a read-only proxy, hashed by `id`
   (consistent with equality), with `__reduce__` so that pickling and copying work.
@@ -381,7 +410,7 @@ class Cache:
   `print_metadata_stats_report`. Invalid parameters raise `ValueError`. `MetadataStats` becomes
   private.
 
-### 4.7 HTTP
+### 4.8 HTTP
 
 - `HttpClient(client=None, *, max_retries=3, retry_status_codes=..., retry_methods=...,
 max_delay=60.0, cache=None, cacheable_methods={"GET"})` and `AsyncHttpClient`. Without a `client`,
@@ -393,14 +422,16 @@ max_delay=60.0, cache=None, cacheable_methods={"GET"})` and `AsyncHttpClient`. W
   included) and body. A request with `auth` (client or call) or a streaming body is not cached. The
   entry drops `content-encoding`, `content-length` and `transfer-encoding`, and the rebuilt response
   has its request.
-- Removed: `persista.http.requests`, the `requests` and `urllib3` extras, and the 12 module
-  functions.
+- `persista.http.requests` stays (decision D8): `create_session` and `fetch_response`. It keeps
+  retrying `GET` only, and the retry and delay properties of section 1.5 apply to it. It has no
+  cache.
+- Removed: the 12 `httpx` module functions, replaced by the two classes.
 
-### 4.8 Utils, testing and packaging
+### 4.9 Utils, testing and packaging
 
 - `utils.imports` becomes one module with `is_<name>_available` and `check_<name>` for `duckdb`,
-  `faker`, `httpx`, `lmdb`, `psycopg`, `redis` and `rich`. The unused `<name>_available` decorators
-  and `raise_<name>_missing_error` go.
+  `faker`, `httpx`, `lmdb`, `psycopg`, `redis`, `requests`, `rich` and `urllib3`. The unused
+  `<name>_available` decorators and `raise_<name>_missing_error` go.
 - `utils.asyncio.EmptyAsyncIterator` is deleted (`NullStore` implements primitives only).
 - `testing.fixtures` keeps the marks of the remaining libraries.
 - The import contracts of `pyproject.toml` do not change.
@@ -410,7 +441,7 @@ max_delay=60.0, cache=None, cacheable_methods={"GET"})` and `AsyncHttpClient`. W
 ```text
 persista.store          BaseStore, Codec, JsonCodec, PickleCodec, OnConflict,
                         InMemoryStore, FileStore, SQLiteStore, DuckDBStore, LmdbStore,
-                        RedisStore, PostgresStore, NullStore
+                        RedisStore, PostgresStore, NullStore, store_from_uri, register_scheme
 persista.cache          Cache, MISSING, cached, get_cache, set_cache
 persista.record         Record, filter_by_metadata, filter_by_metadata_range,
                         filter_by_metadata_values, sort_by_metadata
@@ -418,6 +449,7 @@ persista.record.store   RecordStore
 persista.record.analysis  (the same functions, without MetadataStats)
 persista.record.fake    generate_fake_records
 persista.http.httpx     HttpClient, AsyncHttpClient
+persista.http.requests  create_session, fetch_response
 ```
 
 The validation helpers are imported from `persista.store.validation`.
@@ -427,15 +459,15 @@ The validation helpers are imported from `persista.store.validation`.
 There is no migration code. To keep data, read it with the old version and write it with the new one.
 The release notes say:
 
-| Data                                     | Effect                                                          |
-| ---------------------------------------- | --------------------------------------------------------------- |
-| SQLite, DuckDB, PostgreSQL, LMDB (JSON)  | readable, same table and encoding                               |
-| SQLite, LMDB (pickle)                    | readable with `codec=PickleCodec()`                             |
-| Typed SQL tables                         | not readable                                                    |
-| `SQLiteRecordStore`, `DuckDBRecordStore` | not readable (they use typed tables today)                      |
-| File stores                              | not readable (new file names)                                   |
-| Redis                                    | not found (new key layout)                                      |
-| Cache entries, ids of `from_metadata`    | cache keys change (cold cache); the same metadata gets a new id |
+| Data                                     | Effect                                                                  |
+| ---------------------------------------- | ----------------------------------------------------------------------- |
+| SQLite, DuckDB, PostgreSQL, LMDB (JSON)  | readable, same table and encoding                                       |
+| SQLite, LMDB (pickle)                    | readable with `codec=PickleCodec()`                                     |
+| Typed SQL tables                         | not readable                                                            |
+| `SQLiteRecordStore`, `DuckDBRecordStore` | not readable (they use typed tables today)                              |
+| File stores                              | readable if the key has no upper-case letter; other files are not found |
+| Redis                                    | not found (new key layout)                                              |
+| Cache entries, ids of `from_metadata`    | cache keys change (cold cache); the same metadata gets a new id         |
 
 ## 7. Changes to reach the target state
 
@@ -443,21 +475,21 @@ One branch and one pull request per row (`CLAUDE.md`). Each step leaves `main` r
 updates the tests, the docstrings and the user guide that it affects. Deletions come first so that
 the later steps change less code.
 
-| Step | Change                                                                                                                                                                     | Findings         | Breaking            |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------- |
-| 1    | **Urgent fixes of the HTTP cache and the cache keys**: complete request key, no caching with `auth`, sound cached response, module in the memoize key, no positional drop. | C1, C2, H1-H3    | cache keys          |
-| 2    | **Delete the factories, the `resolve_*` wrappers and the URIs.**                                                                                                           | S15, S21, R7     | yes                 |
-| 3    | **Delete the typed stores**; one `RecordStore`, remove its abstract class and subclasses.                                                                                  | S12, S13, R7     | yes                 |
-| 4    | **`BaseStore` template**: add the primitives, validation, codec and conflict plan to the base, with `InMemoryStore` and `NullStore`; a contract test per property.         | S8, S9, S11      | yes (custom stores) |
-| 5    | **SQLite and DuckDB on the template**: one connection, `BEGIN IMMEDIATE`, keyset iteration; delete `aiosqlite` and `async_close.py` use.                                   | S3, S5-S7, S18   | yes                 |
-| 6    | **`FileStore` and LMDB on the template.**                                                                                                                                  | S10              | yes (file names)    |
-| 7    | **Redis on the template**, with the namespace.                                                                                                                             | S6, S14, S15     | yes (key layout)    |
-| 8    | **PostgreSQL on the template**, with real-server concurrency tests. Delete the old base paths.                                                                             | S2, S4, S17, S20 | yes                 |
-| 9    | **One filter**: the predicate, the safe push-down, the keyed result; lazy driver imports; cheap `repr`.                                                                    | S1, S2, S16, S19 | yes                 |
-| 10   | **Canonical encoding and the cache API.**                                                                                                                                  | C3-C7            | yes                 |
-| 11   | **Records and analyses** on the canonical encoding.                                                                                                                        | R1-R6            | yes                 |
-| 12   | **HTTP**: two classes, one retry policy; delete `requests` and the functions.                                                                                              | H4-H7            | yes                 |
-| 13   | **Utils, extras, documentation**: one imports module, the Properties tables in the user guides, a migration page, section 3.5.                                             | 3.5              | yes (imports)       |
+| Step | Change                                                                                                                                                                     | Findings                   | Breaking            |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ------------------- |
+| 1    | **Urgent fixes of the HTTP cache and the cache keys**: complete request key, no caching with `auth`, sound cached response, module in the memoize key, no positional drop. | C1, C2, H1-H3              | cache keys          |
+| 2    | **Delete the factories and the `resolve_*` wrappers.**                                                                                                                     | R7                         | yes                 |
+| 3    | **Delete the typed stores**; one `RecordStore`, remove its abstract class and subclasses.                                                                                  | S12, S13, R7               | yes                 |
+| 4    | **`BaseStore` template**: add the primitives, validation, codec and conflict plan to the base, with `InMemoryStore` and `NullStore`; a contract test per property.         | S8, S9, S11                | yes (custom stores) |
+| 5    | **SQLite and DuckDB on the template**: one connection, `BEGIN IMMEDIATE`, keyset iteration; delete `aiosqlite` and `async_close.py` use.                                   | S3, S5-S7, S18             | yes                 |
+| 6    | **`FileStore` and LMDB on the template.**                                                                                                                                  | S10                        | yes (file names)    |
+| 7    | **Redis on the template**, with the namespace.                                                                                                                             | S6, S14, S15               | yes (key layout)    |
+| 8    | **PostgreSQL on the template**, with real-server concurrency tests. Delete the old base paths.                                                                             | S2, S4, S17, S20           | yes                 |
+| 9    | **One filter**: the predicate, the safe push-down, the keyed result; lazy driver imports; cheap `repr`; the URI limitations.                                               | S1, S2, S15, S16, S19, S21 | yes                 |
+| 10   | **Canonical encoding and the cache API.**                                                                                                                                  | C3-C7                      | yes                 |
+| 11   | **Records and analyses** on the canonical encoding.                                                                                                                        | R1-R6                      | yes                 |
+| 12   | **HTTP**: two `httpx` classes and one retry policy; delete the module functions; apply the retry properties to `requests`.                                                 | H4-H7                      | yes                 |
+| 13   | **Utils, extras, documentation**: one imports module, the Properties tables in the user guides, a migration page, section 3.5.                                             | 3.5                        | yes (imports)       |
 
 During steps 4 to 7 the base keeps the public methods overridable, so that the backends move one
 at a time. Step 8 makes the template the only path.
@@ -467,9 +499,10 @@ at a time. Step 8 makes the template the only path.
 The conventions of `CLAUDE.md` apply. Each finding gets a regression test that fails on `main`.
 
 - **Contract tests** (`tests/integration/store/test_consistency.py`, extended): one or more tests per
-  row of section 1.2, parametrised over every backend and both codecs: the key domain (empty, 511 and
-  512 bytes, NUL, case), the round trip and the isolation, every method on a closed store with empty
-  input, the filter matrix (types × `None` × unsafe names), deletion during iteration, `repr` without
+  row of section 1.2, parametrised over every backend and both codecs: the keys (case, and the
+  limits of each backend raising `ValueError`), the URI round trip, the round trip and the
+  isolation, every method on a closed store with empty input, the filter matrix (types × `None` ×
+  unsafe names), deletion during iteration, `repr` without
   secrets.
 - **Concurrency** (`tests/integration/`): `raise` and `merge` from two instances of the same data,
   from `set` and `aset` together, against a concurrent overwrite and delete; async use in two event
@@ -486,21 +519,125 @@ The conventions of `CLAUDE.md` apply. Each finding gets a regression test that f
   `deepcopy`; measure it in step 4.
 - Coverage of 100 % of the changed code, and `ruff`, `ty`, `pyright` and `lint-imports` clean.
 
-## 9. Decisions for the maintainer
+## 9. Decisions
 
-| #   | Question                                       | Recommendation                                                                                                                              | Alternative and its cost                                                                     |
-| --- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| D1  | Keep the typed stores?                         | **No.** They cause S12 and S13, add a second SQL path to 3 backends, and a schema needs migrations that a key-value library does not offer. | Keep JSON storage and add `indexes=("author",)` (expression indexes) if a query is too slow. |
-| D2  | Keep native async SQLite?                      | **No** (S18). Native async stays where a network is involved (Redis, PostgreSQL).                                                           | Keep `aiosqlite` and share the data and the lock across two connections.                     |
-| D3  | Keep the factory classes?                      | **No.** `resolve_object({"_target_": ...})` already builds any object from a configuration.                                                 | Keep `BaseStoreFactory` alone if another project depends on it (check before step 2).        |
-| D4  | Keep the store URIs?                           | **No** (S21).                                                                                                                               | One function `store_from_uri(uri, **kwargs)` without `to_uri`, if a command line needs it.   |
-| D5  | JSON values that change type (tuple, int key)? | **Normalise**, identically on every backend, and reject NaN. No extra pass over the value.                                                  | Reject them: stricter, costs a walk of each value on each write.                             |
-| D6  | File names of `FileStore`?                     | **Hash of the key** (S10).                                                                                                                  | Escape upper case and limit the key length further: readable names, more rules.              |
-| D7  | A key limit of 511 bytes everywhere?           | **Yes**: the limit of LMDB, so that a store can always be swapped.                                                                          | Let LMDB hash long keys: no limit, but keys can no longer be listed without reading values.  |
-| D8  | Keep `requests` support?                       | **No** (H7). `httpx` covers sync and async.                                                                                                 | Keep `fetch_response`, unchanged, as a second dependency to test.                            |
-| D9  | Keep `record.analysis` in `persista`?          | **Yes**: it is small, pure and depends only on `Record`.                                                                                    | Move it to a data-quality package.                                                           |
-| D10 | Keep the SQL filter push-down?                 | **Yes**, as a pre-filter (rule 4): large tables stay fast and the results stay right.                                                       | Scan in Python only: less code, every `filter` transfers the whole table.                    |
-| D11 | Retry `POST` and `PATCH`?                      | **Not by default** (H5); the caller adds them to `retry_methods`.                                                                           | Retry all methods, at the risk of duplicated writes.                                         |
+### 9.1 Overview
+
+| #   | Question                              | Status  | Answer or recommendation                                                                                       |
+| --- | ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| D1  | Keep the typed stores?                | open    | Recommended: **no** (section 9.2).                                                                             |
+| D2  | Keep native async SQLite?             | open    | Recommended: **no** (section 9.3).                                                                             |
+| D3  | Keep the factory classes?             | open    | Recommended: **no**, `resolve_object({"_target_": ...})` builds any object. Check the dependent projects.      |
+| D4  | Keep the store URIs?                  | decided | **Yes**, with their limitations stated (section 4.4).                                                          |
+| D5  | JSON values that change or lose data? | open    | Recommended: **normalise tuples, reject what loses data** (section 9.4).                                       |
+| D6  | File names of `FileStore`?            | open    | Recommended: **escape upper case** (section 9.5).                                                              |
+| D7  | A key limit shared by all backends?   | decided | **No.** The limit of one backend does not restrict the others; interchangeability in every case is not a goal. |
+| D8  | Keep `requests` support?              | decided | **Yes** (section 4.8).                                                                                         |
+| D9  | Keep `record.analysis` in `persista`? | open    | Recommended: **yes**, it is small, pure and depends only on `Record`.                                          |
+| D10 | Keep the SQL filter push-down?        | open    | Recommended: **yes**, as a pre-filter (rule 4 of section 4.1): large tables stay fast, results stay right.     |
+| D11 | Retry `POST` and `PATCH`?             | open    | Recommended: **not by default** (H5); the caller adds them to `retry_methods`.                                 |
+
+The measurements below are medians of one run on an Apple M1 **[verified]**. They compare options;
+the absolute numbers depend on the machine.
+
+### 9.2 D1: typed stores
+
+A typed store puts the fields of `value_schema` in SQL columns and the others in an `extra` JSON
+column. What it gives, on `filter(author=...)` returning 100 of 100,000 rows:
+
+| Backend | JSON store | Typed store | JSON store with an expression index | Typed store with an index |
+| ------- | ---------- | ----------- | ----------------------------------- | ------------------------- |
+| SQLite  | 26.9 ms    | 5.0 ms      | 0.15 ms                             | 0.21 ms                   |
+| DuckDB  | 6.3 ms     | 1.1 ms      | not measured                        | not measured              |
+
+- **SQLite**: an index on the JSON field is as fast as an indexed column, and needs no library code:
+  `store.connection.execute("CREATE INDEX i ON store(json_extract(value, '$.author'))")`. The query
+  plan of today's filter expression uses it. The push-down expression must then stay stable.
+- **PostgreSQL**: an expression index on `(value->>'author')` should serve the same purpose
+  **[reading]**.
+- **DuckDB**: this is the real loss. A column scan is about 6 times faster than parsing JSON, and the
+  analytical use of DuckDB (aggregations on columns from SQL) becomes less convenient.
+- **External SQL**: today another tool can query plain columns; with JSON it must extract fields.
+
+| Option                              | Work                                                                                                                                                                                                                  | Gain and cost                                                        |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| A. Remove (recommended)             | delete 3 classes; document the expression index                                                                                                                                                                       | one table layout and one SQL path per backend; slower DuckDB filters |
+| B. Keep and fix                     | check the existing table against the schema on `open`; quote and reserve names; keep `None` apart from absent; return booleans; validate the types the same way everywhere; handle the schema in URIs (S12, S13, S21) | keeps columns; a schema change still needs a migration by the user   |
+| C. Remove, then add `indexes=(...)` | A, plus one option that creates the expression indexes                                                                                                                                                                | fast SQLite and PostgreSQL filters without a schema; no DuckDB gain  |
+
+Choose B if DuckDB filters or external SQL queries on columns are real uses. Otherwise A, and C only
+when someone needs it.
+
+### 9.3 D2: native async SQLite
+
+`aiosqlite` is not asynchronous I/O: it runs `sqlite3` in a background thread. The choice is between
+its thread and second connection, and a thread around the sync methods. On a file database of 10,000
+rows:
+
+| Operation                            | `aiosqlite` | Thread around the sync method |
+| ------------------------------------ | ----------- | ----------------------------- |
+| 1,000 sequential `aget`              | 68.5 ms     | 45.1 ms                       |
+| 1,000 concurrent `aget`              | 52.7 ms     | 50.2 ms                       |
+| `aget_many` of 10,000 keys           | 17.2 ms     | 16.4 ms                       |
+| 200 `aset`                           | 83.7 ms     | 89.7 ms                       |
+| `aiter_batches(32)` over 10,000 rows | 17.6 ms     | 54.3 ms                       |
+
+- **For removal**: one connection and one lock, so S3 (sync against async), S5 and the SQLite part of
+  S6 disappear by construction; each method has one implementation instead of two; one extra less.
+- **Against**: iteration in small batches is 3 times slower, because each batch is a thread hop and
+  today's query uses `OFFSET`. Keyset iteration (step 5) removes the second cost, not the first; a
+  larger default batch for async iteration reduces it. This was not measured.
+- **Thread pool**: `asyncio.to_thread` uses the default executor (12 workers on this machine), shared
+  with the application. Rule 5 of section 4.1 gives the store its own worker.
+- **Keeping it** requires a shared in-memory database, a write lock and transaction across both
+  connections, one connection per event loop, and `async_close.py`.
+
+### 9.4 D5: JSON values
+
+What the JSON stores do today with a value that JSON cannot represent **[verified]** on SQLite and
+DuckDB:
+
+| Written                                  | Read back                      | Data lost                |
+| ---------------------------------------- | ------------------------------ | ------------------------ |
+| a tuple                                  | a list                         | the type                 |
+| a `str` subclass, such as a `str` enum   | a `str`                        | the type                 |
+| `{1: "a"}`, `{True: "a"}`, `{None: "a"}` | keys `"1"`, `"true"`, `"null"` | the key type             |
+| `{1: "int", "1": "str"}`                 | `{"1": "str"}`                 | **an entry**             |
+| NaN, infinity                            | the same, not valid JSON       | portability (PostgreSQL) |
+| a lone surrogate                         | SQLite: same; DuckDB: raises   | consistency              |
+| a set, `bytes`                           | `TypeError`                    | none                     |
+
+| Option                                                                  | Behaviour                                                       | Cost per write                                        |
+| ----------------------------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------- |
+| A. Normalise                                                            | as today, with NaN and infinity rejected; one entry can be lost | none                                                  |
+| B. Normalise tuples and subclasses, reject non-`str` keys (recommended) | nothing is lost; a type may be widened                          | a walk: +0.7 µs small value, +0.5 ms for 1,000 rows   |
+| C. Strict: reject everything that does not come back equal              | a value read equals the value written                           | the same walk; callers must convert tuples themselves |
+
+The walk is a pure Python prototype. For scale, `set` on an in-memory SQLite takes 4 µs for the
+small value and 268 µs for the 1,000-row value, so B adds about 17% and 180% there, much less
+relative to a write that commits to disk. This would fail the benchmark gate of section 8 for large
+values.
+
+I recommend B because section 1.1 promises that nothing is silently lost; this replaces the earlier
+recommendation to only normalise. Choose A if write speed matters more, and list the lost entry in
+section 1.7.
+
+### 9.5 D6: file names of `FileStore`
+
+Today the name is the percent-encoded key plus the extension. It has two problems: `a` and `A` are
+one file on macOS, and the length is limited (217 ASCII characters, 36 `é`, because the temporary
+file of the atomic write adds a suffix). With D7, a length limit is acceptable.
+
+| Option                               | Case bug | Key length        | `keys()` for 10,000 files | File names  | Existing files                     |
+| ------------------------------------ | -------- | ----------------- | ------------------------- | ----------- | ---------------------------------- |
+| A. Escape upper case (recommended)   | fixed    | limited, as today | 54 ms (list the names)    | readable    | readable without upper case in key |
+| B. Hash of the key, key in the file  | fixed    | unlimited         | 476 ms (read every file)  | opaque      | not readable                       |
+| C. A, with a hash for long keys only | fixed    | unlimited         | between the two           | two formats | as A                               |
+
+With A, `User:1` becomes `%55ser%3A1.json`. A probe on sample keys confirms that the names stay
+distinct when the case is ignored and decode to the original keys. Each upper-case letter takes 3
+characters, so such keys have a lower limit. This replaces the earlier recommendation (B), which was
+motivated by the shared key limit that D7 rejects.
 
 ## 10. Not covered
 
@@ -520,11 +657,11 @@ Rough estimates from the code to delete and the template; the gate is the behavi
 
 | Part                  | Lines today | Expected after | Why                                                  |
 | --------------------- | ----------- | -------------- | ---------------------------------------------------- |
-| `store` (no factory)  | 5,517       | about 2,500    | one copy of the contract, no typed or pickle classes |
+| `store` (no factory)  | 5,517       | about 2,700    | one copy of the contract, no typed or pickle classes |
 | factories (all)       | 1,495       | 0              | removed                                              |
 | `cache` (no factory)  | 1,977       | about 700      | one lookup, one decorator                            |
 | `record` (no factory) | 2,660       | about 1,500    | one record store, no HyperLogLog                     |
-| `http`                | 1,488       | about 450      | two classes                                          |
+| `http`                | 1,488       | about 600      | two classes, the `requests` helpers                  |
 | `utils` and `testing` | 1,095       | about 400      | one imports module                                   |
 
 The docstrings are a large part of these numbers: a public method documented once in the base is
