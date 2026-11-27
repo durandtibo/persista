@@ -447,9 +447,9 @@ out of the key:
 ```pycon
 >>> import threading
 >>> from persista.cache.utils import make_key
->>> make_key(
+>>> make_key("add", (1,), {"lock": threading.Lock()}, ignore_non_serializable=True) == make_key(
 ...     "add", (1,), {"lock": threading.Lock()}, ignore_non_serializable=True
-... ) == make_key("add", (1,), {"lock": threading.Lock()}, ignore_non_serializable=True)
+... )
 True
 
 ```
