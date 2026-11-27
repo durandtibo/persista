@@ -68,6 +68,8 @@ plugins:
         python:
           paths: [../src]
           options:
+            extensions:
+              - griffe_inherited_docstrings
             allow_inspection: true
             docstring_style: google
             separate_signature: true

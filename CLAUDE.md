@@ -5,12 +5,20 @@
 - Use the virtual environment in `.venv`: `.venv/bin/python`, `.venv/bin/pytest`, `.venv/bin/ruff`.
   There is no `python` on the `PATH`.
 - The common commands are `invoke` tasks (`.venv/bin/inv --list`), defined by `invoke-tasklib` and
-  configured in `invoke.yaml`.
+  configured in `invoke.yaml`: for example `inv check` (the main read-only checks), `inv fix`,
+  `inv test.unit --cov`, `inv test.integration` and `inv test.doctest`. Activate `.venv` (or put
+  `.venv/bin` on the `PATH`) so that the tasks find their tools.
 - Lint and format before committing: `.venv/bin/ruff check src tests` and
   `.venv/bin/ruff format src tests`. Fix the issues raised by ruff. Ignoring an issue (`noqa`, a
   changed rule set) is not fixing it.
 - Type check with `.venv/bin/ty check`. Fix the issues raised by ty. Ignoring an issue
-  (`type: ignore`, `ty: ignore`, a cast that hides the problem) is not fixing it.
+  (`type: ignore`, `ty: ignore`, a cast that hides the problem) is not fixing it. CI also runs
+  `pyright` (`inv types.check --complete`). Both check `src` (`ty` also checks `dev`), not `tests`.
+- Check the layering of the packages with `.venv/bin/lint-imports` (contracts in
+  `pyproject.toml`): for example `persista.store` must not import `persista.cache`. Fix a broken
+  contract by moving the code, not by relaxing the contract.
+- The tests run with `--strict-markers`, `--strict-config`, `xfail_strict` and warnings turned into
+  errors: fix the cause of a warning rather than filtering it.
 - Run the unit tests of the packages you changed (for example
   `.venv/bin/pytest tests/unit/store -q`). If a test fails, check with `git stash` whether it
   also fails without your change.

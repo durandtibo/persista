@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from persista.store import BaseRedisStore
 
 fakeredis = pytest.importorskip("fakeredis")
+redis = pytest.importorskip("redis")
 
 MODULE = "persista.store.redis"
 
@@ -490,11 +491,9 @@ def test_get_missing_key_returns_none(store: BaseRedisStore) -> None:
 
 
 def test_get_propagates_connection_error(store: BaseRedisStore) -> None:
-    import redis as redis_module
-
     with (
-        patch.object(store._client, "get", side_effect=redis_module.ConnectionError("boom")),
-        pytest.raises(redis_module.ConnectionError, match="boom"),
+        patch.object(store._client, "get", side_effect=redis.ConnectionError("boom")),
+        pytest.raises(redis.ConnectionError, match="boom"),
     ):
         store.get("1")
 

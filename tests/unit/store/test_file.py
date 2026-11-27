@@ -7,11 +7,10 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from persista.store import JsonFileStore, PickleFileStore
+from persista.store.file import BaseFileStore
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from persista.store import BaseFileStore
 
 
 # ---------------------------------------------------------------------------
@@ -66,9 +65,8 @@ def test_init_path_that_is_a_file_raises(tmp_path: Path, store_cls: type[BaseFil
 def test_init_rejects_empty_extension(tmp_path: Path) -> None:
     """An empty extension would let a key like ``".."`` map to a
     filename that escapes the store's directory."""
-    from persista.store.file import BaseFileStore as _BaseFileStore
 
-    class _NoExtensionStore(_BaseFileStore):
+    class _NoExtensionStore(BaseFileStore):
         @property
         def extension(self) -> str:
             return ""
