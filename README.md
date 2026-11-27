@@ -104,8 +104,7 @@ synchronous and `a`-prefixed asynchronous methods on every store:
 - Uniform API across backends: `get`/`aget`, `get_many`/`aget_many`, `set`/`aset`,
   `set_many`/`aset_many`, `delete`/`adelete`, `filter`/`afilter`, iteration
 - Backends: `InMemoryStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`, `PostgresStore`
-- Typed variants (`TypedSQLiteStore`, `TypedPostgresStore`, ...) and pickle-backed variants
-  (`PickleLmdbStore`, `PickleRedisStore`) for non-dict values
+- Pickle-backed variants (`PickleSQLiteStore`, `PickleLmdbStore`, ...) for non-dict values
 - Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`, `"merge"`)
 
 ### ⏱️ **TTL Caching**
@@ -133,8 +132,8 @@ persist, and analyze collections of records:
 
 - `filter_by_metadata`/`filter_by_metadata_range`/`filter_by_metadata_values`,
   `sort_by_metadata`: filter and sort records by metadata
-- `RecordStore` and ready-to-use backends (`InMemoryRecordStore`, `SQLiteRecordStore`,
-  `DuckDBRecordStore`, typed variants, ...) built on top of `persista.store`
+- `RecordStore`: persist records in any `persista.store` backend, with the method names of
+  `BaseStore`
 - `persista.record.analysis`: exact/near-duplicate detection, id-collision detection, diffing two
   snapshots, orphan-reference checks, schema-shape clustering, value frequency/cardinality, and
   metadata stats/reporting

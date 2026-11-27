@@ -3,7 +3,7 @@ values as JSON."""
 
 from __future__ import annotations
 
-__all__ = ["BaseDuckDBStore", "DuckDBStore", "TypedDuckDBStore"]
+__all__ = ["BaseDuckDBStore", "DuckDBStore"]
 
 import asyncio
 import json
@@ -22,7 +22,6 @@ from persista.store.validation import (
     resolve_conflicts,
     validate_batch_size,
     validate_field_name,
-    validate_value_schema,
 )
 from persista.utils.imports import check_duckdb, is_duckdb_available
 from persista.utils.path import prepare_store_path
@@ -44,11 +43,9 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
     r"""Define a base class for DuckDB-backed key-value stores.
 
     Subclasses only need to implement :meth:`_select_columns`,
-    :meth:`_row_to_kv`, :meth:`_set_many`, and :meth:`filter`, which
-    control how a value is laid out across the table's columns (see
-    :class:`DuckDBStore` for a single JSON column layout and
-    :class:`~persista.store.duckdb_typed.TypedDuckDBStore` for a typed
-    column layout with a JSON overflow column).
+    :meth:`_row_to_kv`, :meth:`_set_many`, and :meth:`_filter_expr`,
+    which control how a value is laid out in the table (see
+    :class:`DuckDBStore` for a single JSON column).
 
     Args:
         database: Path to the DuckDB file, or ``":memory:"`` for an
@@ -114,8 +111,7 @@ class BaseDuckDBStore(ThreadedAsyncStoreMixin, BaseStore, MultilineDisplayMixin)
         value, for use in a :meth:`filter` ``WHERE`` clause.
 
         Must validate ``field`` (e.g. via :func:`validate_field_name`)
-        before interpolating it into SQL, unless ``field`` is a known,
-        already-validated schema column name.
+        before interpolating it into SQL.
         """
 
     def _select_sql(self, where: str = "") -> str:
@@ -449,154 +445,3 @@ class DuckDBStore(BaseDuckDBStore):
     def _filter_expr(self, field: str) -> str:
         validate_field_name(field)
         return f"json_extract_string(value, '$.{field}')"
-
-
-_KEY_COLUMN = "_KEY_"
-
-
-class TypedDuckDBStore(BaseDuckDBStore):
-    """A DuckDB-backed key-value store with an optional typed value
-    schema.
-
-    Persists values to a DuckDB database and supports adding,
-    retrieving, and filtering by value fields.  An optional
-    ``value_schema`` maps known value field names to DuckDB types.
-    Known fields are stored as typed columns for fast, index-friendly
-    queries.  Any value fields not in the schema are stored in an
-    ``extra`` JSON overflow column, so nothing is lost.
-
-    Args:
-        database: Path to the DuckDB file, or ``":memory:"`` for an
-            in-memory database (useful for testing). Matches the
-            ``database`` argument name used by ``duckdb.connect``.
-        value_schema: Optional mapping of value field names to DuckDB
-            type strings (e.g. ``{"author": "VARCHAR", "year":
-            "INTEGER"}``).  Fields in the schema get native typed
-            columns; all other value fields go into the ``extra``
-            JSON overflow column.  Defaults to ``None``, which stores
-            every value field as JSON only.
-        **kwargs: Additional keyword arguments to pass to
-            ``duckdb.connect``.
-
-    Example:
-        ```pycon
-        >>> from persista.store import TypedDuckDBStore
-        >>> schema = {"author": "VARCHAR", "year": "INTEGER", "category": "VARCHAR"}
-        >>> with TypedDuckDBStore(":memory:", value_schema=schema) as store:
-        ...     store.set_many(
-        ...         {
-        ...             "1": {
-        ...                 "title": "Intro to Python",
-        ...                 "author": "Alice",
-        ...                 "category": "Programming",
-        ...             },
-        ...             "2": {
-        ...                 "title": "Advanced Python",
-        ...                 "author": "Alice",
-        ...                 "category": "Programming",
-        ...             },
-        ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-        ...         }
-        ...     )
-        ...     len(store.filter(author="Alice"))
-        ...     len(store.filter(author="Alice", category="Programming"))
-        ...     len(store.filter(category="History"))
-        ...
-        2
-        2
-        1
-
-        ```
-
-    Note:
-        :meth:`from_uri` reconstructs the store with an empty
-        ``value_schema``, so value fields that were stored in typed
-        columns won't appear in :meth:`get`/:meth:`filter` results
-        until the caller re-supplies the original ``value_schema`` to
-        a fresh construction; the data itself isn't lost in the
-        database, just not visible through the reconstructed store.
-    """
-
-    _key_column = _KEY_COLUMN
-    _scheme = "duckdb+typed"
-
-    def __init__(
-        self,
-        database: Path | str = ":memory:",
-        value_schema: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        value_schema = value_schema or {}
-        if _KEY_COLUMN in value_schema:
-            msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
-            raise ValueError(msg)
-        validate_value_schema(value_schema)
-        super().__init__(database, **kwargs)
-        self._schema: dict[str, str] = value_schema
-
-    def _ensure_schema(self) -> None:
-        if not self._kwargs.get("read_only", False):
-            with self._lock:
-                self._connection.execute(self._build_create_table())
-
-    def _select_columns(self) -> list[str]:
-        return [_KEY_COLUMN, *self._schema.keys(), "extra"]
-
-    def _row_to_kv(self, row: tuple) -> tuple[str, dict[str, Any]]:
-        return row[0], self._row_to_value(row)
-
-    def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
-        if items:
-            with self._lock:
-                self._connection.executemany(
-                    self._build_insert(),
-                    [self._value_to_row(key, value) for key, value in items.items()],
-                )
-
-        logger.debug("Added/replaced %d key-value pair(s)", len(items))
-
-    def _filter_expr(self, field: str) -> str:
-        if field in self._schema:
-            # A schema column name, already validated (as a valid,
-            # non-reserved identifier) by validate_value_schema() in
-            # __init__; quoted defensively so a value_schema field that
-            # happens to collide with a DuckDB reserved word (e.g.
-            # "order") still produces valid SQL.
-            return f'"{field}"'
-        validate_field_name(field)
-        return f"json_extract_string(extra, '$.{field}')"
-
-    # ---------------------------------------------------------------------------
-    # Private helpers
-    # ---------------------------------------------------------------------------
-
-    def _build_create_table(self) -> str:
-        """Build the CREATE TABLE statement from the schema."""
-        typed_cols = "".join(f', "{name}" {dtype}' for name, dtype in self._schema.items())
-        return (
-            f"CREATE TABLE IF NOT EXISTS store "
-            f"({_KEY_COLUMN} VARCHAR PRIMARY KEY{typed_cols}, extra JSON)"
-        )
-
-    def _build_insert(self) -> str:
-        """Build the INSERT OR REPLACE statement from the schema."""
-        col_names = [_KEY_COLUMN, *self._schema.keys(), "extra"]
-        quoted = ", ".join(f'"{name}"' for name in col_names)
-        placeholders = ", ".join("?" * len(col_names))
-        return f"INSERT OR REPLACE INTO store ({quoted}) VALUES ({placeholders})"  # noqa: S608
-
-    def _value_to_row(self, key: str, value: dict[str, Any]) -> tuple:
-        """Convert a key-value pair to an INSERT row tuple."""
-        known = [value.get(k) for k in self._schema]
-        extra = {k: v for k, v in value.items() if k not in self._schema}
-        return (key, *known, json.dumps(extra) if extra else None)
-
-    def _row_to_value(self, row: tuple) -> dict[str, Any]:
-        """Convert a raw database row back to a value dict."""
-        # row layout: key, [schema cols...], extra
-        schema_vals = dict(zip(self._schema.keys(), row[1 : 1 + len(self._schema)], strict=True))
-        extra_json = row[1 + len(self._schema)]
-        value = {k: v for k, v in schema_vals.items() if v is not None}
-        if extra_json:
-            value.update(json.loads(extra_json))
-        return value

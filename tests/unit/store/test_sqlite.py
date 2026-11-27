@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from persista.store import BaseSQLiteStore, SQLiteStore, TypedSQLiteStore, sqlite as sqlite_module
+from persista.store import BaseSQLiteStore, SQLiteStore, sqlite as sqlite_module
 from persista.testing.fixtures import aiosqlite_available
 
 if TYPE_CHECKING:
@@ -26,32 +26,14 @@ def store_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return tmp_path_factory.mktemp("store")
 
 
-@pytest.fixture(scope="module", params=[SQLiteStore, TypedSQLiteStore], ids=["plain", "typed"])
-def store_cls(request: pytest.FixtureRequest) -> type[BaseSQLiteStore]:
-    return request.param
+@pytest.fixture(scope="module")
+def store_cls() -> type[BaseSQLiteStore]:
+    return SQLiteStore
 
 
 @pytest.fixture
 def store(store_cls: type[BaseSQLiteStore]) -> Generator[BaseSQLiteStore, None, None]:
     with store_cls(":memory:") as store:
-        yield store
-
-
-@pytest.fixture
-def typed_store_no_schema() -> Generator[TypedSQLiteStore, None, None]:
-    """In-memory TypedSQLiteStore with no schema (everything in
-    `extra`)."""
-    with TypedSQLiteStore(":memory:") as store:
-        yield store
-
-
-@pytest.fixture
-def typed_store() -> Generator[TypedSQLiteStore, None, None]:
-    """In-memory store with a typed schema."""
-    with TypedSQLiteStore(
-        ":memory:",
-        value_schema={"author": "TEXT", "year": "INTEGER", "category": "TEXT"},
-    ) as store:
         yield store
 
 
@@ -66,9 +48,9 @@ def store_read_only(
         yield store
 
 
-#############################################
-#     Tests for SQLiteStore/TypedSQLiteStore #
-#############################################
+#################################
+#     Tests for SQLiteStore     #
+#################################
 
 
 # --- constructor ---
@@ -528,6 +510,78 @@ async def test_afilter_matches_explicit_json_null(store: BaseSQLiteStore) -> Non
     await store.aset("1", {"author": None, "title": "Untitled"})
     await store.aset("2", {"author": "Alice", "title": "Titled"})
     assert await store.afilter(author=None) == [{"author": None, "title": "Untitled"}]
+
+
+# --- filter: expression index ---
+
+_INDEX_SQL = "CREATE INDEX IF NOT EXISTS store_author ON store(json_extract(value, '$.author'))"
+
+
+def query_plans(connection: sqlite3.Connection, queries: list[str]) -> list[str]:
+    """Return the detail of the query plan of each query."""
+    return [connection.execute(f"EXPLAIN QUERY PLAN {query}").fetchone()[3] for query in queries]
+
+
+@pytest.mark.parametrize(
+    "field_filters",
+    [{"author": "Alice"}, {"author": None}, {"author": "Alice", "year": 2022}],
+)
+def test_filter_uses_expression_index(field_filters: dict[str, Any]) -> None:
+    queries: list[str] = []
+    with SQLiteStore() as store:
+        store.connection.execute(_INDEX_SQL)
+        store.connection.set_trace_callback(queries.append)
+        store.filter(**field_filters)
+        store.connection.set_trace_callback(None)
+        assert query_plans(store.connection, queries) == [
+            "SEARCH store USING INDEX store_author (<expr>=?)"
+        ]
+
+
+def test_filter_scans_the_table_without_expression_index() -> None:
+    queries: list[str] = []
+    with SQLiteStore() as store:
+        store.connection.set_trace_callback(queries.append)
+        store.filter(author="Alice")
+        store.connection.set_trace_callback(None)
+        assert query_plans(store.connection, queries) == ["SCAN store"]
+
+
+@aiosqlite_available
+async def test_afilter_uses_expression_index() -> None:
+    queries: list[str] = []
+    async with SQLiteStore.from_path(":memory:") as store:
+        store.connection.execute(_INDEX_SQL)
+        connection = await store._ensure_aconn()
+        await connection.set_trace_callback(queries.append)
+        await store.afilter(author="Alice")
+        await connection.set_trace_callback(None)
+        assert query_plans(store.connection, queries) == [
+            "SEARCH store USING INDEX store_author (<expr>=?)"
+        ]
+
+
+def test_filter_returns_the_same_values_with_expression_index(
+    store: BaseSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    expected = store.filter(author="Alice")
+    store.connection.execute(_INDEX_SQL)
+    assert store.filter(author="Alice") == expected
+
+
+def test_expression_index_is_kept_in_the_database_file(tmp_path: Path) -> None:
+    path = tmp_path / "data.sqlite"
+    with SQLiteStore(path) as store:
+        store.connection.execute(_INDEX_SQL)
+    queries: list[str] = []
+    with SQLiteStore(path) as store:
+        store.connection.set_trace_callback(queries.append)
+        store.filter(author="Alice")
+        store.connection.set_trace_callback(None)
+        assert query_plans(store.connection, queries) == [
+            "SEARCH store USING INDEX store_author (<expr>=?)"
+        ]
 
 
 # --- filter_items ---
@@ -1047,181 +1101,6 @@ def test_context_manager_multiple_open_close_persistent(
         with sqlite_store as store:
             store.set(str(i), {"text": "hello"})
             assert store.count() == i + 1
-
-
-##########################################################
-#     TypedSQLiteStore-specific schema behavior          #
-##########################################################
-
-# SQLiteStore and TypedSQLiteStore share the exact same behavior when no
-# schema is involved (covered by every test above, run against both
-# `store_cls` params). TypedSQLiteStore additionally supports declaring typed
-# columns via `value_schema`, covered here.
-
-
-def test_init_no_schema_stores_everything_in_extra(typed_store_no_schema: TypedSQLiteStore) -> None:
-    typed_store_no_schema.set("1", {"author": "Alice"})
-    assert set(typed_store_no_schema.get_columns_info().keys()) == {"_KEY_", "extra"}
-
-
-def test_init_with_schema_creates_typed_columns(typed_store: TypedSQLiteStore) -> None:
-    columns = typed_store.get_columns_info()
-    assert set(columns.keys()) == {"_KEY_", "author", "year", "category", "extra"}
-
-
-def test_init_schema_with_reserved_key_column_raises() -> None:
-    with pytest.raises(ValueError, match="reserved key column name"):
-        TypedSQLiteStore(":memory:", value_schema={"_KEY_": "TEXT"})
-
-
-def test_init_schema_rejects_malicious_field_name() -> None:
-    """A schema field name is interpolated directly into CREATE TABLE
-    and filter SQL, so it must be validated up front to prevent SQL
-    injection through a caller-supplied ``value_schema``."""
-    with pytest.raises(ValueError, match="Invalid filter field name"):
-        TypedSQLiteStore(":memory:", value_schema={"x); DROP TABLE store;--": "TEXT"})
-
-
-def test_init_schema_rejects_malicious_column_type() -> None:
-    with pytest.raises(ValueError, match="Invalid column type"):
-        TypedSQLiteStore(":memory:", value_schema={"author": "TEXT); DROP TABLE store;--"})
-
-
-def test_value_field_named_key_does_not_collide_with_primary_key(
-    typed_store_no_schema: TypedSQLiteStore,
-) -> None:
-    """A value field literally named 'key' must not collide with the
-    store's primary key column, and should be stored/retrieved via the
-    extra JSON overflow column."""
-    typed_store_no_schema.set("1", {"key": "not-the-primary-key"})
-    assert typed_store_no_schema.get("1") == {"key": "not-the-primary-key"}
-    assert typed_store_no_schema.filter(key="not-the-primary-key") == [
-        {"key": "not-the-primary-key"}
-    ]
-
-
-def test_from_path_with_schema(store_path: Path) -> None:
-    path = store_path / "with_schema.sqlite"
-    schema = {"author": "TEXT", "year": "INTEGER"}
-    with TypedSQLiteStore.from_path(path, value_schema=schema) as store:
-        store.set("1", {"author": "Alice", "year": 2022})
-        assert store.get("1")["year"] == 2022
-
-
-def test_init_read_only_connection_with_existing_table_does_not_raise(
-    store_path: Path, items: dict[str, dict[str, Any]]
-) -> None:
-    path = store_path / "typed_read_only.sqlite"
-    with TypedSQLiteStore.from_path(path) as store:
-        store.set_many(items)
-    with TypedSQLiteStore.from_path(path, read_only=True) as store:
-        assert store.count() == len(items)
-
-
-def test_set_on_conflict_merge_with_typed_schema(typed_store: TypedSQLiteStore) -> None:
-    typed_store.set("1", {"author": "Alice", "year": 2022})
-    typed_store.set("1", {"category": "Programming"}, on_conflict="merge")
-    assert typed_store.get("1") == {"author": "Alice", "year": 2022, "category": "Programming"}
-
-
-def test_get_round_trips_typed_schema_fields(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    assert typed_store.get("1") == items["1"]
-
-
-def test_get_round_trips_extra_field(typed_store: TypedSQLiteStore) -> None:
-    typed_store.set("1", {"author": "Alice", "publisher": "O'Reilly"})
-    assert typed_store.get("1")["publisher"] == "O'Reilly"
-
-
-def test_filter_single_typed_field(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
-    assert len(result) == 2
-
-
-def test_filter_multiple_typed_fields(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter(author="Alice", category="Programming")
-    assert len(result) == 2
-
-
-def test_filter_items_single_typed_field(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter_items(author="Alice")
-    assert result == {"1": items["1"], "2": items["2"]}
-
-
-def test_filter_extra_field(typed_store: TypedSQLiteStore) -> None:
-    typed_store.set_many(
-        {
-            "1": {"author": "Alice", "publisher": "O'Reilly"},
-            "2": {"author": "Bob", "publisher": "Manning"},
-        }
-    )
-    result = typed_store.filter(publisher="O'Reilly")
-    assert len(result) == 1
-    assert result[0]["author"] == "Alice"
-
-
-def test_filter_mixed_schema_and_extra_fields(typed_store: TypedSQLiteStore) -> None:
-    typed_store.set_many(
-        {
-            "1": {"author": "Alice", "publisher": "O'Reilly"},
-            "2": {"author": "Alice", "publisher": "Manning"},
-        }
-    )
-    result = typed_store.filter(author="Alice", publisher="O'Reilly")
-    assert len(result) == 1
-    assert result[0]["publisher"] == "O'Reilly"
-
-
-def test_filter_integer_typed_column(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result = typed_store.filter(year=2022)
-    assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
-
-
-def test_filter_integer_typed_column_no_match(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    assert typed_store.filter(year=9999) == []
-
-
-def test_get_columns_info_typed_store_has_schema_columns(
-    typed_store: TypedSQLiteStore,
-) -> None:
-    columns = typed_store.get_columns_info()
-    assert "author" in columns
-    assert "year" in columns
-    assert "category" in columns
-
-
-def test_get_columns_info_has_extra_column(typed_store: TypedSQLiteStore) -> None:
-    assert "extra" in typed_store.get_columns_info()
-
-
-def test_iter_batches_with_typed_schema(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    typed_store.set_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    for batch in typed_store.iter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
 
 
 # ---------------------------------------------------------------------------
@@ -1859,187 +1738,6 @@ async def test_sqlite_store_aset_batches_on_conflict_skip(store: BaseSQLiteStore
     )
     assert await store.aget("1") == {"text": "original"}
     assert await store.aget("2") == {"text": "new"}
-
-
-# ---------------------------------------------------------------------------
-# async + typed schema
-# ---------------------------------------------------------------------------
-
-
-# --- aget ---
-
-
-async def test_typed_sqlite_store_aget_round_trips_typed_schema_fields(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    assert await typed_store.aget("1") == items["1"]
-
-
-# --- aset ---
-
-
-async def test_typed_sqlite_store_aset_on_conflict_merge_with_typed_schema(
-    typed_store: TypedSQLiteStore,
-) -> None:
-    await typed_store.aset("1", {"author": "Alice", "year": 2022})
-    await typed_store.aset("1", {"category": "Programming"}, on_conflict="merge")
-    assert await typed_store.aget("1") == {
-        "author": "Alice",
-        "year": 2022,
-        "category": "Programming",
-    }
-
-
-# --- afilter ---
-
-
-async def test_typed_sqlite_store_afilter_single_typed_field(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    result = await typed_store.afilter(author="Alice")
-    assert {item["title"] for item in result} == {"Intro to Python", "Advanced Python"}
-
-
-async def test_typed_sqlite_store_afilter_integer_typed_column(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    result = await typed_store.afilter(year=2022)
-    assert {item["title"] for item in result} == {"Intro to Python"}
-
-
-# --- aiter_batches ---
-
-
-async def test_typed_sqlite_store_aiter_batches_with_typed_schema(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    async for batch in typed_store.aiter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
-
-
-# --- avalues ---
-
-
-async def test_typed_sqlite_store_avalues_with_typed_schema(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    values = [v async for v in typed_store.avalues(batch_size=2)]
-    assert sorted(v["title"] for v in values) == sorted(item["title"] for item in items.values())
-
-
-# --- aset (conflict variants) ---
-
-
-async def test_typed_sqlite_store_aset_on_conflict_raise_with_typed_schema(
-    typed_store: TypedSQLiteStore,
-) -> None:
-    await typed_store.aset("1", {"author": "Alice"})
-    with pytest.raises(KeyError, match=r"1"):
-        await typed_store.aset("1", {"author": "Bob"}, on_conflict="raise")
-    assert await typed_store.aget("1") == {"author": "Alice"}
-
-
-async def test_typed_sqlite_store_aset_on_conflict_skip_with_typed_schema(
-    typed_store: TypedSQLiteStore,
-) -> None:
-    await typed_store.aset("1", {"author": "Alice"})
-    await typed_store.aset("1", {"author": "Bob"}, on_conflict="skip")
-    assert await typed_store.aget("1") == {"author": "Alice"}
-
-
-async def test_typed_sqlite_store_aset_on_conflict_overwrite_with_typed_schema(
-    typed_store: TypedSQLiteStore,
-) -> None:
-    await typed_store.aset("1", {"author": "Alice"})
-    await typed_store.aset("1", {"author": "Bob"}, on_conflict="overwrite")
-    assert await typed_store.aget("1") == {"author": "Bob"}
-
-
-# --- afilter (extra fields) ---
-
-
-async def test_typed_sqlite_store_afilter_multiple_typed_fields(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    result = await typed_store.afilter(author="Alice", category="Programming")
-    assert sorted(r["title"] for r in result) == ["Advanced Python", "Intro to Python"]
-
-
-async def test_typed_sqlite_store_afilter_extra_field(typed_store: TypedSQLiteStore) -> None:
-    await typed_store.aset_many(
-        {
-            "1": {"author": "Alice", "publisher": "O'Reilly"},
-            "2": {"author": "Bob", "publisher": "Packt"},
-        }
-    )
-    result = await typed_store.afilter(publisher="O'Reilly")
-    assert result == [{"author": "Alice", "publisher": "O'Reilly"}]
-
-
-async def test_typed_sqlite_store_afilter_mixed_schema_and_extra_fields(
-    typed_store: TypedSQLiteStore,
-) -> None:
-    await typed_store.aset_many(
-        {
-            "1": {"author": "Alice", "publisher": "O'Reilly"},
-            "2": {"author": "Alice", "publisher": "Packt"},
-        }
-    )
-    result = await typed_store.afilter(author="Alice", publisher="O'Reilly")
-    assert result == [{"author": "Alice", "publisher": "O'Reilly"}]
-
-
-async def test_typed_sqlite_store_afilter_integer_typed_column_no_match(
-    typed_store: TypedSQLiteStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await typed_store.aset_many(items)
-    assert await typed_store.afilter(year=9999) == []
-
-
-# --- columns_info ---
-
-
-async def test_typed_sqlite_store_aget_columns_info_has_schema_columns(
-    typed_store: TypedSQLiteStore,
-) -> None:
-    columns = typed_store.get_columns_info()
-    assert "author" in columns
-    assert "year" in columns
-
-
-# --- to_uri/from_uri ---
-
-
-async def test_typed_sqlite_store_to_uri_from_uri_async_round_trip(
-    store_path: Path, items: dict[str, dict[str, Any]]
-) -> None:
-    path = store_path / "to_uri_async_typed.sqlite"
-    with TypedSQLiteStore.from_path(path) as store:
-        store.set_many(items)
-        uri = store.to_uri()
-    async with TypedSQLiteStore.from_uri(uri) as reloaded:
-        assert await reloaded.acount() == len(items)
-
-
-async def test_typed_sqlite_store_afrom_uri_read_only_rejects_writes(
-    store_path: Path, items: dict[str, dict[str, Any]]
-) -> None:
-    path = store_path / "to_uri_ro_async_typed.sqlite"
-    with TypedSQLiteStore.from_path(path) as store:
-        store.set_many(items)
-        uri = store.to_uri()
-    async with TypedSQLiteStore.from_uri(uri, read_only=True) as reloaded:
-        assert await reloaded.acount() == len(items)
-        with pytest.raises(sqlite3.OperationalError):
-            await reloaded.aset("new", {"author": "x"})
 
 
 # --- connection ---

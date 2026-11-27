@@ -25,6 +25,8 @@ from typing import Any
 
 import pytest
 
+from persista.record import Record
+from persista.record.store import RecordStore
 from persista.store import (
     BaseRedisStore,
     BaseStore,
@@ -38,9 +40,6 @@ from persista.store import (
     PostgresStore,
     RedisStore,
     SQLiteStore,
-    TypedDuckDBStore,
-    TypedPostgresStore,
-    TypedSQLiteStore,
 )
 from persista.testing.fixtures import duckdb_available, lmdb_available
 from persista.utils.imports import is_redis_available
@@ -72,15 +71,9 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
     return [
         pytest.param(InMemoryStore, id="in_memory"),
         pytest.param(lambda: SQLiteStore(":memory:"), id="sqlite"),
-        pytest.param(lambda: TypedSQLiteStore(":memory:"), id="sqlite_typed"),
         pytest.param(
             lambda: DuckDBStore(":memory:"),
             id="duckdb",
-            marks=duckdb_available,
-        ),
-        pytest.param(
-            lambda: TypedDuckDBStore(":memory:"),
-            id="duckdb_typed",
             marks=duckdb_available,
         ),
         pytest.param(lambda: RedisStore(REDIS_URL), id="redis", marks=redis_skip),
@@ -94,11 +87,6 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
         pytest.param(
             lambda: PostgresStore(postgres_conninfo, table=f"store_{uuid.uuid4().hex}"),
             id="postgres",
-            marks=postgres_skip,
-        ),
-        pytest.param(
-            lambda: TypedPostgresStore(postgres_conninfo, table=f"store_{uuid.uuid4().hex}"),
-            id="postgres_typed",
             marks=postgres_skip,
         ),
     ]
@@ -987,3 +975,155 @@ async def test_cross_store_outputs_are_identical_async(items: dict[str, dict[str
             f"Store {store_id!r} produced a different result than {reference_id!r}: "
             f"{result} != {reference}"
         )
+
+
+################################################################
+#     Consistency tests for values that a typed store lost     #
+################################################################
+
+# The removed typed stores dropped ``None`` fields, changed booleans and
+# failed on some field names. The stores that are left keep a value as
+# one payload, on every backend.
+
+
+@pytest.fixture
+def awkward_value() -> dict[str, Any]:
+    return {
+        "missing": None,
+        "flag": True,
+        "count": 1,
+        "text": "1",
+        "extra": "a",
+        "_key_": "b",
+        "_KEY_": "c",
+        "key": "d",
+        "order": 4,
+    }
+
+
+def test_round_trip_keeps_every_field(store: BaseStore, awkward_value: dict[str, Any]) -> None:
+    store.set("1", awkward_value)
+    assert store.get("1") == awkward_value
+
+
+async def test_async_round_trip_keeps_every_field(
+    store: BaseStore, awkward_value: dict[str, Any]
+) -> None:
+    await store.aset("1", awkward_value)
+    assert await store.aget("1") == awkward_value
+
+
+def test_round_trip_keeps_boolean_type(store: BaseStore) -> None:
+    store.set("1", {"flag": True})
+    assert store.get("1")["flag"] is True
+
+
+@pytest.mark.parametrize("field", ["extra", "_key_", "_KEY_", "key", "order"])
+def test_filter_on_reserved_looking_field_name(
+    store: BaseStore, awkward_value: dict[str, Any], field: str
+) -> None:
+    store.set("1", awkward_value)
+    assert store.filter(**{field: awkward_value[field]}) == [awkward_value]
+
+
+######################################################
+#     Consistency tests for RecordStore backends     #
+######################################################
+
+# ``RecordStore`` is the only record store, so it must behave the same
+# over every store. The ``store`` fixture is already open.
+
+
+@pytest.fixture
+def record_store(store: BaseStore) -> RecordStore:
+    return RecordStore(store)
+
+
+@pytest.fixture
+def records(items: dict[str, dict[str, Any]]) -> list[Record]:
+    return [Record(id=key, metadata=value) for key, value in items.items()]
+
+
+@pytest.mark.parametrize("field_filters", [{}, {"author": "Alice"}, {"year": 2021}])
+def test_record_store_filter_matches_store_filter(
+    record_store: RecordStore, records: list[Record], field_filters: dict[str, Any]
+) -> None:
+    record_store.set_many(records)
+    result = sorted(
+        (dict(record.metadata) for record in record_store.filter(**field_filters)),
+        key=lambda value: value["title"],
+    )
+    expected = sorted(record_store.store.filter(**field_filters), key=lambda value: value["title"])
+    assert result == expected
+
+
+def test_record_store_filter_returns_record_ids(
+    record_store: RecordStore, records: list[Record]
+) -> None:
+    record_store.set_many(records)
+    assert sorted(record.id for record in record_store.filter(author="Bob")) == ["3", "4"]
+
+
+async def test_record_store_afilter_returns_record_ids(
+    record_store: RecordStore, records: list[Record]
+) -> None:
+    await record_store.aset_many(records)
+    result = await record_store.afilter(author="Bob")
+    assert sorted(record.id for record in result) == ["3", "4"]
+
+
+@pytest.mark.parametrize(
+    ("on_conflict", "expected"),
+    [
+        ("overwrite", {"b": 2}),
+        ("skip", {"a": 1}),
+        ("merge", {"a": 1, "b": 2}),
+    ],
+)
+def test_record_store_set_on_conflict(
+    record_store: RecordStore, on_conflict: str, expected: dict[str, int]
+) -> None:
+    record_store.set(Record(id="1", metadata={"a": 1}))
+    record_store.set(Record(id="1", metadata={"b": 2}), on_conflict=on_conflict)
+    assert record_store.get("1") == Record(id="1", metadata=expected)
+
+
+@pytest.mark.parametrize(
+    ("on_conflict", "expected"),
+    [
+        ("overwrite", {"b": 2}),
+        ("skip", {"a": 1}),
+        ("merge", {"a": 1, "b": 2}),
+    ],
+)
+async def test_record_store_aset_on_conflict(
+    record_store: RecordStore, on_conflict: str, expected: dict[str, int]
+) -> None:
+    await record_store.aset(Record(id="1", metadata={"a": 1}))
+    await record_store.aset(Record(id="1", metadata={"b": 2}), on_conflict=on_conflict)
+    assert await record_store.aget("1") == Record(id="1", metadata=expected)
+
+
+def test_record_store_set_many_raise_writes_nothing(record_store: RecordStore) -> None:
+    record_store.set(Record(id="1", metadata={"a": 1}))
+    with pytest.raises(KeyError, match=r"already exist"):
+        record_store.set_many([Record(id="2"), Record(id="1")], on_conflict="raise")
+    assert list(record_store.keys()) == ["1"]
+
+
+async def test_record_store_aset_many_raise_writes_nothing(record_store: RecordStore) -> None:
+    await record_store.aset(Record(id="1", metadata={"a": 1}))
+    with pytest.raises(KeyError, match=r"already exist"):
+        await record_store.aset_many([Record(id="2"), Record(id="1")], on_conflict="raise")
+    assert [key async for key in record_store.akeys()] == ["1"]
+
+
+def test_record_store_set_batches(record_store: RecordStore, records: list[Record]) -> None:
+    record_store.set_batches(records, batch_size=3)
+    assert sorted(record_store.values(), key=lambda record: record.id) == records
+
+
+async def test_record_store_aset_batches(record_store: RecordStore, records: list[Record]) -> None:
+    await record_store.aset_batches(records, batch_size=3)
+    result = [record async for record in record_store.avalues()]
+    assert sorted(result, key=lambda record: record.id) == records

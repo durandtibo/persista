@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Generator, Iterator
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 
 from persista.record import Record
-from persista.record.store import BaseRecordStore, RecordStore
-from persista.store import BaseStore, InMemoryStore, TypedSQLiteStore
+from persista.record.store import RecordStore
+from persista.store import BaseStore, InMemoryStore, NullStore, PickleSQLiteStore, SQLiteStore
+
+if TYPE_CHECKING:
+    from persista.store import OnConflict
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -30,16 +34,9 @@ def records() -> list[Record]:
     ]
 
 
-################################
+#################################
 #     Tests for RecordStore     #
-################################
-
-
-# --- Inheritance ---
-
-
-def test_record_store_is_base_record_store(store: RecordStore) -> None:
-    assert isinstance(store, BaseRecordStore)
+#################################
 
 
 # --- store property ---
@@ -131,10 +128,10 @@ def test_filter_falls_back_to_full_scan_when_store_has_no_filter_items(
 
 
 def test_filter_uses_store_filter_items_when_available() -> None:
-    """When the underlying store exposes ``filter_items`` (e.g. a
-    ``Typed*Store`` with real SQL columns), ``filter`` must push
-    ``metadata_filters`` down to it instead of scanning."""
-    sqlite_store = TypedSQLiteStore(value_schema={"author": "TEXT"})
+    """When the underlying store exposes ``filter_items`` (the SQL
+    stores), ``filter`` must push ``metadata_filters`` down to it
+    instead of scanning."""
+    sqlite_store = SQLiteStore()
     with RecordStore(sqlite_store) as store:
         store.set_many(
             [
@@ -197,7 +194,7 @@ async def test_afilter_falls_back_to_full_scan_when_store_has_no_filter_items(
 
 
 async def test_afilter_uses_store_afilter_items_when_available() -> None:
-    sqlite_store = TypedSQLiteStore(value_schema={"author": "TEXT"})
+    sqlite_store = SQLiteStore()
     async with RecordStore(sqlite_store) as store:
         await store.aset_many(
             [
@@ -217,33 +214,555 @@ async def test_afilter_uses_store_afilter_items_when_available() -> None:
         scan.assert_not_called()
 
 
+# --- filter parity with the underlying store ---
+
+
+@pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, PickleSQLiteStore])
+def test_filter_matches_store_filter(store_cls: type[BaseStore], records: list[Record]) -> None:
+    with RecordStore(store_cls()) as store:
+        store.set_many(records)
+        result = store.filter(author="Bob")
+        assert [dict(record.metadata) for record in result] == store.store.filter(author="Bob")
+
+
+@pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, PickleSQLiteStore])
+async def test_afilter_matches_store_afilter(
+    store_cls: type[BaseStore], records: list[Record]
+) -> None:
+    async with RecordStore(store_cls()) as store:
+        await store.aset_many(records)
+        result = await store.afilter(author="Bob")
+        expected = await store.store.afilter(author="Bob")
+        assert [dict(record.metadata) for record in result] == expected
+
+
+def test_filter_pickle_sqlite_store_returns_matching_records(records: list[Record]) -> None:
+    with RecordStore(PickleSQLiteStore()) as store:
+        store.set_many(records)
+        assert store.filter(author="Bob") == [records[2], records[3]]
+
+
+async def test_afilter_pickle_sqlite_store_returns_matching_records(
+    records: list[Record],
+) -> None:
+    async with RecordStore(PickleSQLiteStore()) as store:
+        await store.aset_many(records)
+        assert await store.afilter(author="Bob") == [records[2], records[3]]
+
+
+def test_filter_null_store_returns_empty(records: list[Record]) -> None:
+    with RecordStore(NullStore()) as store:
+        store.set_many(records)
+        assert store.filter() == []
+
+
+@pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, PickleSQLiteStore, NullStore])
+def test_filter_closed_store_raises(store_cls: type[BaseStore]) -> None:
+    store = RecordStore(store_cls())
+    with pytest.raises(RuntimeError, match=r"not open"):
+        store.filter(author="Alice")
+
+
+@pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, PickleSQLiteStore, NullStore])
+async def test_afilter_closed_store_raises(store_cls: type[BaseStore]) -> None:
+    store = RecordStore(store_cls())
+    with pytest.raises(RuntimeError, match=r"not open"):
+        await store.afilter(author="Alice")
+
+
 # --- _matches ---
 
 
 def test_matches_no_filters_always_true() -> None:
-    record = Record(id="1", metadata={"author": "Alice"})
-    assert RecordStore._matches(record, {}) is True
+    assert RecordStore._matches({"author": "Alice"}, {}) is True
 
 
 def test_matches_single_field_match() -> None:
-    record = Record(id="1", metadata={"author": "Alice"})
-    assert RecordStore._matches(record, {"author": "Alice"}) is True
+    assert RecordStore._matches({"author": "Alice"}, {"author": "Alice"}) is True
 
 
 def test_matches_single_field_mismatch() -> None:
-    record = Record(id="1", metadata={"author": "Alice"})
-    assert RecordStore._matches(record, {"author": "Bob"}) is False
+    assert RecordStore._matches({"author": "Alice"}, {"author": "Bob"}) is False
 
 
 def test_matches_missing_key_is_mismatch() -> None:
+    assert RecordStore._matches({"author": "Alice"}, {"title": "Intro"}) is False
+
+
+def test_matches_missing_key_matches_none() -> None:
+    assert RecordStore._matches({"author": "Alice"}, {"title": None}) is True
+
+
+def test_matches_all_fields_match() -> None:
+    value = {"author": "Alice", "title": "Intro"}
+    assert RecordStore._matches(value, {"author": "Alice", "title": "Intro"}) is True
+
+
+def test_matches_one_field_mismatch() -> None:
+    value = {"author": "Alice", "title": "Intro"}
+    assert RecordStore._matches(value, {"author": "Alice", "title": "Other"}) is False
+
+
+# --- _to_value / _from_value ---
+
+
+def test_to_value_returns_metadata_dict() -> None:
     record = Record(id="1", metadata={"author": "Alice"})
-    assert RecordStore._matches(record, {"title": "Intro"}) is False
+    assert RecordStore._to_value(record) == {"author": "Alice"}
 
 
-def test_matches_all_fields_must_match() -> None:
-    record = Record(id="1", metadata={"author": "Alice", "title": "Intro"})
-    assert RecordStore._matches(record, {"author": "Alice", "title": "Intro"}) is True
-    assert RecordStore._matches(record, {"author": "Alice", "title": "Other"}) is False
+def test_to_value_returns_new_dict() -> None:
+    record = Record(id="1", metadata={"author": "Alice"})
+    RecordStore._to_value(record)["author"] = "Bob"
+    assert record.metadata == {"author": "Alice"}
+
+
+def test_from_value_returns_record() -> None:
+    assert RecordStore._from_value("1", {"author": "Alice"}) == Record(
+        id="1", metadata={"author": "Alice"}
+    )
+
+
+def test_from_value_does_not_share_the_value() -> None:
+    value = {"author": "Alice"}
+    record = RecordStore._from_value("1", value)
+    value["author"] = "Bob"
+    assert record.metadata == {"author": "Alice"}
+
+
+# --- _to_items ---
+
+
+@pytest.fixture
+def duplicates() -> list[Record]:
+    return [
+        Record(id="1", metadata={"a": 1, "b": 1}),
+        Record(id="2", metadata={"a": 2}),
+        Record(id="1", metadata={"a": 3, "c": 3}),
+    ]
+
+
+def test_to_items_distinct_ids(records: list[Record]) -> None:
+    store = RecordStore(InMemoryStore())
+    assert store._to_items(records[:2], "raise") == {
+        "1": {"title": "Intro to Python", "author": "Alice"},
+        "2": {"title": "Advanced Python", "author": "Alice"},
+    }
+
+
+@pytest.mark.parametrize("on_conflict", ["overwrite", "skip", "merge", "raise"])
+def test_to_items_empty(on_conflict: OnConflict) -> None:
+    assert RecordStore(InMemoryStore())._to_items([], on_conflict) == {}
+
+
+def test_to_items_duplicates_overwrite_keeps_last(duplicates: list[Record]) -> None:
+    store = RecordStore(InMemoryStore())
+    assert store._to_items(duplicates, "overwrite") == {"1": {"a": 3, "c": 3}, "2": {"a": 2}}
+
+
+def test_to_items_duplicates_skip_keeps_first(duplicates: list[Record]) -> None:
+    store = RecordStore(InMemoryStore())
+    assert store._to_items(duplicates, "skip") == {"1": {"a": 1, "b": 1}, "2": {"a": 2}}
+
+
+def test_to_items_duplicates_merge(duplicates: list[Record]) -> None:
+    store = RecordStore(InMemoryStore())
+    assert store._to_items(duplicates, "merge") == {
+        "1": {"a": 3, "b": 1, "c": 3},
+        "2": {"a": 2},
+    }
+
+
+def test_to_items_preserves_order_of_first_appearance(duplicates: list[Record]) -> None:
+    store = RecordStore(InMemoryStore())
+    assert list(store._to_items(duplicates, "overwrite")) == ["1", "2"]
+
+
+def test_to_items_duplicates_raise(duplicates: list[Record]) -> None:
+    with (
+        RecordStore(InMemoryStore()) as store,
+        pytest.raises(KeyError, match=r"appear more than once: \['1'\]"),
+    ):
+        store._to_items(duplicates, "raise")
+
+
+def test_to_items_duplicates_raise_closed_store(duplicates: list[Record]) -> None:
+    store = RecordStore(InMemoryStore())
+    with pytest.raises(RuntimeError, match=r"not open"):
+        store._to_items(duplicates, "raise")
+
+
+def test_to_items_does_not_modify_records(duplicates: list[Record]) -> None:
+    RecordStore(InMemoryStore())._to_items(duplicates, "merge")
+    assert duplicates[0] == Record(id="1", metadata={"a": 1, "b": 1})
+
+
+# --- set ---
+
+
+def test_set_adds_record(store: RecordStore) -> None:
+    store.set(Record(id="1", metadata={"author": "Alice"}))
+    assert store.get("1") == Record(id="1", metadata={"author": "Alice"})
+
+
+def test_set_default_overwrites(store: RecordStore) -> None:
+    store.set(Record(id="1", metadata={"author": "Alice"}))
+    store.set(Record(id="1", metadata={"year": 2024}))
+    assert store.get("1") == Record(id="1", metadata={"year": 2024})
+
+
+def test_set_skip_keeps_existing(store: RecordStore) -> None:
+    store.set(Record(id="1", metadata={"author": "Alice"}))
+    store.set(Record(id="1", metadata={"author": "Bob"}), on_conflict="skip")
+    assert store.get("1") == Record(id="1", metadata={"author": "Alice"})
+
+
+def test_set_merge(store: RecordStore) -> None:
+    store.set(Record(id="1", metadata={"author": "Alice", "year": 2023}))
+    store.set(Record(id="1", metadata={"year": 2024}), on_conflict="merge")
+    assert store.get("1") == Record(id="1", metadata={"author": "Alice", "year": 2024})
+
+
+def test_set_raise_keeps_existing(store: RecordStore) -> None:
+    store.set(Record(id="1", metadata={"author": "Alice"}))
+    with pytest.raises(KeyError, match=r"already exist"):
+        store.set(Record(id="1", metadata={"author": "Bob"}), on_conflict="raise")
+    assert store.get("1") == Record(id="1", metadata={"author": "Alice"})
+
+
+def test_set_invalid_on_conflict_raises(store: RecordStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        store.set(Record(id="1"), on_conflict="bogus")
+
+
+def test_set_on_conflict_is_keyword_only(store: RecordStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        store.set(Record(id="1"), "skip")
+
+
+def test_set_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        RecordStore(InMemoryStore()).set(Record(id="1"))
+
+
+async def test_aset_adds_record() -> None:
+    async with RecordStore(InMemoryStore()) as store:
+        await store.aset(Record(id="1", metadata={"author": "Alice"}))
+        assert await store.aget("1") == Record(id="1", metadata={"author": "Alice"})
+
+
+async def test_aset_default_overwrites() -> None:
+    async with RecordStore(InMemoryStore()) as store:
+        await store.aset(Record(id="1", metadata={"author": "Alice"}))
+        await store.aset(Record(id="1", metadata={"year": 2024}))
+        assert await store.aget("1") == Record(id="1", metadata={"year": 2024})
+
+
+async def test_aset_skip_keeps_existing() -> None:
+    async with RecordStore(InMemoryStore()) as store:
+        await store.aset(Record(id="1", metadata={"author": "Alice"}))
+        await store.aset(Record(id="1", metadata={"author": "Bob"}), on_conflict="skip")
+        assert await store.aget("1") == Record(id="1", metadata={"author": "Alice"})
+
+
+async def test_aset_merge() -> None:
+    async with RecordStore(InMemoryStore()) as store:
+        await store.aset(Record(id="1", metadata={"author": "Alice"}))
+        await store.aset(Record(id="1", metadata={"year": 2024}), on_conflict="merge")
+        assert await store.aget("1") == Record(id="1", metadata={"author": "Alice", "year": 2024})
+
+
+async def test_aset_raise_keeps_existing() -> None:
+    async with RecordStore(InMemoryStore()) as store:
+        await store.aset(Record(id="1", metadata={"author": "Alice"}))
+        with pytest.raises(KeyError, match=r"already exist"):
+            await store.aset(Record(id="1", metadata={"author": "Bob"}), on_conflict="raise")
+        assert await store.aget("1") == Record(id="1", metadata={"author": "Alice"})
+
+
+async def test_aset_invalid_on_conflict_raises() -> None:
+    async with RecordStore(InMemoryStore()) as store:
+        with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+            await store.aset(Record(id="1"), on_conflict="bogus")
+
+
+async def test_aset_on_conflict_is_keyword_only() -> None:
+    async with RecordStore(InMemoryStore()) as store:
+        with pytest.raises(TypeError, match=r"positional argument"):
+            await store.aset(Record(id="1"), "skip")
+
+
+async def test_aset_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        await RecordStore(InMemoryStore()).aset(Record(id="1"))
+
+
+# --- set_many (on_conflict) ---
+
+
+@pytest.fixture
+def filled_store(store: RecordStore) -> RecordStore:
+    store.set(Record(id="1", metadata={"a": 0, "z": 0}))
+    return store
+
+
+@pytest.mark.parametrize(
+    ("on_conflict", "expected"),
+    [
+        ("overwrite", {"a": 3, "c": 3}),
+        ("skip", {"a": 0, "z": 0}),
+        ("merge", {"a": 3, "b": 1, "c": 3, "z": 0}),
+    ],
+)
+def test_set_many_on_conflict_existing_and_duplicate_ids(
+    filled_store: RecordStore,
+    duplicates: list[Record],
+    on_conflict: OnConflict,
+    expected: dict[str, int],
+) -> None:
+    filled_store.set_many(duplicates, on_conflict=on_conflict)
+    assert filled_store.get_many(["1", "2"]) == [
+        Record(id="1", metadata=expected),
+        Record(id="2", metadata={"a": 2}),
+    ]
+
+
+def test_set_many_raise_writes_nothing(filled_store: RecordStore) -> None:
+    with pytest.raises(KeyError, match=r"already exist"):
+        filled_store.set_many([Record(id="2"), Record(id="1")], on_conflict="raise")
+    assert list(filled_store.values()) == [Record(id="1", metadata={"a": 0, "z": 0})]
+
+
+def test_set_many_raise_duplicate_ids_writes_nothing(
+    store: RecordStore, duplicates: list[Record]
+) -> None:
+    with pytest.raises(KeyError, match=r"appear more than once"):
+        store.set_many(duplicates, on_conflict="raise")
+    assert store.count() == 0
+
+
+def test_set_many_normalizes_on_conflict(store: RecordStore, duplicates: list[Record]) -> None:
+    store.set_many(duplicates, on_conflict=" Skip ")
+    assert store.get("1") == Record(id="1", metadata={"a": 1, "b": 1})
+
+
+@pytest.mark.parametrize("records", [[], [Record(id="1")]])
+def test_set_many_invalid_on_conflict_raises(store: RecordStore, records: list[Record]) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        store.set_many(records, on_conflict="bogus")
+
+
+def test_set_many_on_conflict_is_keyword_only(store: RecordStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        store.set_many([], "skip")
+
+
+def test_set_many_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        RecordStore(InMemoryStore()).set_many([Record(id="1")])
+
+
+@pytest.mark.parametrize(
+    ("on_conflict", "expected"),
+    [
+        ("overwrite", {"a": 3, "c": 3}),
+        ("skip", {"a": 0, "z": 0}),
+        ("merge", {"a": 3, "b": 1, "c": 3, "z": 0}),
+    ],
+)
+async def test_aset_many_on_conflict_existing_and_duplicate_ids(
+    filled_store: RecordStore,
+    duplicates: list[Record],
+    on_conflict: OnConflict,
+    expected: dict[str, int],
+) -> None:
+    await filled_store.aset_many(duplicates, on_conflict=on_conflict)
+    assert await filled_store.aget_many(["1", "2"]) == [
+        Record(id="1", metadata=expected),
+        Record(id="2", metadata={"a": 2}),
+    ]
+
+
+async def test_aset_many_raise_writes_nothing(filled_store: RecordStore) -> None:
+    with pytest.raises(KeyError, match=r"already exist"):
+        await filled_store.aset_many([Record(id="2"), Record(id="1")], on_conflict="raise")
+    assert await filled_store.acount() == 1
+
+
+async def test_aset_many_raise_duplicate_ids_writes_nothing(
+    store: RecordStore, duplicates: list[Record]
+) -> None:
+    with pytest.raises(KeyError, match=r"appear more than once"):
+        await store.aset_many(duplicates, on_conflict="raise")
+    assert await store.acount() == 0
+
+
+async def test_aset_many_normalizes_on_conflict(
+    store: RecordStore, duplicates: list[Record]
+) -> None:
+    await store.aset_many(duplicates, on_conflict=" Skip ")
+    assert await store.aget("1") == Record(id="1", metadata={"a": 1, "b": 1})
+
+
+@pytest.mark.parametrize("records", [[], [Record(id="1")]])
+async def test_aset_many_invalid_on_conflict_raises(
+    store: RecordStore, records: list[Record]
+) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        await store.aset_many(records, on_conflict="bogus")
+
+
+async def test_aset_many_on_conflict_is_keyword_only(store: RecordStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        await store.aset_many([], "skip")
+
+
+async def test_aset_many_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        await RecordStore(InMemoryStore()).aset_many([Record(id="1")])
+
+
+# --- set_batches ---
+
+
+def test_set_batches_writes_all_records(store: RecordStore, records: list[Record]) -> None:
+    store.set_batches(records, batch_size=3)
+    assert list(store.values()) == records
+
+
+def test_set_batches_consumes_generator(store: RecordStore, records: list[Record]) -> None:
+    store.set_batches(record for record in records)
+    assert list(store.values()) == records
+
+
+def test_set_batches_writes_mini_batches(store: RecordStore, records: list[Record]) -> None:
+    with patch.object(store.store, "set_many", wraps=store.store.set_many) as set_many:
+        store.set_batches(records, batch_size=3)
+    assert [len(call.args[0]) for call in set_many.call_args_list] == [3, 1]
+
+
+def test_set_batches_empty_is_no_op(store: RecordStore) -> None:
+    store.set_batches([])
+    assert store.count() == 0
+
+
+@pytest.mark.parametrize(
+    ("on_conflict", "expected"),
+    [
+        ("overwrite", {"a": 3, "c": 3}),
+        ("skip", {"a": 0, "z": 0}),
+        ("merge", {"a": 3, "b": 1, "c": 3, "z": 0}),
+    ],
+)
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_set_batches_on_conflict(
+    filled_store: RecordStore,
+    duplicates: list[Record],
+    on_conflict: OnConflict,
+    expected: dict[str, int],
+    batch_size: int,
+) -> None:
+    filled_store.set_batches(duplicates, batch_size, on_conflict=on_conflict)
+    assert filled_store.get("1") == Record(id="1", metadata=expected)
+
+
+def test_set_batches_raise_keeps_previous_batches(filled_store: RecordStore) -> None:
+    with pytest.raises(KeyError, match=r"already exist"):
+        filled_store.set_batches(
+            [Record(id="2"), Record(id="1"), Record(id="3")], batch_size=1, on_conflict="raise"
+        )
+    assert filled_store.contains_many(["1", "2", "3"]) == [True, True, False]
+
+
+@pytest.mark.parametrize("batch_size", [0, -1])
+def test_set_batches_invalid_batch_size_raises(store: RecordStore, batch_size: int) -> None:
+    with pytest.raises(ValueError, match=r"batch_size must be a positive integer"):
+        store.set_batches([], batch_size=batch_size)
+
+
+def test_set_batches_invalid_on_conflict_raises(store: RecordStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        store.set_batches([Record(id="1")], on_conflict="bogus")
+
+
+def test_set_batches_on_conflict_is_keyword_only(store: RecordStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        store.set_batches([], 32, "skip")
+
+
+def test_set_batches_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        RecordStore(InMemoryStore()).set_batches([Record(id="1")])
+
+
+async def test_aset_batches_writes_all_records(store: RecordStore, records: list[Record]) -> None:
+    await store.aset_batches(records, batch_size=3)
+    assert list(store.values()) == records
+
+
+async def test_aset_batches_consumes_generator(store: RecordStore, records: list[Record]) -> None:
+    await store.aset_batches(record for record in records)
+    assert list(store.values()) == records
+
+
+async def test_aset_batches_writes_mini_batches(store: RecordStore, records: list[Record]) -> None:
+    with patch.object(store.store, "aset_many", wraps=store.store.aset_many) as aset_many:
+        await store.aset_batches(records, batch_size=3)
+    assert [len(call.args[0]) for call in aset_many.call_args_list] == [3, 1]
+
+
+async def test_aset_batches_empty_is_no_op(store: RecordStore) -> None:
+    await store.aset_batches([])
+    assert await store.acount() == 0
+
+
+@pytest.mark.parametrize(
+    ("on_conflict", "expected"),
+    [
+        ("overwrite", {"a": 3, "c": 3}),
+        ("skip", {"a": 0, "z": 0}),
+        ("merge", {"a": 3, "b": 1, "c": 3, "z": 0}),
+    ],
+)
+@pytest.mark.parametrize("batch_size", [1, 3])
+async def test_aset_batches_on_conflict(
+    filled_store: RecordStore,
+    duplicates: list[Record],
+    on_conflict: OnConflict,
+    expected: dict[str, int],
+    batch_size: int,
+) -> None:
+    await filled_store.aset_batches(duplicates, batch_size, on_conflict=on_conflict)
+    assert await filled_store.aget("1") == Record(id="1", metadata=expected)
+
+
+async def test_aset_batches_raise_keeps_previous_batches(filled_store: RecordStore) -> None:
+    with pytest.raises(KeyError, match=r"already exist"):
+        await filled_store.aset_batches(
+            [Record(id="2"), Record(id="1"), Record(id="3")], batch_size=1, on_conflict="raise"
+        )
+    assert await filled_store.acontains_many(["1", "2", "3"]) == [True, True, False]
+
+
+@pytest.mark.parametrize("batch_size", [0, -1])
+async def test_aset_batches_invalid_batch_size_raises(store: RecordStore, batch_size: int) -> None:
+    with pytest.raises(ValueError, match=r"batch_size must be a positive integer"):
+        await store.aset_batches([], batch_size=batch_size)
+
+
+async def test_aset_batches_invalid_on_conflict_raises(store: RecordStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        await store.aset_batches([Record(id="1")], on_conflict="bogus")
+
+
+async def test_aset_batches_on_conflict_is_keyword_only(store: RecordStore) -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        await store.aset_batches([], 32, "skip")
+
+
+async def test_aset_batches_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        await RecordStore(InMemoryStore()).aset_batches([Record(id="1")])
 
 
 # --- delete / delete_many ---

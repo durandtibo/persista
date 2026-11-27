@@ -3,7 +3,7 @@ values as JSON."""
 
 from __future__ import annotations
 
-__all__ = ["BaseSQLiteStore", "PickleSQLiteStore", "SQLiteStore", "TypedSQLiteStore"]
+__all__ = ["BaseSQLiteStore", "PickleSQLiteStore", "SQLiteStore"]
 
 import asyncio
 import json
@@ -26,13 +26,19 @@ from persista.store.validation import (
     resolve_conflicts,
     validate_batch_size,
     validate_field_name,
-    validate_value_schema,
 )
 from persista.utils.imports import is_aiosqlite_available
 from persista.utils.path import prepare_store_path
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Generator, Iterator, Mapping, Sequence
+    from collections.abc import (
+        AsyncIterator,
+        Generator,
+        Iterable,
+        Iterator,
+        Mapping,
+        Sequence,
+    )
     from pathlib import Path
     from typing import Self
 
@@ -90,15 +96,13 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
     :meth:`get_many`, :meth:`filter`, and :meth:`iter_batches` all
     query the full row and hand it to :meth:`_row_to_value` to turn
     it back into a value dict, which is what lets subclasses differ
-    in how a value is laid out across columns (a single JSON column
-    vs. typed columns plus a JSON overflow column) without
+    in how a value is encoded (JSON or ``pickle``) without
     duplicating any of the surrounding query logic.
 
     Subclasses only need to implement :meth:`_create_table_sql`,
-    :meth:`_row_to_value`, :meth:`_filter_expr`, and
-    :meth:`_set_many` (see :class:`SQLiteStore` for a JSON-only
-    layout and :class:`~persista.store.sqlite_typed.TypedSQLiteStore`
-    for an optionally typed one).
+    :meth:`_row_to_value`, :meth:`_filter_expr`, :meth:`_set_many`,
+    and :meth:`_aset_many` (see :class:`SQLiteStore` for the JSON
+    encoding and :class:`PickleSQLiteStore` for the ``pickle`` one).
 
     The constructor mirrors :func:`sqlite3.connect`: the first
     positional argument is the ``database`` argument accepted by
@@ -248,8 +252,8 @@ class BaseSQLiteStore(BaseStore, MultilineDisplayMixin):
         except sqlite3.OperationalError as exc:
             if not _is_readonly_error(exc):
                 # Some other failure (locked database, disk I/O error,
-                # malformed CREATE TABLE from a bad value_schema, ...);
-                # don't mask it as if the table already existed.
+                # malformed CREATE TABLE, ...); don't mask it as if the
+                # table already existed.
                 raise
             # Connection is read-only (e.g. opened via a `mode=ro` URI);
             # assume the table already exists.
@@ -865,152 +869,6 @@ class SQLiteStore(BaseSQLiteStore):
         logger.debug("Added/replaced %d key-value pair(s)", len(items))
 
 
-_KEY_COLUMN = "_KEY_"
-
-
-class TypedSQLiteStore(BaseSQLiteStore):
-    """A SQLite-backed key-value store with an optional typed value
-    schema.
-
-    Persists values to a SQLite database and supports adding,
-    retrieving, and filtering by value fields.  An optional
-    ``value_schema`` maps known value field names to SQLite types.
-    Known fields are stored as typed columns for fast, index-friendly
-    queries.  Any value fields not in the schema are stored in an
-    ``extra`` JSON overflow column, so nothing is lost.
-
-    The constructor mirrors :func:`sqlite3.connect` directly (plus the
-    ``value_schema`` argument). For the common case of opening a file
-    by path (optionally read-only), use :meth:`from_path` instead.
-
-    Args:
-        database: The ``database`` argument passed to
-            ``sqlite3.connect`` (path, ``":memory:"``, or ``file:`` URI).
-        value_schema: Optional mapping of value field names to SQLite
-            type strings (e.g. ``{"author": "TEXT", "year":
-            "INTEGER"}``).  Fields in the schema get native typed
-            columns; all other value fields go into the ``extra``
-            JSON overflow column.  Defaults to ``None``, which stores
-            every value field as JSON only.
-        **kwargs: Additional keyword arguments to pass to
-            ``sqlite3.connect``.
-
-    Example:
-        ```pycon
-        >>> from persista.store import TypedSQLiteStore
-        >>> schema = {"author": "TEXT", "year": "INTEGER", "category": "TEXT"}
-        >>> with TypedSQLiteStore(":memory:", value_schema=schema) as store:
-        ...     store.set_many(
-        ...         {
-        ...             "1": {
-        ...                 "title": "Intro to Python",
-        ...                 "author": "Alice",
-        ...                 "category": "Programming",
-        ...             },
-        ...             "2": {
-        ...                 "title": "Advanced Python",
-        ...                 "author": "Alice",
-        ...                 "category": "Programming",
-        ...             },
-        ...             "3": {"title": "History of Rome", "author": "Bob", "category": "History"},
-        ...         }
-        ...     )
-        ...     len(store.filter(author="Alice"))
-        ...     len(store.filter(author="Alice", category="Programming"))
-        ...     len(store.filter(category="History"))
-        ...
-        2
-        2
-        1
-
-        ```
-
-    Note:
-        :meth:`from_uri` reconstructs the store with an empty
-        ``value_schema``, so value fields that were stored in typed
-        columns won't appear in :meth:`get`/:meth:`filter` results
-        until the caller re-supplies the original ``value_schema`` to
-        a fresh construction; the data itself isn't lost in the
-        database, just not visible through the reconstructed store.
-    """
-
-    _key_column = _KEY_COLUMN
-    _scheme = "sqlite+typed"
-
-    def __init__(
-        self,
-        database: Path | str = ":memory:",
-        value_schema: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        value_schema = value_schema or {}
-        if _KEY_COLUMN in value_schema:
-            msg = f"value_schema must not contain the reserved key column name {_KEY_COLUMN!r}"
-            raise ValueError(msg)
-        validate_value_schema(value_schema)
-        self._schema: dict[str, str] = value_schema
-        super().__init__(database, **kwargs)
-
-    def _create_table_sql(self) -> str:
-        typed_cols = "".join(f", {name} {dtype}" for name, dtype in self._schema.items())
-        return (
-            f"CREATE TABLE IF NOT EXISTS store "
-            f"({_KEY_COLUMN} TEXT PRIMARY KEY{typed_cols}, extra JSON)"
-        )
-
-    def _row_to_value(self, row: Sequence[Any]) -> dict[str, Any]:
-        # row layout: key, [schema cols...], extra
-        schema_vals = dict(zip(self._schema.keys(), row[1 : 1 + len(self._schema)], strict=True))
-        extra_json = row[1 + len(self._schema)]
-        value = {k: v for k, v in schema_vals.items() if v is not None}
-        if extra_json:
-            value.update(json.loads(extra_json))
-        return value
-
-    def _filter_expr(self, key: str) -> str:
-        if key in self._schema:
-            return key
-        validate_field_name(key)
-        return f"json_extract(extra, '$.{key}')"
-
-    def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
-        if items:
-            with self._lock:
-                self._connection.executemany(
-                    self._build_insert(),
-                    [self._value_to_row(key, value) for key, value in items.items()],
-                )
-                self._connection.commit()
-
-        logger.debug("Added/replaced %d key-value pair(s)", len(items))
-
-    async def _aset_many(self, items: Mapping[str, dict[str, Any]]) -> None:
-        if items:
-            conn = await self._ensure_aconn()
-            await conn.executemany(
-                self._build_insert(),
-                [self._value_to_row(key, value) for key, value in items.items()],
-            )
-            await conn.commit()
-        logger.debug("Added/replaced %d key-value pair(s)", len(items))
-
-    # ---------------------------------------------------------------------------
-    # Private helpers
-    # ---------------------------------------------------------------------------
-
-    def _build_insert(self) -> str:
-        """Build the INSERT OR REPLACE statement from the schema."""
-        col_names = [_KEY_COLUMN, *self._schema.keys(), "extra"]
-        placeholders = ", ".join("?" * len(col_names))
-        return f"INSERT OR REPLACE INTO store ({', '.join(col_names)}) VALUES ({placeholders})"  # noqa: S608
-
-    def _value_to_row(self, key: str, value: dict[str, Any]) -> tuple:
-        """Convert a key-value pair to an INSERT row tuple."""
-        known = [value.get(k) for k in self._schema]
-        extra = {k: v for k, v in value.items() if k not in self._schema}
-        return (key, *known, json.dumps(extra) if extra else None)
-
-
 _CREATE_TABLE_PICKLE = """
     CREATE TABLE IF NOT EXISTS store (
         key   TEXT PRIMARY KEY,
@@ -1027,9 +885,9 @@ class PickleSQLiteStore(BaseSQLiteStore):
     Python objects within a value's fields (tuples, sets, datetimes,
     custom classes, etc.), not just JSON-compatible types. The
     tradeoff is that values are opaque binary blobs: SQLite's
-    ``json1`` functions can't see into them, so :meth:`filter` can't
-    push field comparisons down to SQL and instead falls back to
-    scanning and unpickling every row in Python. Since
+    ``json1`` functions can't see into them, so :meth:`filter` (and
+    :meth:`filter_items`) can't push field comparisons down to SQL and
+    instead falls back to scanning and unpickling every row in Python. Since
     :func:`pickle.loads` can execute arbitrary code, this store must
     never be pointed at a database file that isn't fully trusted.
 
@@ -1069,38 +927,45 @@ class PickleSQLiteStore(BaseSQLiteStore):
     def _filter_expr(self, key: str) -> str:
         msg = (
             "PickleSQLiteStore stores values as opaque pickled blobs, so field "
-            "filters can't be pushed down to SQL; filter() overrides the base "
+            "filters can't be pushed down to SQL; filter_items() overrides the base "
             "implementation instead of relying on this method."
         )
         raise NotImplementedError(msg)
 
-    def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
+    def filter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
         self._check_open()
         with self._lock:
             rows = self._connection.execute("SELECT * FROM store").fetchall()
-        values = (self._row_to_value(row) for row in rows)
-        if not field_filters:
-            return list(values)
-        return [
-            value
-            for value in values
-            if all(value.get(name) == expected for name, expected in field_filters.items())
-        ]
+        return self._match_rows(rows, field_filters)
 
-    async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:
+    async def afilter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
         if not is_aiosqlite_available():
-            return await asyncio.to_thread(lambda: self.filter(**field_filters))
+            return await asyncio.to_thread(lambda: self.filter_items(**field_filters))
         conn = await self._ensure_aconn()
         cursor = await conn.execute("SELECT * FROM store")
         rows = await cursor.fetchall()
-        values = (self._row_to_value(row) for row in rows)
-        if not field_filters:
-            return list(values)
-        return [
-            value
-            for value in values
+        return self._match_rows(rows, field_filters)
+
+    def _match_rows(
+        self, rows: Iterable[Sequence[Any]], field_filters: Mapping[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        """Decode ``rows`` and keep the values that match
+        ``field_filters``.
+
+        Args:
+            rows: Raw ``SELECT * FROM store`` rows.
+            field_filters: The expected value of each field. A field
+                that is absent from a value matches ``None``.
+
+        Returns:
+            The matching values, keyed by the keys of their rows.
+        """
+        values = ((row[0], self._row_to_value(row)) for row in rows)
+        return {
+            key: value
+            for key, value in values
             if all(value.get(name) == expected for name, expected in field_filters.items())
-        ]
+        }
 
     def _set_many(self, items: Mapping[str, dict[str, Any]]) -> None:
         if items:

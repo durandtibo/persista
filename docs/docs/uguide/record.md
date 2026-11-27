@@ -18,8 +18,7 @@ The `persista.record` package provides:
 - `sort_by_metadata`: sort a list of records by a metadata key
 - `persista.record.fake.generate_fake_records`: generate synthetic records for tests and demos
   (requires the `faker` extra)
-- `persista.record.store`: `RecordStore` and ready-to-use backends (`InMemoryRecordStore`,
-  `SQLiteRecordStore`, `DuckDBRecordStore`, ...) for persisting records
+- `persista.record.store`: `RecordStore`, to persist records in any `persista.store` backend
 - `persista.record.analysis`: functions to check a corpus of records for exact/near duplicates,
   id collisions, orphan references, schema drift, and other data-quality issues
 
@@ -114,25 +113,70 @@ author name and topic, useful for tests, demos, and prototyping:
 ## Persisting Records with `RecordStore`
 
 `RecordStore` wraps any `persista.store.BaseStore` to store `Record` instances, keyed by their
-`id`, with the same sync/async API as `BaseStore`:
+`id`. It is the only record store: choose where the records are persisted by choosing the store,
+for example `RecordStore(InMemoryStore())` for tests and prototyping, or
+`RecordStore(SQLiteStore(path))` to persist them in a SQLite database:
 
 ```pycon
 >>> from persista.record import Record
 >>> from persista.record.store import RecordStore
->>> from persista.store import InMemoryStore
->>> with RecordStore(InMemoryStore()) as store:
+>>> from persista.store import SQLiteStore
+>>> with RecordStore(SQLiteStore(":memory:")) as store:
 ...     store.set_many([Record(id="1", metadata={"author": "Alice"})])
 ...     store.get("1")
 Record(id='1', metadata={'author': 'Alice'})
 
 ```
 
-`filter` retrieves records matching all given metadata keyword arguments, combined with `AND`:
+`RecordStore` has the method names of `BaseStore`, with records in place of key-value pairs, and
+each method has an `a`-prefixed asynchronous twin (`aget`, `aset_many`, `afilter`, ...):
+
+- `set`, `set_many`, `set_batches`: write one record, a list of records, or a stream of records
+- `get`, `get_many`, `contains`, `contains_many`: read records by id
+- `filter`: retrieve the records matching metadata fields
+- `delete`, `delete_many`, `clear`: remove records
+- `keys`, `values`, `iter_batches`, `count`: iterate over the records and count them
+- `open`, `close`, `closed`: manage the underlying store
+
+A [store URI](store.md#store-uris) belongs to the underlying store: use
+`record_store.store.to_uri()`, and `RecordStore(store_from_uri(uri))` to reconnect.
+
+### Handling Conflicts
+
+`set`, `set_many` and `set_batches` accept the keyword-only argument `on_conflict`, with the
+[strategies of the stores](store.md#handling-conflicts): `"overwrite"` (default), `"raise"`,
+`"skip"` and `"merge"` (a shallow merge of the metadata):
 
 ```pycon
 >>> from persista.record import Record
->>> from persista.record.store import InMemoryRecordStore
->>> with InMemoryRecordStore() as store:
+>>> from persista.record.store import RecordStore
+>>> from persista.store import InMemoryStore
+>>> with RecordStore(InMemoryStore()) as store:
+...     store.set(Record(id="1", metadata={"author": "Alice"}))
+...     store.set(Record(id="1", metadata={"year": 2024}), on_conflict="merge")
+...     store.get("1")
+Record(id='1', metadata={'author': 'Alice', 'year': 2024})
+
+```
+
+When a list given to `set_many` contains several records with the same `id`, they are resolved
+with the same strategy, in the order of the list: `"overwrite"` keeps the last one, `"skip"` the
+first one, `"merge"` merges them, and `"raise"` raises a `KeyError` and writes nothing.
+`set_batches` writes one batch at a time, so with `"raise"` the batches written before the
+conflict are kept.
+
+### Filtering Records
+
+`filter` retrieves the records matching all the given metadata keyword arguments, combined with
+`AND`. It follows the `filter` semantics of the underlying store, so the way values are compared,
+and the field names that are accepted, depend on the backend. The SQL stores filter in the database
+(see [indexing a filtered field](store.md#indexing-a-filtered-field)); the other stores are scanned:
+
+```pycon
+>>> from persista.record import Record
+>>> from persista.record.store import RecordStore
+>>> from persista.store import InMemoryStore
+>>> with RecordStore(InMemoryStore()) as store:
 ...     store.set_many(
 ...         [
 ...             Record(id="1", metadata={"author": "Alice", "category": "Programming"}),
@@ -143,27 +187,6 @@ Record(id='1', metadata={'author': 'Alice'})
 2
 
 ```
-
-Ready-to-use backends avoid wiring up the underlying `BaseStore` yourself:
-
-- `InMemoryRecordStore`: backed by `persista.store.InMemoryStore`, for tests and prototyping
-- `SQLiteRecordStore` / `DuckDBRecordStore`: backed by `TypedSQLiteStore` / `TypedDuckDBStore`
-  with no fixed schema (metadata stored as JSON); `TypedSQLiteRecordStore` /
-  `TypedDuckDBRecordStore` instead store each metadata field declared in a `metadata_schema` as
-  its own SQL column:
-
-```pycon
->>> from persista.record import Record
->>> from persista.record.store import TypedSQLiteRecordStore
->>> with TypedSQLiteRecordStore(metadata_schema={"author": "TEXT"}) as store:
-...     store.set_many([Record(id="1", metadata={"author": "Alice"})])
-...     store.get("1")
-Record(id='1', metadata={'author': 'Alice'})
-
-```
-
-Every store also exposes `a`-prefixed asynchronous methods (`aget`, `aset_many`, `afilter`, ...),
-mirroring `BaseStore`'s async API.
 
 ### Building a Record Store from a Configuration
 
@@ -176,29 +199,17 @@ pass it to the `RecordStore`:
 ```pycon
 >>> from coola.factory import resolve_object
 >>> from persista.record import Record
->>> from persista.record.store import BaseRecordStore
+>>> from persista.record.store import RecordStore
 >>> from persista.store import BaseStore
 >>> config = {
 ...     "_target_": "persista.record.store.RecordStore",
 ...     "store": {"_target_": "persista.store.SQLiteStore", "database": ":memory:"},
 ... }
 >>> store = resolve_object(config["store"], cls=BaseStore)
->>> with resolve_object({**config, "store": store}, cls=BaseRecordStore) as record_store:
+>>> with resolve_object({**config, "store": store}, cls=RecordStore) as record_store:
 ...     record_store.set_many([Record(id="1", metadata={"author": "Alice"})])
 ...     record_store.get("1")
 Record(id='1', metadata={'author': 'Alice'})
-
-```
-
-A ready-to-use backend has no nested configuration, and needs a single call:
-
-```pycon
->>> from coola.factory import resolve_object
->>> from persista.record.store import BaseRecordStore
->>> config = {"_target_": "persista.record.store.SQLiteRecordStore", "database": ":memory:"}
->>> record_store = resolve_object(config, cls=BaseRecordStore)
->>> type(record_store).__name__
-'SQLiteRecordStore'
 
 ```
 

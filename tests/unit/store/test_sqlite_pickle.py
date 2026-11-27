@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pickle
 import sqlite3
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -174,6 +175,75 @@ def test_filter_matches_non_json_field(store: PickleSQLiteStore) -> None:
     store.set("1", {"tags": {"python", "sqlite"}})
     store.set("2", {"tags": {"other"}})
     assert store.filter(tags={"python", "sqlite"}) == [{"tags": {"python", "sqlite"}}]
+
+
+# ---------------------------------------------------------------------------
+# filter_items / _match_rows
+# ---------------------------------------------------------------------------
+
+
+def test_filter_items_no_filters(
+    store: PickleSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.filter_items() == items
+
+
+def test_filter_items_returns_matches_with_their_keys(
+    store: PickleSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    store.set_many(items)
+    assert store.filter_items(author="Bob") == {
+        "3": {"title": "History of Rome", "author": "Bob", "category": "History"}
+    }
+
+
+def test_filter_items_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        PickleSQLiteStore().filter_items(author="Bob")
+
+
+async def test_afilter_items_returns_matches_with_their_keys(
+    store: PickleSQLiteStore, items: dict[str, dict[str, Any]]
+) -> None:
+    await store.aset_many(items)
+    assert await store.afilter_items(author="Bob") == {
+        "3": {"title": "History of Rome", "author": "Bob", "category": "History"}
+    }
+
+
+async def test_afilter_items_without_aiosqlite(
+    store: PickleSQLiteStore,
+    items: dict[str, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sqlite_module, "is_aiosqlite_available", lambda: False)
+    store.set_many(items)
+    assert list(await store.afilter_items(author="Bob")) == ["3"]
+
+
+async def test_afilter_items_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        await PickleSQLiteStore().afilter_items(author="Bob")
+
+
+def test_match_rows_decodes_and_filters(store: PickleSQLiteStore) -> None:
+    rows = [("1", pickle.dumps({"a": 1})), ("2", pickle.dumps({"a": 2}))]
+    assert store._match_rows(rows, {"a": 2}) == {"2": {"a": 2}}
+
+
+def test_match_rows_no_filters_keeps_all(store: PickleSQLiteStore) -> None:
+    rows = [("1", pickle.dumps({"a": 1})), ("2", pickle.dumps({"a": 2}))]
+    assert store._match_rows(rows, {}) == {"1": {"a": 1}, "2": {"a": 2}}
+
+
+def test_match_rows_absent_field_matches_none(store: PickleSQLiteStore) -> None:
+    rows = [("1", pickle.dumps({"a": 1})), ("2", pickle.dumps({"b": 2}))]
+    assert store._match_rows(rows, {"a": None}) == {"2": {"b": 2}}
+
+
+def test_match_rows_empty(store: PickleSQLiteStore) -> None:
+    assert store._match_rows([], {"a": 1}) == {}
 
 
 # ---------------------------------------------------------------------------

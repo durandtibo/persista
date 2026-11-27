@@ -224,7 +224,7 @@ def check_imports_record() -> None:
     require_subpackage("persista.record")
     for module_path, name in (
         ("persista.record", "Record"),
-        ("persista.record.store", "BaseRecordStore"),
+        ("persista.record.store", "RecordStore"),
     ):
         module = importlib.import_module(module_path)
         assert getattr(module, name, None) is not None, f"Failed to import {name}"
