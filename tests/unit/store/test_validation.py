@@ -6,21 +6,19 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from persista.store import (
-    InMemoryStore,
-    normalize_on_conflict,
-    validate_batch_size,
-    validate_field_name,
-    validate_on_conflict,
-)
+from persista.store import InMemoryStore
 from persista.store.validation import (
     ON_CONFLICT_VALUES,
     check_is_closed,
     check_is_open,
     is_valid_field_name,
+    normalize_on_conflict,
+    validate_batch_size,
+    validate_field_name,
     validate_key,
     validate_keys,
     validate_namespace,
+    validate_on_conflict,
     validate_table_name,
 )
 

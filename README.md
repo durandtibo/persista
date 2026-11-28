@@ -42,6 +42,7 @@ APIs, plus TTL caching and HTTP fetch utilities.
 **Quick Links:**
 
 - [Documentation](https://durandtibo.github.io/persista/)
+- [Migration Guide](docs/docs/migration.md)
 - [Installation](#installation)
 - [Features](#features)
 - [Contributing](#contributing)
@@ -215,11 +216,8 @@ For detailed installation instructions, see the [documentation](https://durandti
 ## Contributing
 
 Contributions are welcome! We appreciate bug fixes, feature additions, documentation improvements,
-and more. Please check the [contributing guidelines](CONTRIBUTING.md) for details on:
-
-- Setting up the development environment
-- Code style and testing requirements
-- Submitting pull requests
+and more. To set up the development environment and run the tests, see
+[installing from source](https://durandtibo.github.io/persista/get_started/#installing-from-source).
 
 Whether you're fixing a bug or proposing a new feature, please open an issue first to discuss
 your changes.
@@ -228,7 +226,8 @@ your changes.
 
 :warning: **Important**: As `persista` is under active development, its API is not yet stable and may
 change between releases. We recommend pinning a specific version in your project’s dependencies to
-ensure consistent behavior.
+ensure consistent behavior. The [migration guide](docs/docs/migration.md) lists the breaking changes
+since `persista` 0.0.4a3.
 
 ## License
 

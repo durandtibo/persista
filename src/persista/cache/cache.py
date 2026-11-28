@@ -75,7 +75,9 @@ class Cache(MultilineDisplayMixin):
     the store until its key is read again** (or deleted, overwritten, or
     the cache cleared). There is no background eviction and no size
     limit, so a cache that writes many keys that are never read again
-    grows until :meth:`clear`.
+    grows until :meth:`clear`. The read that deletes an expired entry can
+    remove a value that another writer stores between the read and the
+    deletion.
 
     Concurrent misses on the same key can compute the value several
     times.
@@ -557,7 +559,8 @@ class Cache(MultilineDisplayMixin):
         """Async equivalent of :meth:`get_or_compute`.
 
         ``fn`` may be a regular function or an ``async def`` function: what
-        it returns is awaited if it is awaitable. The store is accessed
+        it returns is awaited if it is awaitable. A regular function is
+        called in the event loop, which it blocks. The store is accessed
         with its async methods.
 
         Example:
@@ -624,7 +627,8 @@ class Cache(MultilineDisplayMixin):
 
         Functions are told apart by their names only: two functions with
         the same module and qualified name, such as two closures returned
-        by the same function, or two lambdas defined in the same scope,
+        by the same function, two lambdas defined in the same scope, or a
+        function and a wrapper of it made with ``functools.wraps``,
         share their results. Give them a ``key`` if they differ.
 
         A hit returns the result as the codec of the store reads it back

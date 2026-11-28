@@ -7,10 +7,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from persista.store import DuckDBStore, PickleCodec
-from persista.store.duckdb import _get_database_lock
+from persista.store.duckdb import _check_unicode_keys, _get_database_lock
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Callable, Generator
     from pathlib import Path
 
 duckdb = pytest.importorskip("duckdb")
@@ -308,6 +308,57 @@ def test__get_many_many_keys(store: DuckDBStore) -> None:
     assert len(store._get_many([str(i) for i in range(1000)])) == 1000
 
 
+# --- keys that are not valid Unicode ---
+
+SURROGATE = chr(0xD800)
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda s: s.get(SURROGATE), id="get"),
+        pytest.param(lambda s: s.get_many(["2", SURROGATE]), id="get_many"),
+        pytest.param(lambda s: s.contains(SURROGATE), id="contains"),
+        pytest.param(lambda s: s.set(SURROGATE, {}), id="set"),
+        pytest.param(lambda s: s.set_many({"2": {}, SURROGATE: {}}), id="set_many"),
+        pytest.param(
+            lambda s: s.set_many({"2": {}, SURROGATE: {}}, on_conflict="skip"), id="set_many_skip"
+        ),
+        pytest.param(lambda s: s.delete(SURROGATE), id="delete"),
+        pytest.param(lambda s: s.delete_many(["1", SURROGATE]), id="delete_many"),
+    ],
+)
+def test_surrogate_key_raises_value_error(
+    store: DuckDBStore, operation: Callable[[DuckDBStore], object]
+) -> None:
+    store.set("1", {"a": 1})
+    with pytest.raises(ValueError, match=r"A key of DuckDBStore must be valid Unicode"):
+        operation(store)
+    assert dict(next(store.iter_batches())) == {"1": {"a": 1}}
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        pytest.param(lambda s: s._fetch("SELECT CAST(? AS INTEGER)", ["a"]), id="_fetch"),
+        pytest.param(lambda s: s._execute("SELECT CAST(? AS INTEGER)", ["a"]), id="_execute"),
+        pytest.param(
+            lambda s: s._executemany("SELECT CAST(? AS INTEGER)", [["a"]]), id="_executemany"
+        ),
+    ],
+)
+def test_statement_error_with_valid_keys_is_unchanged(
+    store: DuckDBStore, operation: Callable[[DuckDBStore], object]
+) -> None:
+    with pytest.raises(duckdb.ConversionException, match=r"Could not convert"):
+        operation(store)
+
+
+def test_invalid_input_error_with_valid_keys_is_unchanged(store: DuckDBStore) -> None:
+    with pytest.raises(duckdb.InvalidInputException, match=r"Prepared statement|parameter"):
+        store._fetch("SELECT ?, ?", ["a"])
+
+
 # --- transactions ---
 
 
@@ -485,6 +536,22 @@ async def test_afilter(store: DuckDBStore) -> None:
 
 def test_repr(store: DuckDBStore) -> None:
     assert repr(store) == ("DuckDBStore(\n  (database): :memory:\n  (closed): False\n)")
+
+
+#########################################
+#     Tests for _check_unicode_keys     #
+#########################################
+
+
+@pytest.mark.parametrize("params", [[], ["a", "é", ""], [1, None, b"a"]])
+def test__check_unicode_keys_valid(params: list[Any]) -> None:
+    _check_unicode_keys(params)
+
+
+@pytest.mark.parametrize("params", [[chr(0xD800)], ["a", 1, "b" + chr(0xDFFF)]])
+def test__check_unicode_keys_surrogate(params: list[Any]) -> None:
+    with pytest.raises(ValueError, match=r"lone surrogate"):
+        _check_unicode_keys(params)
 
 
 ########################################

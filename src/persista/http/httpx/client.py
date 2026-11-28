@@ -327,7 +327,9 @@ class HttpClient:
     the one that was cached, except the ``content-encoding``,
     ``content-length`` and ``transfer-encoding`` headers (the content is
     stored decoded, and ``content-length`` is that of the decoded
-    content). Its ``request`` is the request of the current call.
+    content). Its ``request`` is the request of the current call. On a cache
+    hit nothing is sent: the response event hooks of the client are not
+    called, and its cookies are not updated.
 
     Args:
         client: The :class:`httpx.Client` to wrap. The caller owns its

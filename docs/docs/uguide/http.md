@@ -17,6 +17,18 @@ installed.
 - `persista.http.requests`: `fetch_response` and `create_session`, built on `requests`, which
   retry `GET` requests only and have no cache.
 
+## Properties
+
+What the HTTP helpers guarantee, and where each guarantee stops. The
+[properties of the package](package.md) apply too.
+
+| Property      | Guarantee                                                                                                                                                                   | Limits                                                                                                                                                                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transparent   | A request behaves as with the wrapped `httpx` client (timeout, headers, authentication) or `requests` session, plus retries and, with `httpx`, an optional cache.           | A 4xx or 5xx response raises `httpx.HTTPStatusError`. On a cache hit, nothing is sent: the response hooks of the client do not run and its cookies are not updated.                                                                            |
+| Safe retries  | Only the idempotent methods are retried unless you say otherwise. The delay is never negative and at most `max_delay`.                                                      | A method that HTTP defines as idempotent may not be on your server. `requests` retries `GET` only, and a session that you provide uses its own settings.                                                                                       |
+| Sound cache   | A cached response is served only for a request with the same method, final URL, headers, body and redirect setting. A request with `auth` or URL credentials is not cached. | A request authenticated by a header or a cookie is cached, under a key that contains them. The key does not describe the [transport](#requests-that-are-not-cached) of the client, and `Cache-Control`, `ETag` and `Vary` are not interpreted. |
+| Same response | A response from the cache has the same status and content as the original, and its methods (`json`, `raise_for_status`) work.                                               | `history`, `extensions` (so the HTTP version and the reason phrase of the server) and `elapsed` are not kept, repeated headers are joined, and the content is [stored decoded](#responses-from-the-cache).                                     |
+
 ## Clients for `httpx`
 
 `HttpClient` has the `get`, `post`, `put`, `patch`, and `delete` methods, and `request` for any
@@ -161,6 +173,9 @@ The request is sent, and the cache is neither read nor written, when:
 - the client has request event hooks, which can change the request after the key is computed;
 - the call passes `extensions`, which can change how the request is sent.
 
+On a cache hit nothing is sent, so the response event hooks of the client are not called and a
+`Set-Cookie` header of the cached response does not update its cookies.
+
 The key does not describe the transport of the client (proxy, TLS settings, custom transport), nor
 what a subclass of the client adds when it sends a request: do not share a cache between clients
 for which these change the response. The `Cache-Control`, `ETag`, and `Vary` headers are not
@@ -222,12 +237,13 @@ As for `httpx`, the default status codes are `429`, `500`, `502`, `503`, and `50
 ## Credentials in Errors and Logs
 
 The log messages of `persista` show a URL without its username and password; the query string is
-kept. The errors of `httpx` and `requests` are not rewritten: their messages (and the `request`
-and `response` objects that they carry) can contain the credentials of a URL, and the request
-headers. The loggers of these libraries can show URLs too (`httpx` logs each request at the
+kept. The errors of `httpx` and `requests` are not rewritten: their messages (for example the one of
+the error raised for a 4xx or 5xx response, which quotes the URL with its password) and the
+`request` and `response` objects that they carry can contain the credentials of a URL, and the
+request headers. The loggers of these libraries can show URLs too (`httpx` logs each request at the
 `INFO` level). Prefer the `auth` argument to credentials in a URL, and take care when you log an
 error.
 
 ## API Reference
 
-See the [reference documentation](../refs/utils.md) for the full API.
+See the [reference documentation](../refs/http.md) for the full API.

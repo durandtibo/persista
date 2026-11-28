@@ -43,17 +43,17 @@ def diff_records(before: Iterable[Record], after: Iterable[Record]) -> dict[str,
     Returns:
         A dict with three keys:
 
-        - ``added``: ids present in ``after`` but not ``before``, in
-          the order encountered in ``after``.
-        - ``removed``: ids present in ``before`` but not ``after``, in
-          the order encountered in ``before``.
-        - ``changed``: ids present in both snapshots whose metadata
-          differs between them, as defined by
-          :mod:`persista.record.equality`, in the order encountered in
-          ``after``.
+            - ``added``: ids present in ``after`` but not ``before``, in
+              the order encountered in ``after``.
+            - ``removed``: ids present in ``before`` but not ``after``, in
+              the order encountered in ``before``.
+            - ``changed``: ids present in both snapshots whose metadata
+              differs between them, as defined by
+              :mod:`persista.record.equality`, in the order encountered in
+              ``after``.
 
-        Ids present in both snapshots with equal metadata are
-        omitted entirely.
+            Ids present in both snapshots with equal metadata are
+            omitted entirely.
 
     Raises:
         TypeError: If the metadata of a record contains an object that

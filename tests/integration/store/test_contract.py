@@ -199,6 +199,8 @@ READ_ONLY = ["sqlite", "duckdb", "lmdb"]
 # The keys that a backend documents it cannot keep.
 SURROGATE_KEY = chr(0xD800)
 REJECTED_KEYS: dict[str, list[str]] = {
+    "sqlite": [SURROGATE_KEY],
+    "duckdb": [SURROGATE_KEY],
     "file": ["a" * 251, "A" * 84, "x" * 2000, SURROGATE_KEY],
     "lmdb": ["", "x" * 512, "é" * 256, "x" * 2000, SURROGATE_KEY],
     "redis": [SURROGATE_KEY],
@@ -333,6 +335,13 @@ def test_deleting_one_case_of_a_key_keeps_the_other(store: BaseStore) -> None:
     assert store.get_many(["a", "A"]) == [None, {"v": 2}]
 
 
+# The message of a rejected key: the name of the store, or the message of
+# sqlite3, whose error is already a ValueError.
+REJECTED_KEY_MESSAGE = (
+    r"DuckDBStore|FileStore|LmdbStore|RedisStore|PostgresStore|surrogates not allowed"
+)
+
+
 def rejected_key_params() -> list[Any]:
     r"""Return one parameter per key that a backend rejects."""
     return [
@@ -388,7 +397,7 @@ def test_rejected_key_raises_and_changes_nothing(
 ) -> None:
     with BACKENDS[backend](JsonCodec(), tmp_path) as store:
         store.set("a", {"v": 1})
-        with pytest.raises(ValueError, match=r"FileStore|LmdbStore|RedisStore|PostgresStore"):
+        with pytest.raises(ValueError, match=REJECTED_KEY_MESSAGE):
             operation(store, key)
         assert dict(next(store.iter_batches())) == {"a": {"v": 1}}
 
@@ -400,7 +409,7 @@ async def test_rejected_key_raises_and_changes_nothing_async(
 ) -> None:
     async with BACKENDS[backend](JsonCodec(), tmp_path) as store:
         await store.aset("a", {"v": 1})
-        with pytest.raises(ValueError, match=r"FileStore|LmdbStore|RedisStore|PostgresStore"):
+        with pytest.raises(ValueError, match=REJECTED_KEY_MESSAGE):
             await operation(store, key)
         assert await store.afilter() == {"a": {"v": 1}}
 

@@ -35,6 +35,30 @@ Like a store, a cache must be opened (`open`/`aopen`, or `with`/`async with`) be
 every method that accesses the store raises `RuntimeError` on a closed cache, also with an empty
 input.
 
+## Properties
+
+What a cache guarantees, and where each guarantee stops. The
+[properties of the package](package.md) apply too.
+
+| Property       | Guarantee                                                                                                                                                   | Limits                                                                                                                                                                                                     |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hit or miss    | A hit returns the stored value, as the codec of the store reads it back; an expired or absent key is a miss. A cached `None` can be told apart from a miss. | The expiry uses the wall clock of the machine. A read that finds an expired entry deletes its key, so it can remove a value that another writer stores between the read and the deletion.                  |
+| No false hit   | Two memoized calls share a key only if their functions have the same module and qualified name, and their arguments are equal and of the same types.        | **A function is identified by its name only**: closures, lambdas, wrappers made with `functools.wraps` and methods with `ignore=("self",)` can [share results](#limits). A custom `key=` is used as it is. |
+| Explicit keys  | An argument that cannot be encoded raises `TypeError`. It is left out of the key only if its parameter is named in `ignore`, or if `key=` computes the key. | None.                                                                                                                                                                                                      |
+| One TTL rule   | `ttl` (else `default_ttl`) is `None` (never expires), `0` (delete) or positive. A negative or `NaN` value raises `ValueError`.                              | None.                                                                                                                                                                                                      |
+| Owns its store | `clear` clears the whole store.                                                                                                                             | Do not give a cache a store that holds other data: nothing checks it.                                                                                                                                      |
+
+### Not Guaranteed
+
+- Concurrent misses on the same key can compute the value several times.
+- There is no size limit, and an expired entry stays in the store until its key is read again.
+- A miss of a memoized call returns the computed value, a hit its codec round trip: a tuple stored
+  with the `json` codec comes back as a list.
+- The limits of the [backing store](store.md#limits-of-the-backends) apply.
+- Decoding a `pickle` payload can execute arbitrary code, so only share a store that uses
+  `PickleCodec` with trusted writers.
+- The keys are written in the log messages at the `DEBUG` level: do not put a secret in a key.
+
 ## Using `Cache` Directly
 
 Create a `Cache` and use `set`/`get` like a dictionary:
@@ -218,7 +242,8 @@ function takes no argument: use a `lambda` or `functools.partial` to pass some.
 ```
 
 `aget_or_compute` is the async counterpart. It accepts a sync or an `async def` function, and
-accesses the backing store with its async methods:
+accesses the backing store with its async methods. A sync function is called in the event loop, which
+it blocks until it returns:
 
 ```pycon
 >>> import asyncio
@@ -399,6 +424,11 @@ an object, such as `some_dict.get`, cannot be identified and need `key`.
   such as two closures returned by the same function or two lambdas of the same scope, **share their
   results**; so do all the scripts run as `__main__` that share a persistent store. Give such
   functions a `key`.
+- A wrapper made with `functools.wraps` has the name of the function that it wraps: memoizing both,
+  or two such wrappers of one function, shares their results.
+- A bound method, such as `loader.path`, is a method too: the object is an argument. It raises
+  `TypeError` without `ignore` or `key`, and with `ignore=("self",)` the bound methods of all the
+  objects share their results.
 - The code of the function is not part of the key: after a change of the function, a persistent cache
   still returns the old results until they expire or the cache is cleared.
 - `-0.0` and `0.0` are different arguments, and every `NaN` is the same one.

@@ -70,6 +70,9 @@ class SQLiteStore(SQLStore, MultilineDisplayMixin):
     Opening the store creates the database file, its parent directories
     and the table if they do not exist (unless ``read_only``).
 
+    A key with a lone surrogate raises ``UnicodeEncodeError``, a subclass
+    of ``ValueError``, and nothing is written.
+
     Args:
         database: The path to the database file, ``":memory:"`` for a
             private in-memory database, or a ``file:`` URI (with

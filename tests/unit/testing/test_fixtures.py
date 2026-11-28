@@ -21,8 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 # Maps each pair of exported marker names to the availability check they
-# should mirror. ``httpx`` is defined in the module but intentionally not
-# part of ``__all__``, so it is included separately below.
+# should mirror.
 PAIRS = {
     "duckdb": is_duckdb_available,
     "faker": is_faker_available,

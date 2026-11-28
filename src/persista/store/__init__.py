@@ -16,12 +16,8 @@ __all__ = [
     "PostgresStore",
     "RedisStore",
     "SQLiteStore",
-    "normalize_on_conflict",
     "register_scheme",
     "store_from_uri",
-    "validate_batch_size",
-    "validate_field_name",
-    "validate_on_conflict",
 ]
 
 from persista.store.base import BaseStore
@@ -36,9 +32,3 @@ from persista.store.redis import RedisStore
 from persista.store.registry import register_scheme, store_from_uri
 from persista.store.sqlite import SQLiteStore
 from persista.store.types import OnConflict
-from persista.store.validation import (
-    normalize_on_conflict,
-    validate_batch_size,
-    validate_field_name,
-    validate_on_conflict,
-)
