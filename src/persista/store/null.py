@@ -62,8 +62,9 @@ class NullStore(BaseStore, InlineDisplayMixin):
         return "null://"
 
     @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
-        return cls()
+    def from_uri(cls, uri: str, *, read_only: bool = False, **kwargs: Any) -> Self:
+        del uri, read_only
+        return cls(**kwargs)
 
     def _open(self) -> None:
         pass
@@ -96,4 +97,4 @@ class NullStore(BaseStore, InlineDisplayMixin):
         yield from ()
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
-        return {"count": f"{0:,}"}
+        return {"closed": self._closed}

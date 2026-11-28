@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -35,15 +36,20 @@ def test_null_store_is_thread_safe() -> None:
 
 
 def test_repr(store: NullStore) -> None:
-    assert repr(store) == "NullStore(count='0')"
+    assert repr(store) == "NullStore(closed=False)"
 
 
 def test_str(store: NullStore) -> None:
-    assert str(store) == "NullStore(count=0)"
+    assert str(store) == "NullStore(closed=False)"
 
 
 def test_repr_before_open() -> None:
-    assert repr(NullStore()) == "NullStore(count='0')"
+    assert repr(NullStore()) == "NullStore(closed=True)"
+
+
+def test_repr_runs_no_primitive(store: NullStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store, "_count", MagicMock(side_effect=AssertionError("query")))
+    assert repr(store) == "NullStore(closed=False)"
 
 
 # --- URI ---
@@ -93,7 +99,7 @@ async def test_async_iteration_yields_nothing(store: NullStore) -> None:
 
 def test_filter_returns_nothing(store: NullStore) -> None:
     store.set("1", {"a": 1})
-    assert store.filter(a=1) == []
+    assert store.filter(a=1) == {}
 
 
 def test_contains_many_returns_false(store: NullStore) -> None:
@@ -200,4 +206,4 @@ def test__contains_many(store: NullStore) -> None:
 
 
 def test__get_repr_kwargs(store: NullStore) -> None:
-    assert store._get_repr_kwargs() == {"count": "0"}
+    assert store._get_repr_kwargs() == {"closed": False}

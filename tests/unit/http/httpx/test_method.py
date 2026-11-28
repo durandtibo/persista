@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 from unittest.mock import Mock
 
@@ -2196,3 +2197,66 @@ def test_get_retry_delay_exponential_backoff(attempt: int, expected: float) -> N
     response = httpx.Response(503)
 
     assert _get_retry_delay(response, attempt=attempt) == expected
+
+
+#################################
+#     Tests for credentials     #
+#################################
+
+CREDENTIALS_URL = "https://user:s3cret@example.com/items"
+
+
+@pytest.mark.parametrize("statuses", [[200], [503, 200]], ids=["success", "retry_status"])
+def test_send_request_does_not_log_the_password(
+    caplog: pytest.LogCaptureFixture, statuses: list[int]
+) -> None:
+    handler, _ = _counting_handler(statuses)
+    with caplog.at_level(logging.DEBUG, logger="persista"):
+        send_request("GET", CREDENTIALS_URL, client=_client(handler))
+    messages = [record.getMessage() for record in caplog.records if "persista" in record.name]
+    assert "GET https://example.com/items" in messages[0]
+    assert not any("s3cret" in message for message in messages)
+
+
+@pytest.mark.parametrize("statuses", [[200], [503, 200]], ids=["success", "retry_status"])
+async def test_send_request_async_does_not_log_the_password(
+    caplog: pytest.LogCaptureFixture, statuses: list[int]
+) -> None:
+    handler, _ = _counting_handler(statuses)
+    with caplog.at_level(logging.DEBUG, logger="persista"):
+        await send_request_async("GET", CREDENTIALS_URL, client=_async_client(handler))
+    messages = [record.getMessage() for record in caplog.records if "persista" in record.name]
+    assert "GET https://example.com/items" in messages[0]
+    assert not any("s3cret" in message for message in messages)
+
+
+def _failing_once_handler() -> Callable:
+    calls = iter([True, False])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if next(calls):
+            msg = "unreachable"
+            raise httpx.ConnectError(msg, request=request)
+        return httpx.Response(200, request=request)
+
+    return handler
+
+
+def test_send_request_transport_error_does_not_log_the_password(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.DEBUG, logger="persista"):
+        send_request("GET", CREDENTIALS_URL, client=_client(_failing_once_handler()))
+    messages = [record.getMessage() for record in caplog.records if "persista" in record.name]
+    assert not any("s3cret" in message for message in messages)
+
+
+async def test_send_request_async_transport_error_does_not_log_the_password(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.DEBUG, logger="persista"):
+        await send_request_async(
+            "GET", CREDENTIALS_URL, client=_async_client(_failing_once_handler())
+        )
+    messages = [record.getMessage() for record in caplog.records if "persista" in record.name]
+    assert not any("s3cret" in message for message in messages)

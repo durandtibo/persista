@@ -7,6 +7,7 @@ __all__ = [
     "ON_CONFLICT_VALUES",
     "check_is_closed",
     "check_is_open",
+    "is_valid_field_name",
     "normalize_on_conflict",
     "validate_batch_size",
     "validate_field_name",
@@ -193,15 +194,40 @@ def validate_namespace(namespace: str) -> None:
         raise ValueError(msg) from exc
 
 
+def is_valid_field_name(name: str) -> bool:
+    """Indicate whether a field name is safe to interpolate into a SQL
+    fragment.
+
+    Args:
+        name: The field name to check.
+
+    Returns:
+        ``True`` if ``name`` is an identifier: ASCII letters, digits and
+        underscores, not starting with a digit.
+
+    Example:
+        ```pycon
+        >>> from persista.store.validation import is_valid_field_name
+        >>> is_valid_field_name("user_id")
+        True
+        >>> is_valid_field_name("user-id")
+        False
+
+        ```
+    """
+    return _FIELD_NAME_PATTERN.fullmatch(name) is not None
+
+
 def validate_field_name(name: str) -> None:
     """Validate that a value filter field name is safe to interpolate
     into a SQL fragment.
 
-    ``BaseStore.filter`` implementations build SQL by interpolating
-    the field name directly (only the filter value is passed as a
-    bound parameter), so an unrestricted field name is a SQL
-    injection vector. Restricting it to a simple identifier shape
-    closes that off.
+    The SQL stores interpolate the field name of a filter directly into
+    the query that selects the candidates (only the filter value is
+    passed as a bound parameter), so an unrestricted field name is a SQL
+    injection vector. Restricting it to a simple identifier shape closes
+    that off. A filter accepts any field name: the SQL stores apply the
+    conditions on the other names in Python.
 
     Args:
         name: The field name to validate.
@@ -221,7 +247,7 @@ def validate_field_name(name: str) -> None:
 
         ```
     """
-    if not _FIELD_NAME_PATTERN.match(name):
+    if not is_valid_field_name(name):
         msg = f"Invalid filter field name: {name!r}. Field names must match {_FIELD_NAME_PATTERN.pattern!r}"
         raise ValueError(msg)
 
@@ -244,7 +270,7 @@ def validate_table_name(name: str) -> None:
 
         ```
     """
-    if not _FIELD_NAME_PATTERN.match(name):
+    if not _FIELD_NAME_PATTERN.fullmatch(name):
         msg = (
             f"Invalid table name: {name!r}. Table names must match {_FIELD_NAME_PATTERN.pattern!r}"
         )

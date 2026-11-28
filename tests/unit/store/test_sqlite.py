@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from persista.store import PickleCodec, SQLiteStore, sqlite as sqlite_module
-from persista.store.sqlite import _is_memory_database, _is_shared_cache, _read_only_uri
+from persista.store.sqlite import (
+    _is_memory_database,
+    _is_shared_cache,
+    _read_only_uri,
+    _redact_database,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -468,33 +474,59 @@ def test__table_columns_no_table(store: SQLiteStore) -> None:
     assert store._table_columns() == []
 
 
-def test__filter_expr(store: SQLiteStore) -> None:
-    assert store._filter_expr("author") == "json_extract(value, '$.author')"
+def test__filter_condition(store: SQLiteStore) -> None:
+    assert store._filter_condition("author", "Alice") == (
+        "json_extract(value, '$.author') = ?",
+        ["Alice"],
+    )
 
 
-def test__filter_expr_invalid_field(store: SQLiteStore) -> None:
+@pytest.mark.parametrize("field", ["a') OR 1 --", "a b", "a\n"])
+def test__filter_condition_invalid_field(store: SQLiteStore, field: str) -> None:
     with pytest.raises(ValueError, match=r"Invalid filter field name"):
-        store._filter_expr("a') OR 1 --")
+        store._filter_condition(field, "x")
 
 
 @pytest.mark.parametrize(
     ("value", "keys"),
     [
         pytest.param("1", ["str"], id="str"),
-        pytest.param(1, ["bool", "int"], id="int_matches_true"),
+        pytest.param(1, ["int"], id="int"),
+        pytest.param(True, ["bool"], id="bool"),
+        pytest.param([1], ["list"], id="list"),
         pytest.param(None, ["absent", "null"], id="none"),
     ],
 )
-def test_filter_items_matches_in_sql(store: SQLiteStore, value: Any, keys: list[str]) -> None:
+def test_filter_compares_json_types(store: SQLiteStore, value: Any, keys: list[str]) -> None:
     store.set_many(
-        {"int": {"v": 1}, "str": {"v": "1"}, "bool": {"v": True}, "null": {"v": None}, "absent": {}}
+        {
+            "int": {"v": 1},
+            "str": {"v": "1"},
+            "bool": {"v": True},
+            "list": {"v": [1]},
+            "null": {"v": None},
+            "absent": {},
+        }
     )
-    assert sorted(store.filter_items(v=value)) == keys
+    assert sorted(store.filter(v=value)) == keys
 
 
-def test_filter_list_value_raises(store: SQLiteStore) -> None:
-    with pytest.raises(sqlite3.ProgrammingError, match=r"type 'list' is not supported"):
-        store.filter(v=[1])
+########################################
+#     Tests for _select_candidates     #
+########################################
+
+# The JSON functions of SQLite reject a document nested that deeply.
+
+
+def test_select_candidates_deeply_nested_value_selects_every_row(store: SQLiteStore) -> None:
+    store._put_many({"1": '{"a": 1, "deep": ' + "[" * 2500 + "]" * 2500 + "}", "2": '{"a": 2}'})
+    assert [list(batch) for batch in store._select_candidates({"a": 1})] == [["1", "2"]]
+
+
+def test_select_candidates_other_error(store: SQLiteStore) -> None:
+    store.connection.execute("DROP TABLE store")
+    with pytest.raises(sqlite3.OperationalError, match=r"no such table"):
+        list(store._select_candidates({"a": 1}))
 
 
 # --- filter: expression index ---
@@ -509,7 +541,11 @@ def query_plans(connection: sqlite3.Connection, queries: list[str]) -> list[str]
 
 @pytest.mark.parametrize(
     "field_filters",
-    [{"author": "Alice"}, {"author": None}, {"author": "Alice", "year": 2022}],
+    [
+        {"author": "Alice"},
+        {"author": "Alice", "year": 2022},
+        {"author": "Alice", "title": None},
+    ],
 )
 def test_filter_uses_expression_index(field_filters: dict[str, Any]) -> None:
     queries: list[str] = []
@@ -521,6 +557,29 @@ def test_filter_uses_expression_index(field_filters: dict[str, Any]) -> None:
         assert query_plans(store.connection, queries) == [
             "SEARCH store USING INDEX store_author (<expr>=?)"
         ]
+
+
+def test_filter_int_uses_expression_index() -> None:
+    queries: list[str] = []
+    with SQLiteStore() as store:
+        store.connection.execute("CREATE INDEX store_year ON store(json_extract(value, '$.year'))")
+        store.connection.set_trace_callback(queries.append)
+        store.filter(year=2022)
+        store.connection.set_trace_callback(None)
+        assert query_plans(store.connection, queries) == [
+            "SEARCH store USING INDEX store_year (<expr>=?)"
+        ]
+
+
+@pytest.mark.parametrize("value", [None, 1.0, True])
+def test_filter_without_condition_scans_the_table(value: object) -> None:
+    queries: list[str] = []
+    with SQLiteStore() as store:
+        store.connection.execute(_INDEX_SQL)
+        store.connection.set_trace_callback(queries.append)
+        store.filter(author=value)
+        store.connection.set_trace_callback(None)
+        assert query_plans(store.connection, queries) == ["SCAN store"]
 
 
 def test_filter_scans_the_table_without_expression_index() -> None:
@@ -571,13 +630,64 @@ def test_expression_index_is_kept_in_the_database_file(tmp_path: Path) -> None:
 
 
 def test_repr(store: SQLiteStore) -> None:
-    assert repr(store) == (
-        "SQLiteStore(\n  (database): :memory:\n  (closed): False\n  (count): 0\n)"
-    )
+    assert repr(store) == ("SQLiteStore(\n  (database): :memory:\n  (closed): False\n)")
 
 
 def test_str_closed() -> None:
     assert str(SQLiteStore()) == "SQLiteStore(\n  (database): :memory:\n  (closed): True\n)"
+
+
+def test_repr_hides_the_parameters_of_a_uri() -> None:
+    store = SQLiteStore("file:data?mode=memory&key=s3cret", uri=True, timeout=1.0)
+    assert repr(store) == ("SQLiteStore(\n  (database): file:data?mode=memory\n  (closed): True\n)")
+
+
+def test_close_log_hides_the_parameters_of_a_uri(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.INFO), SQLiteStore("file:data?mode=memory&key=s3cret", uri=True):
+        pass
+    assert "s3cret" not in caplog.text
+
+
+def test_read_only_error_hides_the_parameters_of_a_uri() -> None:
+    with pytest.raises(ValueError, match=r"in-memory database: 'file:data\?mode=memory'$"):
+        SQLiteStore("file:data?mode=memory&key=s3cret", uri=True, read_only=True)
+
+
+def test_open_error_hides_the_parameters_of_a_uri(tmp_path: Path) -> None:
+    path = tmp_path / "data.db"
+    sqlite3.connect(path).close()
+    uri = f"{path.as_uri()}?key=s3cret"
+    store = SQLiteStore(uri, uri=True, read_only=True)
+    with pytest.raises(ValueError, match=r"data\.db' has no table 'store'$"):
+        store.open()
+
+
+######################################
+#     Tests for _redact_database     #
+######################################
+
+
+@pytest.mark.parametrize(
+    ("database", "expected"),
+    [
+        (":memory:", ":memory:"),
+        ("data?key=1.db", "data?key=1.db"),
+        ("file:data.db", "file:data.db"),
+        ("file:data.db?mode=ro&cache=shared", "file:data.db?mode=ro&cache=shared"),
+        ("file:data.db?key=s3cret", "file:data.db"),
+        ("file:data.db?hexkey=s3cret&mode=ro#s3cret", "file:data.db?mode=ro"),
+        ("file:data.db?%6Bey=s3cret", "file:data.db"),
+        ("file://localhost/data.db", "file://localhost/data.db"),
+        ("file://user:s3cret@localhost/data.db", "file://localhost/data.db"),
+        ("file:///data@1.db", "file:///data@1.db"),
+    ],
+)
+def test__redact_database(database: str, expected: str) -> None:
+    assert _redact_database(database) == expected
+
+
+def test__redact_database_path(tmp_path: Path) -> None:
+    assert _redact_database(tmp_path) is tmp_path
 
 
 #########################################

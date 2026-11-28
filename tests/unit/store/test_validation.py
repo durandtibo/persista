@@ -17,6 +17,7 @@ from persista.store.validation import (
     ON_CONFLICT_VALUES,
     check_is_closed,
     check_is_open,
+    is_valid_field_name,
     validate_key,
     validate_keys,
     validate_namespace,
@@ -341,3 +342,29 @@ def test_check_is_closed_does_not_raise_after_close() -> None:
     store.open()
     store.close()
     check_is_closed(store)
+
+
+#########################################
+#     Tests for is_valid_field_name     #
+#########################################
+
+
+@pytest.mark.parametrize("name", ["a", "A", "_", "author_id", "a1"])
+def test_is_valid_field_name(name: str) -> None:
+    assert is_valid_field_name(name) is True
+
+
+@pytest.mark.parametrize("name", ["", "1a", "a b", "a-b", "a.b", "a'", chr(0xE9), "a\n", "\na"])
+def test_is_valid_field_name_invalid(name: str) -> None:
+    assert is_valid_field_name(name) is False
+
+
+def test_validate_field_name_trailing_newline() -> None:
+    # "$" matched before a final newline.
+    with pytest.raises(ValueError, match=r"Invalid filter field name"):
+        validate_field_name("author\n")
+
+
+def test_validate_table_name_trailing_newline() -> None:
+    with pytest.raises(ValueError, match=r"Invalid table name"):
+        validate_table_name("store\n")

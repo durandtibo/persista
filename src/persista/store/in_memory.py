@@ -69,8 +69,9 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
         return "memory://"
 
     @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:  # noqa: ARG003
-        return cls()
+    def from_uri(cls, uri: str, *, read_only: bool = False, **kwargs: Any) -> Self:
+        del uri, read_only
+        return cls(**kwargs)
 
     def _open(self) -> None:
         self._data = {}
@@ -113,7 +114,4 @@ class InMemoryStore(BaseStore, InlineDisplayMixin):
         return {key for key in keys if key in self._data}
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {"closed": self._closed}
-        if not self._closed:
-            kwargs["count"] = f"{self.count():,}"
-        return kwargs
+        return {"closed": self._closed}

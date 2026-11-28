@@ -24,10 +24,16 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from persista.utils.imports import check_httpx, is_httpx_available
+from coola.utils.imports import lazy_import
 
-if TYPE_CHECKING or is_httpx_available():  # pragma: no cover
+from persista.utils.imports import check_httpx
+from persista.utils.url import redact_url_credentials
+
+if TYPE_CHECKING:
     import httpx
+else:
+    # Imported when the first request or client needs it.
+    httpx = lazy_import("httpx")
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -400,7 +406,8 @@ def send_request(
         ```
     """
     check_httpx()
-    logger.debug("Sending %s %s...", method, url)
+    shown_url = redact_url_credentials(url)
+    logger.debug("Sending %s %s...", method, shown_url)
 
     own_client = client is None
     active_client = client if client is not None else httpx.Client(timeout=timeout)
@@ -426,7 +433,7 @@ def send_request(
                     logger.debug(
                         "Retrying %s %s in %.2fs (attempt %d/%d, HTTP %d)",
                         method,
-                        url,
+                        shown_url,
                         delay,
                         attempt,
                         max_retries,
@@ -442,7 +449,7 @@ def send_request(
                 logger.debug(
                     "Retrying %s %s in %.2fs (attempt %d/%d) after transport error",
                     method,
-                    url,
+                    shown_url,
                     delay,
                     attempt,
                     max_retries,
@@ -853,7 +860,8 @@ async def send_request_async(
         ```
     """
     check_httpx()
-    logger.debug("Sending %s %s...", method, url)
+    shown_url = redact_url_credentials(url)
+    logger.debug("Sending %s %s...", method, shown_url)
 
     own_client = client is None
     active_client = client if client is not None else httpx.AsyncClient(timeout=timeout)
@@ -879,7 +887,7 @@ async def send_request_async(
                     logger.debug(
                         "Retrying %s %s in %.2fs (attempt %d/%d, HTTP %d)",
                         method,
-                        url,
+                        shown_url,
                         delay,
                         attempt,
                         max_retries,
@@ -895,7 +903,7 @@ async def send_request_async(
                 logger.debug(
                     "Retrying %s %s in %.2fs (attempt %d/%d) after transport error",
                     method,
-                    url,
+                    shown_url,
                     delay,
                     attempt,
                     max_retries,

@@ -19,6 +19,7 @@ from coola.utils.batching import batchify
 
 from persista.store.codec import JsonCodec
 from persista.store.plan import build_plan
+from persista.store.predicate import matches_filter
 from persista.store.validation import (
     check_is_open,
     normalize_on_conflict,
@@ -74,6 +75,10 @@ class BaseStore(ABC):
     - returns early on an empty input;
     - resolves the write conflicts.
 
+    :meth:`filter` matches on the equality of the top-level fields of the
+    decoded values, with the types of JSON, in the same way for every
+    backend and every codec.
+
     A value is a ``dict`` that the codec can encode. The store keeps the
     payloads only, so mutating a value that was passed to the store or
     returned by it never changes the stored value, and a read returns
@@ -98,6 +103,10 @@ class BaseStore(ABC):
     - ``_clear()``: delete every key.
     - ``_count()``: return the number of keys.
     - ``_iter_batches(batch_size)``: yield the payloads in batches.
+
+    ``_filter_candidates`` may select the pairs with a query of the
+    backend, but it only has to return a superset of the matches:
+    :meth:`filter` applies the filter to the decoded values.
 
     Three primitives have a default that a backend can replace by a
     faster one: ``_contains_many(keys)``, ``_filter_candidates(fields)``
@@ -387,38 +396,65 @@ class BaseStore(ABC):
         for batch in batchify(items, size=batch_size):
             await self.aset_many(dict(batch), on_conflict=strategy)
 
-    def filter(self, **field_filters: Any) -> list[dict[str, Any]]:
-        """Retrieve values whose content matches all provided field
-        filters.
+    def filter(self, /, **field_filters: Any) -> dict[str, dict[str, Any]]:
+        r"""Retrieve the values whose fields match all the provided
+        filters, keyed by their keys.
 
-        All filters are combined with ``AND``. Each keyword argument
-        matches the corresponding key in the stored value.
+        All filters are combined with ``AND``. Each keyword argument is
+        the name of a top-level field of a value, and the value that this
+        field must be equal to. Every backend and every codec compare the
+        values in the same way (see
+        :func:`persista.store.predicate.values_equal`), with the types of
+        JSON:
+
+        - ``True`` does not match ``1``, and ``"1"`` does not match
+          ``1``;
+        - numbers are compared by their exact value: ``1`` matches
+          ``1.0``. ``NaN`` matches nothing;
+        - ``None`` matches a field that is ``None`` or absent;
+        - a list (or a tuple) matches an array with equal items in the
+          same order, and a ``dict`` matches a ``dict`` with exactly the
+          same keys and equal values.
+
+        Any name can be used as a field name, also one that is not a
+        Python identifier, such as ``store.filter(**{"user-id": "1"})``.
 
         Args:
-            **field_filters: Key-value pairs where each key is a
-                field name within a stored value and the value is
-                the value to match. Calling with no arguments
-                returns every value in the store.
+            **field_filters: The value that each field must be equal to.
+                Calling with no arguments returns every pair of the
+                store.
 
         Returns:
-            A list of matching values.
+            The matching values, keyed by their keys, in no guaranteed
+            order.
 
         Raises:
             RuntimeError: If the store is closed.
+
+        Example:
+            ```pycon
+            >>> from persista.store import InMemoryStore
+            >>> with InMemoryStore() as store:
+            ...     store.set_many({"1": {"year": 2024}, "2": {"year": "2024"}})
+            ...     store.filter(year=2024)
+            ...
+            {'1': {'year': 2024}}
+
+            ```
         """
         check_is_open(self)
-        matches: list[dict[str, Any]] = []
+        matches: dict[str, dict[str, Any]] = {}
         for batch in self._batches(self._filter_candidates, field_filters):
-            matches.extend(self._matching_values(batch, field_filters))
+            matches.update(self._matching_items(batch, field_filters))
         return matches
 
-    async def afilter(self, **field_filters: Any) -> list[dict[str, Any]]:
-        """Async equivalent of :meth:`filter`."""
+    async def afilter(self, /, **field_filters: Any) -> dict[str, dict[str, Any]]:
+        r"""Async equivalent of :meth:`filter`."""
         check_is_open(self)
-        matches: list[dict[str, Any]] = []
+        matches: dict[str, dict[str, Any]] = {}
         async with contextlib.aclosing(self._afilter_candidates(field_filters)) as batches:
             async for batch in batches:
-                matches.extend(self._matching_values(batch, field_filters))
+                matches.update(self._matching_items(batch, field_filters))
         return matches
 
     def delete(self, key: str) -> None:
@@ -749,18 +785,36 @@ class BaseStore(ABC):
 
     @classmethod
     @abstractmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> Self:
+    def from_uri(cls, uri: str, *, read_only: bool = False, **kwargs: Any) -> Self:
         """Reconstruct a store from a URI produced by :meth:`to_uri`.
+
+        A URI says where the data is, not how the store was configured:
+
+        - the other arguments of the constructor (such as ``table``,
+          ``namespace``, ``map_size`` or the arguments of a driver) are
+          not in the URI: pass them again in ``kwargs``;
+        - the scheme of the URI of a local store carries its codec, but
+          ``redis://`` and ``postgresql://`` URIs do not: pass
+          ``codec=`` again;
+        - the URI of an in-memory store, of a
+          :class:`~persista.store.NullStore` or of a ``":memory:"``
+          database gives a new, empty store;
+        - the URI of a server store contains its password: treat it as a
+          secret;
+        - a local path is absolute, so the URI is only valid on a machine
+          with the same files. A SQLite ``file:`` URI is kept as it was
+          given.
 
         Args:
             uri: A URI produced by :meth:`to_uri` (of a store of this
                 same class).
             read_only: If ``True`` and this store type supports a
-                read-only connection mode, open it read-only.
-                Ignored by store types with no such mode.
+                read-only connection mode (SQLite, DuckDB, LMDB), open it
+                read-only. Ignored by the other store types.
+            **kwargs: The other keyword arguments of the constructor.
 
         Returns:
-            A new store instance.
+            A new store instance, not opened.
         """
 
     def __enter__(self) -> Self:
@@ -894,7 +948,9 @@ class BaseStore(ABC):
 
         :meth:`filter` applies the filter to the decoded values, so this
         method can only make ``filter`` faster: it must not change its
-        result. The default yields every pair.
+        result, i.e. it must yield every pair that matches (as defined by
+        :func:`~persista.store.predicate.matches_filter`). The default
+        yields every pair.
 
         Args:
             fields: The value that each field must be equal to. Empty if
@@ -1241,34 +1297,25 @@ class BaseStore(ABC):
         decode = self._codec.decode
         return [None if (payload := payloads.get(key)) is None else decode(payload) for key in keys]
 
-    def _matching_values(
+    def _matching_items(
         self, batch: Mapping[str, Payload], fields: Mapping[str, Any]
-    ) -> list[dict[str, Any]]:
-        r"""Decode a batch and keep the values that match a filter.
+    ) -> dict[str, dict[str, Any]]:
+        r"""Decode a batch and keep the pairs that match a filter.
 
         Args:
             batch: The payloads to decode, keyed by their unique key.
             fields: The value that each field must be equal to.
 
         Returns:
-            The values whose fields are all equal to the expected ones.
-            A missing field is equal to ``None``.
+            The decoded values that match the filter (see
+            :func:`~persista.store.predicate.matches_filter`), keyed by
+            their keys, in the order of the batch.
         """
         decode = self._codec.decode
-        matches = self._matches
-        values = (decode(payload) for payload in batch.values())
-        return [value for value in values if matches(value, fields)]
-
-    @staticmethod
-    def _matches(value: Mapping[str, Any], fields: Mapping[str, Any]) -> bool:
-        r"""Indicate whether a value matches a filter.
-
-        Args:
-            value: A decoded value.
-            fields: The value that each field must be equal to.
-
-        Returns:
-            ``True`` if every field of ``value`` is equal to the expected
-            one. A missing field is equal to ``None``.
-        """
-        return all(value.get(name) == expected for name, expected in fields.items())
+        if not fields:
+            return {key: decode(payload) for key, payload in batch.items()}
+        return {
+            key: value
+            for key, payload in batch.items()
+            if matches_filter(value := decode(payload), fields)
+        }

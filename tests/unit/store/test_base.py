@@ -36,9 +36,9 @@ class DictStore(BaseStore):
         return "dict://"
 
     @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> DictStore:
+    def from_uri(cls, uri: str, *, read_only: bool = False, **kwargs: Any) -> DictStore:
         del uri, read_only
-        return cls()
+        return cls(**kwargs)
 
     def record(self, *call: Any) -> None:
         self.calls.append(call)
@@ -1055,26 +1055,47 @@ async def test_base_store_acontains_many(store: DictStore) -> None:
 
 
 def test_base_store_filter_no_fields(store: DictStore) -> None:
-    assert store.filter() == [{"a": 1}, {"a": 2}, {"a": 3}]
+    assert store.filter() == {"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}}
 
 
 def test_base_store_filter(store: DictStore) -> None:
-    assert store.filter(a=2) == [{"a": 2}]
+    assert store.filter(a=2) == {"2": {"a": 2}}
 
 
 def test_base_store_filter_several_fields(store: DictStore) -> None:
     store.set_many({"4": {"a": 1, "b": 1}, "5": {"a": 1, "b": 2}})
-    assert store.filter(a=1, b=2) == [{"a": 1, "b": 2}]
+    assert store.filter(a=1, b=2) == {"5": {"a": 1, "b": 2}}
+
+
+def test_base_store_filter_no_match(store: DictStore) -> None:
+    assert store.filter(a=4) == {}
 
 
 def test_base_store_filter_none_matches_null_and_absent(store: DictStore) -> None:
     store.set_many({"4": {"b": None}, "5": {"b": 1}})
-    assert store.filter(b=None, a=None) == [{"b": None}]
+    assert store.filter(b=None, a=None) == {"4": {"b": None}}
 
 
 def test_base_store_filter_compares_decoded_values(store: DictStore) -> None:
     store.set("4", {"tags": ("x",)})
-    assert store.filter(tags=["x"]) == [{"tags": ["x"]}]
+    assert store.filter(tags=["x"]) == {"4": {"tags": ["x"]}}
+
+
+@pytest.mark.parametrize("expected", [True, "1"])
+def test_base_store_filter_compares_json_types(store: DictStore, expected: object) -> None:
+    assert store.filter(a=expected) == {}
+
+
+@pytest.mark.parametrize("field", ["self", "x-y", "a b", "a.b", "field_filters"])
+def test_base_store_filter_any_field_name(store: DictStore, field: str) -> None:
+    store.set("4", {field: 1})
+    assert store.filter(**{field: 1}) == {"4": {field: 1}}
+
+
+def test_base_store_filter_does_not_modify_the_expected_values(store: DictStore) -> None:
+    expected = [1, (2,)]
+    store.filter(a=expected)
+    assert expected == [1, (2,)]
 
 
 def test_base_store_filter_reads_in_batches(store: DictStore) -> None:
@@ -1084,7 +1105,7 @@ def test_base_store_filter_reads_in_batches(store: DictStore) -> None:
 
 def test_base_store_filter_applies_filter_to_candidates() -> None:
     store = open_store(CandidatesStore)
-    assert store.filter(a=3) == [{"a": 3}]
+    assert store.filter(a=3) == {"3": {"a": 3}}
 
 
 def test_base_store_filter_gives_fields_to_candidates() -> None:
@@ -1094,12 +1115,18 @@ def test_base_store_filter_gives_fields_to_candidates() -> None:
 
 
 async def test_base_store_afilter(store: DictStore) -> None:
-    assert await store.afilter(a=2) == [{"a": 2}]
+    assert await store.afilter(a=2) == {"2": {"a": 2}}
+
+
+@pytest.mark.parametrize("field", ["self", "x-y"])
+async def test_base_store_afilter_any_field_name(store: DictStore, field: str) -> None:
+    await store.aset("4", {field: 1})
+    assert await store.afilter(**{field: 1}) == {"4": {field: 1}}
 
 
 async def test_base_store_afilter_applies_filter_to_candidates() -> None:
     store = open_store(CandidatesStore)
-    assert await store.afilter(a=3) == [{"a": 3}]
+    assert await store.afilter(a=3) == {"3": {"a": 3}}
     await store.aclose()
 
 
@@ -1386,7 +1413,7 @@ async def test_base_store_akeys_uses_native_primitive() -> None:
 
 async def test_base_store_afilter_uses_native_primitive() -> None:
     store = open_store(NativeAsyncStore)
-    assert await store.afilter(native=True) == [{"native": True}]
+    assert await store.afilter(native=True) == {"1": {"native": True}}
 
 
 # --- default primitives ---
@@ -1572,20 +1599,11 @@ def test_base_store__decode_many(store: DictStore) -> None:
     assert store._decode_many(["1", "2"], {"1": '{"a": 1}'}) == [{"a": 1}, None]
 
 
-@pytest.mark.parametrize(
-    ("value", "fields", "expected"),
-    [
-        pytest.param({"a": 1, "b": 2}, {"a": 1}, True, id="match"),
-        pytest.param({"a": 1}, {}, True, id="no_field"),
-        pytest.param({"a": 1}, {"a": 2}, False, id="other_value"),
-        pytest.param({"a": 1}, {"a": 1, "b": 2}, False, id="one_field_differs"),
-        pytest.param({}, {"a": None}, True, id="missing_is_none"),
-    ],
-)
-def test_base_store__matches(value: dict, fields: dict, expected: bool) -> None:
-    assert BaseStore._matches(value, fields) is expected
-
-
-def test_base_store__matching_values(store: DictStore) -> None:
+def test_base_store__matching_items(store: DictStore) -> None:
     batch = {"1": '{"a": 1}', "2": '{"a": 2}', "3": "{}"}
-    assert store._matching_values(batch, {"a": 2}) == [{"a": 2}]
+    assert store._matching_items(batch, {"a": 2}) == {"2": {"a": 2}}
+
+
+def test_base_store__matching_items_no_field(store: DictStore) -> None:
+    batch = {"2": '{"a": 2}', "1": "{}"}
+    assert list(store._matching_items(batch, {}).items()) == [("2", {"a": 2}), ("1", {})]

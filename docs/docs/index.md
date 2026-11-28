@@ -107,6 +107,8 @@ synchronous and `a`-prefixed asynchronous methods on every store:
 - Codecs for all the stores: JSON by default, which rejects the values that would lose data, or
   `pickle` (`SQLiteStore(path, codec=PickleCodec())`) to keep Python types
 - A namespace for each `RedisStore`, so that several stores can share a Redis database
+- The same `filter` on every backend and codec, which returns the matching values by key
+- Optional drivers imported only when a store is opened
 - Configurable conflict handling on writes (`"raise"`, `"skip"`, `"overwrite"`, `"merge"`)
 
 [Learn more →](uguide/store.md)

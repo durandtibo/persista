@@ -122,41 +122,21 @@ def test_filter_no_match_returns_empty(store: RecordStore, records: list[Record]
     assert store.filter(author="Charlie") == []
 
 
-def test_filter_falls_back_to_full_scan_when_store_has_no_filter_items(
-    store: RecordStore, records: list[Record]
-) -> None:
-    """``InMemoryStore`` has no ``filter_items``, so ``filter`` must
-    fall back to scanning ``iter_batches`` rather than crashing or
-    silently returning nothing."""
-    store.set_many(records)
-    with patch.object(store.store, "iter_batches", wraps=store.store.iter_batches) as scan:
-        result = store.filter(author="Alice")
-    assert {r.id for r in result} == {"1", "2"}
-    scan.assert_called_once()
+def test_filter_delegates_to_store(store: RecordStore) -> None:
+    with patch.object(store.store, "filter", return_value={"1": {"author": "Alice"}}) as method:
+        assert store.filter(author="Alice") == [Record(id="1", metadata={"author": "Alice"})]
+    method.assert_called_once_with(author="Alice")
 
 
-def test_filter_uses_store_filter_items_when_available() -> None:
-    """When the underlying store exposes ``filter_items`` (the SQL
-    stores), ``filter`` must push ``metadata_filters`` down to it
-    instead of scanning."""
-    sqlite_store = SQLiteStore()
-    with RecordStore(sqlite_store) as store:
-        store.set_many(
-            [
-                Record(id="1", metadata={"author": "Alice"}),
-                Record(id="2", metadata={"author": "Bob"}),
-            ]
-        )
-        with (
-            patch.object(sqlite_store, "iter_batches", wraps=sqlite_store.iter_batches) as scan,
-            patch.object(
-                sqlite_store, "filter_items", wraps=sqlite_store.filter_items
-            ) as filter_items,
-        ):
-            result = store.filter(author="Alice")
-        assert result == [Record(id="1", metadata={"author": "Alice"})]
-        filter_items.assert_called_once_with(author="Alice")
-        scan.assert_not_called()
+@pytest.mark.parametrize("field", ["self", "user-id", "a b"])
+def test_filter_any_field_name(store: RecordStore, field: str) -> None:
+    store.set(Record(id="1", metadata={field: 1}))
+    assert store.filter(**{field: 1}) == [Record(id="1", metadata={field: 1})]
+
+
+def test_filter_compares_values_with_json_types(store: RecordStore) -> None:
+    store.set_many([Record(id="1", metadata={"v": 1}), Record(id="2", metadata={"v": True})])
+    assert store.filter(v=True) == [Record(id="2", metadata={"v": True})]
 
 
 # --- afilter ---
@@ -191,35 +171,16 @@ async def test_filter_and_afilter_agree(store: RecordStore, records: list[Record
     assert sync_result == async_result
 
 
-async def test_afilter_falls_back_to_full_scan_when_store_has_no_filter_items(
-    store: RecordStore, records: list[Record]
-) -> None:
-    store.set_many(records)
-    with patch.object(store.store, "aiter_batches", wraps=store.store.aiter_batches) as scan:
-        result = await store.afilter(author="Alice")
-    assert {r.id for r in result} == {"1", "2"}
-    scan.assert_called_once()
+async def test_afilter_delegates_to_store(store: RecordStore) -> None:
+    with patch.object(store.store, "afilter", return_value={"1": {"author": "Alice"}}) as method:
+        assert await store.afilter(author="Alice") == [Record(id="1", metadata={"author": "Alice"})]
+    method.assert_awaited_once_with(author="Alice")
 
 
-async def test_afilter_uses_store_afilter_items_when_available() -> None:
-    sqlite_store = SQLiteStore()
-    async with RecordStore(sqlite_store) as store:
-        await store.aset_many(
-            [
-                Record(id="1", metadata={"author": "Alice"}),
-                Record(id="2", metadata={"author": "Bob"}),
-            ]
-        )
-        with (
-            patch.object(sqlite_store, "aiter_batches", wraps=sqlite_store.aiter_batches) as scan,
-            patch.object(
-                sqlite_store, "afilter_items", wraps=sqlite_store.afilter_items
-            ) as afilter_items,
-        ):
-            result = await store.afilter(author="Alice")
-        assert result == [Record(id="1", metadata={"author": "Alice"})]
-        afilter_items.assert_called_once_with(author="Alice")
-        scan.assert_not_called()
+@pytest.mark.parametrize("field", ["self", "user-id", "a b"])
+async def test_afilter_any_field_name(store: RecordStore, field: str) -> None:
+    await store.aset(Record(id="1", metadata={field: 1}))
+    assert await store.afilter(**{field: 1}) == [Record(id="1", metadata={field: 1})]
 
 
 # --- filter parity with the underlying store ---
@@ -232,7 +193,9 @@ def test_filter_matches_store_filter(
     with RecordStore(store_cls()) as store:
         store.set_many(records)
         result = store.filter(author="Bob")
-        assert [dict(record.metadata) for record in result] == store.store.filter(author="Bob")
+        assert {record.id: dict(record.metadata) for record in result} == store.store.filter(
+            author="Bob"
+        )
 
 
 @pytest.mark.parametrize("store_cls", [InMemoryStore, SQLiteStore, create_pickle_sqlite_store])
@@ -243,7 +206,7 @@ async def test_afilter_matches_store_afilter(
         await store.aset_many(records)
         result = await store.afilter(author="Bob")
         expected = await store.store.afilter(author="Bob")
-        assert [dict(record.metadata) for record in result] == expected
+        assert {record.id: dict(record.metadata) for record in result} == expected
 
 
 def test_filter_pickle_sqlite_store_returns_matching_records(records: list[Record]) -> None:
@@ -282,39 +245,6 @@ async def test_afilter_closed_store_raises(store_cls: Callable[[], BaseStore]) -
     store = RecordStore(store_cls())
     with pytest.raises(RuntimeError, match=r"not open"):
         await store.afilter(author="Alice")
-
-
-# --- _matches ---
-
-
-def test_matches_no_filters_always_true() -> None:
-    assert RecordStore._matches({"author": "Alice"}, {}) is True
-
-
-def test_matches_single_field_match() -> None:
-    assert RecordStore._matches({"author": "Alice"}, {"author": "Alice"}) is True
-
-
-def test_matches_single_field_mismatch() -> None:
-    assert RecordStore._matches({"author": "Alice"}, {"author": "Bob"}) is False
-
-
-def test_matches_missing_key_is_mismatch() -> None:
-    assert RecordStore._matches({"author": "Alice"}, {"title": "Intro"}) is False
-
-
-def test_matches_missing_key_matches_none() -> None:
-    assert RecordStore._matches({"author": "Alice"}, {"title": None}) is True
-
-
-def test_matches_all_fields_match() -> None:
-    value = {"author": "Alice", "title": "Intro"}
-    assert RecordStore._matches(value, {"author": "Alice", "title": "Intro"}) is True
-
-
-def test_matches_one_field_mismatch() -> None:
-    value = {"author": "Alice", "title": "Intro"}
-    assert RecordStore._matches(value, {"author": "Alice", "title": "Other"}) is False
 
 
 # --- _to_value / _from_value ---

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import traceback
 from typing import TYPE_CHECKING
 
 import pytest
@@ -10,9 +11,12 @@ from persista.store.uri import (
     decode_codec_uri,
     decode_path_uri,
     encode_path_uri,
+    split_uri,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from persista.store import Codec
 
 SCHEMES = {"json": "file+json", "pickle": "file+pickle"}
@@ -99,7 +103,7 @@ def test_decode_codec_uri_keeps_given_codec() -> None:
 
 @pytest.mark.parametrize("uri", ["file:data", "lmdb:data", "data", ""])
 def test_decode_codec_uri_other_scheme(uri: str) -> None:
-    with pytest.raises(ValueError, match=r"Invalid scheme .* expected one of"):
+    with pytest.raises(ValueError, match=r"Invalid scheme of the URI: expected one of"):
         decode_codec_uri(uri, schemes=SCHEMES)
 
 
@@ -110,3 +114,57 @@ def test_decode_codec_uri_other_scheme(uri: str) -> None:
 def test_decode_codec_uri_codec_mismatch(uri: str, codec: Codec) -> None:
     with pytest.raises(ValueError, match=r"does not match the scheme"):
         decode_codec_uri(uri, schemes=SCHEMES, codec=codec)
+
+
+###############################
+#     Tests for split_uri     #
+###############################
+
+
+def test_split_uri() -> None:
+    parts = split_uri("redis://localhost:6379/0")
+    assert (parts.scheme, parts.netloc, parts.path) == ("redis", "localhost:6379", "/0")
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "redis://user:s3cret@[bad",
+        # A character that NFKC normalization turns into "a/c".
+        f"redis://user:s3cret@ho{chr(0x2100)}st",
+    ],
+)
+def test_split_uri_invalid_uri_is_not_quoted(uri: str) -> None:
+    with pytest.raises(ValueError, match=r"Invalid URI: it cannot be parsed") as info:
+        split_uri(uri)
+    assert "s3cret" not in "".join(traceback.format_exception(info.value))
+
+
+@pytest.mark.parametrize(
+    "decode",
+    [
+        pytest.param(lambda uri: decode_path_uri(uri, expected_scheme="sqlite"), id="path"),
+        pytest.param(lambda uri: decode_codec_uri(uri, schemes=SCHEMES), id="codec"),
+    ],
+)
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "redis://user:s3cret@localhost",
+        "host=localhost password=s3cret",
+        "user:s3cret@localhost",
+        f"redis://user:s3cret@ho{chr(0x2100)}st",
+    ],
+)
+def test_decode_uri_error_hides_the_password(decode: Callable[[str], object], uri: str) -> None:
+    with pytest.raises(ValueError, match=r"Invalid (scheme of the URI|URI)") as info:
+        decode(uri)
+    assert "s3cret" not in "".join(traceback.format_exception(info.value))
+
+
+def test_decode_codec_uri_mismatch_does_not_quote_the_uri() -> None:
+    with pytest.raises(
+        ValueError, match=r"does not match the scheme 'file\+json' of the URI"
+    ) as info:
+        decode_codec_uri("file+json:/s3cret", schemes=SCHEMES, codec=PickleCodec())
+    assert "s3cret" not in str(info.value)

@@ -67,7 +67,8 @@ def _cleanup() -> Generator[None, None, None]:
 
 
 def create_store(table: str, codec: Codec | None = None) -> PostgresStore:
-    r"""Return a store of a table whose statements cannot wait forever."""
+    r"""Return a store of a table whose statements cannot wait
+    forever."""
     return PostgresStore(
         get_postgres_conninfo(),
         codec=codec,
@@ -387,8 +388,8 @@ def test_writes_continue_while_another_program_creates_indexes(table: str) -> No
 
 
 async def test_cancelled_write_waiting_for_a_key_is_not_applied(table: str) -> None:
-    r"""Test that an async write cancelled while it waits for the lock of
-    a key writes nothing, and leaves its store usable."""
+    r"""Test that an async write cancelled while it waits for the lock
+    of a key writes nothing, and leaves its store usable."""
     codec = PausingCodec()
     with create_store(table, codec) as first, create_store(table) as second:
         first.set("a", {})
@@ -625,9 +626,9 @@ async def test_amerge_with_concurrent_overwrite_delete_and_clear(astores: Stores
 async def test_set_and_aset_merges_with_concurrent_overwrite_delete_and_clear(
     astores: Stores, instances: tuple[int, int]
 ) -> None:
-    r"""Test that merges from ``set`` in a thread and from ``aset`` tasks,
-    run with overwrites, deletes and clears, never bring back a field
-    that was removed."""
+    r"""Test that merges from ``set`` in a thread and from ``aset``
+    tasks, run with overwrites, deletes and clears, never bring back a
+    field that was removed."""
     sync_store, async_store = astores[instances[0]], astores[instances[1]]
     other = astores[1]
     await asyncio.gather(
@@ -660,8 +661,8 @@ def test_skip_and_raise_with_concurrent_delete_and_clear(stores: Stores) -> None
 
 
 def test_overlapping_writes_in_any_order_do_not_deadlock(stores: Stores) -> None:
-    r"""Test that writes of the same keys given in opposite orders,
-    with key locks, table locks and clears, all succeed."""
+    r"""Test that writes of the same keys given in opposite orders, with
+    key locks, table locks and clears, all succeed."""
     small = [str(i) for i in range(20)]
     large = [str(i) for i in range(100)]
 
@@ -804,8 +805,8 @@ async def write_concurrently(store: PostgresStore, prefix: str) -> None:
 
 def test_async_use_in_two_event_loops(table: str) -> None:
     r"""Test that a store used with ``asyncio.run``, without ``aclose``,
-    can be used in another event loop (regression test: the connection of
-    the first loop was used again)."""
+    can be used in another event loop (regression test: the connection
+    of the first loop was used again)."""
     with create_store(table) as store:
         asyncio.run(write_concurrently(store, "first"))
         asyncio.run(write_concurrently(store, "second"))

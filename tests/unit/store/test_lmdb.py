@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -501,7 +502,15 @@ def test_from_uri_other_scheme(uri: str) -> None:
 
 @lmdb_available
 def test_repr(filled_store: LmdbStore) -> None:
-    assert "(count): 3" in repr(filled_store)
+    assert repr(filled_store) == (
+        f"LmdbStore(\n  (path): {filled_store.path}\n  (closed): False\n)"
+    )
+
+
+@lmdb_available
+def test_repr_reads_nothing(filled_store: LmdbStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(filled_store, "_count", MagicMock(side_effect=AssertionError("query")))
+    assert "LmdbStore(" in repr(filled_store)
 
 
 @lmdb_available
@@ -521,7 +530,6 @@ def test__get_repr_kwargs_options(tmp_path: Path) -> None:
         "closed": True,
         "codec": codec,
         "read_only": True,
-        "max_readers": 7,
     }
 
 
@@ -617,3 +625,13 @@ def test__check_environment_files_no_lock_file(tmp_path: Path, name: str, subdir
     (tmp_path / name).touch()
     with pytest.raises(FileNotFoundError, match=r"lock file .* does not exist"):
         _check_environment_files(tmp_path / "db", subdir=subdir, lock=True)
+
+
+@lmdb_available
+def test_open_checks_the_driver(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    store = LmdbStore(tmp_path)
+    error = RuntimeError("the driver is missing")
+    monkeypatch.setattr("persista.store.lmdb.check_lmdb", MagicMock(side_effect=error))
+    with pytest.raises(RuntimeError, match=r"the driver is missing"):
+        store.open()
+    assert store.closed

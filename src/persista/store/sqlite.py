@@ -17,10 +17,11 @@ from persista.store.sql import SQLStore
 from persista.store.validation import validate_field_name
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Sequence
+    from collections.abc import Generator, Iterator, Mapping, Sequence
     from pathlib import Path
 
     from persista.store.codec import Codec
+    from persista.store.types import Payload
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -29,6 +30,9 @@ logger: logging.Logger = logging.getLogger(__name__)
 # IN (...) clauses to stay well under that regardless of how the sqlite3
 # extension was compiled.
 _MAX_SQL_VARIABLES = 900
+
+# The parameters of a SQLite URI that a repr or an error can show.
+_PUBLIC_URI_PARAMS = frozenset({"cache", "immutable", "mode", "nolock", "psow", "vfs"})
 
 # The connections to a shared cache do not wait for each other: SQLite
 # fails at once with "database table is locked". The stores that use a
@@ -44,10 +48,11 @@ class SQLiteStore(SQLStore, MultilineDisplayMixin):
     kept in the table ``store``, which has a ``key`` column and a
     ``value`` column. With the default
     :class:`~persista.store.JsonCodec`, the ``value`` column holds JSON,
-    so SQLite's ``json1`` functions can read it and :meth:`filter` is
-    applied by the database. With a
-    :class:`~persista.store.PickleCodec`, it holds opaque bytes, which
-    keep Python types, and :meth:`filter` reads every value.
+    so SQLite's ``json1`` functions can read it, and :meth:`filter` uses
+    them to read only the values that may match a condition on a string or
+    an integer (see :func:`~persista.store.sql.select_push_down_fields`).
+    With a :class:`~persista.store.PickleCodec`, it holds opaque bytes,
+    which keep Python types, and :meth:`filter` reads every value.
 
     A store has one connection, used by the sync and the async methods,
     so they see the same data. The async methods run in a worker thread
@@ -155,7 +160,10 @@ class SQLiteStore(SQLStore, MultilineDisplayMixin):
         elif database != ":memory:":
             database = sanitize_path(database)
         if read_only and _is_memory_database(database):
-            msg = f"read_only needs a database file, not an in-memory database: {database!r}"
+            msg = (
+                "read_only needs a database file, not an in-memory database: "
+                f"{_redact_database(database)!r}"
+            )
             raise ValueError(msg)
         super().__init__(database, codec=codec, read_only=read_only, **kwargs)
         self._conn: sqlite3.Connection | None = None
@@ -206,7 +214,7 @@ class SQLiteStore(SQLStore, MultilineDisplayMixin):
     def _close(self) -> None:
         if self._conn is None:
             return
-        logger.info("Closing SQLite at %s", self._database)
+        logger.info("Closing SQLite at %s", self._safe_database())
         self._conn.close()
         self._conn = None
 
@@ -240,9 +248,57 @@ class SQLiteStore(SQLStore, MultilineDisplayMixin):
         # dflt_value, pk.
         return [(row[1], row[2], bool(row[5])) for row in self._fetch("PRAGMA table_info(store)")]
 
-    def _filter_expr(self, field: str) -> str:
+    def _filter_condition(self, field: str, value: str | int) -> tuple[str, list[Any]]:
         validate_field_name(field)
-        return f"json_extract(value, '$.{field}')"
+        # The expression of the documented indexes: it must not change.
+        return f"json_extract(value, '$.{field}') = ?", [value]
+
+    def _select_candidates(self, fields: Mapping[str, Any]) -> Iterator[dict[str, Payload]]:
+        try:
+            yield from super()._select_candidates(fields)
+        except sqlite3.OperationalError as exc:
+            if "JSON" not in str(exc):
+                raise
+            # json_extract rejects a document nested too deeply (1000
+            # levels, or more, depending on the version), which Python
+            # reads: select every row instead.
+            yield from super()._select_candidates({})
+
+    def _safe_database(self) -> Path | str:
+        return _redact_database(self._database)
+
+
+def _redact_database(database: Path | str) -> Path | str:
+    r"""Return the location of a SQLite database, without the parameters
+    of a URI that could be secrets.
+
+    Args:
+        database: A path, ``":memory:"``, or a ``file:`` URI.
+
+    Returns:
+        A path or ``":memory:"`` unchanged. A ``file:`` URI keeps its
+        location, without credentials and fragment, and only the
+        parameters of SQLite that are not secrets (such as ``mode``): an
+        extension can read a key from the others.
+
+    Example:
+        ```pycon
+        >>> from persista.store.sqlite import _redact_database
+        >>> _redact_database("file:data.db?mode=ro&key=secret")
+        'file:data.db?mode=ro'
+
+        ```
+    """
+    if not isinstance(database, str) or not database.startswith("file:"):
+        return database
+    path, _, query = database.partition("#")[0].partition("?")
+    if path.startswith("file://"):
+        authority, slash, rest = path.removeprefix("file://").partition("/")
+        path = f"file://{authority.rpartition('@')[2]}{slash}{rest}"
+    params = "&".join(
+        param for param in query.split("&") if param.partition("=")[0] in _PUBLIC_URI_PARAMS
+    )
+    return f"{path}?{params}" if params else path
 
 
 def _is_memory_database(database: Path | str) -> bool:
