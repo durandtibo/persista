@@ -11,11 +11,13 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit
 
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
+from coola.utils.imports import lazy_import
 
 from persista.store.base import BaseStore
 from persista.store.loop_clients import LoopClients
+from persista.store.uri import split_uri
 from persista.store.validation import check_is_open, validate_namespace
-from persista.utils.imports import check_redis, is_redis_available
+from persista.utils.imports import check_redis
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterable, Iterator, Mapping
@@ -25,10 +27,15 @@ if TYPE_CHECKING:
     from persista.store.loop_clients import LoopClient
     from persista.store.types import Payload, Plan
 
-if TYPE_CHECKING or is_redis_available():  # pragma: no cover
+if TYPE_CHECKING:
     import redis
     import redis.asyncio as aredis
     from redis import exceptions as redis_exceptions
+else:
+    # Imported when the first store is opened.
+    redis = lazy_import("redis")
+    aredis = lazy_import("redis.asyncio")
+    redis_exceptions = lazy_import("redis.exceptions")
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -172,7 +179,7 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
     ) -> None:
         check_redis()
         validate_namespace(namespace)
-        if "decode_responses" in kwargs or "decode_responses" in parse_qs(urlsplit(url).query):
+        if "decode_responses" in kwargs or "decode_responses" in parse_qs(split_uri(url).query):
             msg = (
                 "RedisStore reads the payloads as bytes: it does not accept decode_responses, "
                 "as an argument or in the URL"
@@ -227,7 +234,10 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
         r"""Reconstruct a store from a URI produced by :meth:`to_uri`.
 
         The URI does not describe the namespace, the codec or the other
-        arguments of the constructor: pass them again.
+        arguments of the constructor: pass them again, otherwise the new
+        store uses the namespace ``"persista"`` and the
+        :class:`~persista.store.JsonCodec`. The URI contains the password
+        if there is one: treat it as a secret.
 
         Args:
             uri: A Redis connection URL.
@@ -247,6 +257,7 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
     ######################
 
     def _open(self) -> None:
+        check_redis()
         _check_url(self._url)
         self._client = redis.Redis.from_url(self._url, **self._kwargs)
         # Connect now, so that a wrong address or password fails here. A

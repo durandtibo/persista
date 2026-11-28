@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import traceback
 from typing import TYPE_CHECKING
 
 import pytest
@@ -13,11 +14,13 @@ from persista.store import (
     LmdbStore,
     NullStore,
     PickleCodec,
+    RedisStore,
     SQLiteStore,
     register_scheme,
     store_from_uri,
 )
-from persista.testing.fixtures import duckdb_available, lmdb_available
+from persista.store.registry import _SCHEMES
+from persista.testing.fixtures import duckdb_available, lmdb_available, redis_available
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -147,3 +150,55 @@ def test_store_package_exports_store_from_uri_only() -> None:
     assert "async_store_from_uri" not in store_pkg.__all__
     assert "register_scheme" in store_pkg.__all__
     assert "register_async_scheme" not in store_pkg.__all__
+
+
+@pytest.mark.parametrize("scheme", ["MyScheme", "MYSCHEME", "myscheme"])
+def test_register_scheme_ignores_the_case(monkeypatch: pytest.MonkeyPatch, scheme: str) -> None:
+    monkeypatch.delitem(_SCHEMES, "myscheme", raising=False)
+    monkeypatch.setitem(_SCHEMES, "myscheme", NullStore)
+    register_scheme(scheme, InMemoryStore)
+    with store_from_uri("MyScheme://") as store:
+        assert isinstance(store, InMemoryStore)
+
+
+@redis_available
+@pytest.mark.parametrize(
+    "uri", ["redis://localhost:6379/0", "rediss://localhost:6379/0", "unix:///tmp/redis.sock"]
+)
+def test_store_from_uri_redis_schemes(monkeypatch: pytest.MonkeyPatch, uri: str) -> None:
+    monkeypatch.setattr(RedisStore, "open", lambda _store: None)
+    assert store_from_uri(uri).to_uri() == uri
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "redis://user:s3cret@[bad",
+        f"postgresql://user:s3cret@ho{chr(0x2100)}st/db",
+    ],
+)
+def test_store_from_uri_invalid_uri_hides_the_password(uri: str) -> None:
+    with pytest.raises(ValueError, match=r"Invalid URI: it cannot be parsed") as info:
+        store_from_uri(uri)
+    assert "s3cret" not in "".join(traceback.format_exception(info.value))
+
+
+def test_store_from_uri_builds_the_default_store() -> None:
+    uri = InMemoryStore(codec=PickleCodec()).to_uri()
+    with store_from_uri(uri) as store:
+        assert isinstance(store._codec, JsonCodec)
+
+
+#########################################
+#     Tests for the from_uri kwargs     #
+#########################################
+
+
+def test_in_memory_from_uri_passes_kwargs() -> None:
+    codec = PickleCodec()
+    assert InMemoryStore.from_uri("memory://", codec=codec)._codec is codec
+
+
+def test_null_from_uri_rejects_kwargs() -> None:
+    with pytest.raises(TypeError, match=r"unexpected keyword argument 'codec'"):
+        NullStore.from_uri("null://", codec=PickleCodec())

@@ -15,6 +15,7 @@ from persista.utils.imports import (
     is_requests_available,
     is_urllib3_available,
 )
+from persista.utils.url import redact_url_credentials
 
 if TYPE_CHECKING or is_requests_available():  # pragma: no cover
     import requests
@@ -140,7 +141,7 @@ def fetch_response(
         ```
     """
     check_requests()
-    logger.debug("Fetching %s...", url)
+    logger.debug("Fetching %s...", redact_url_credentials(url))
 
     own_session = session is None
     if own_session:

@@ -9,16 +9,21 @@ import base64
 import logging
 from typing import TYPE_CHECKING, Any
 
+from coola.utils.imports import lazy_import
+
 from persista.cache.utils import make_key
 from persista.http.httpx.method import (
     DEFAULT_RETRY_STATUS_CODES,
     send_request,
     send_request_async,
 )
-from persista.utils.imports import check_httpx, is_httpx_available
+from persista.utils.imports import check_httpx
 
-if TYPE_CHECKING or is_httpx_available():  # pragma: no cover
+if TYPE_CHECKING:
     import httpx
+else:
+    # Imported when the first request or client needs it.
+    httpx = lazy_import("httpx")
 
 if TYPE_CHECKING:
     from persista.cache.cache import Cache

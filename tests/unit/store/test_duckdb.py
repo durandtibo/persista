@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -421,40 +422,69 @@ def test__table_columns_ignores_other_schema(store: DuckDBStore) -> None:
     assert store._table_columns() == []
 
 
-def test__filter_expr(store: DuckDBStore) -> None:
-    assert store._filter_expr("author") == "json_extract_string(value, '$.author')"
+def test__filter_condition_str(store: DuckDBStore) -> None:
+    assert store._filter_condition("author", "Alice") == (
+        "json_extract_string(value, '$.author') = ?",
+        ["Alice"],
+    )
 
 
-def test__filter_expr_invalid_field(store: DuckDBStore) -> None:
+def test__filter_condition_int(store: DuckDBStore) -> None:
+    assert store._filter_condition("year", 7) == (
+        "TRY_CAST(json_extract_string(value, '$.year') AS BIGINT) = ?",
+        [7],
+    )
+
+
+@pytest.mark.parametrize("field", ["a') OR 1 --", "a b", "a\n"])
+def test__filter_condition_invalid_field(store: DuckDBStore, field: str) -> None:
     with pytest.raises(ValueError, match=r"Invalid filter field name"):
-        store._filter_expr("a') OR 1 --")
+        store._filter_condition(field, "x")
+
+
+OTHER_VALUES: dict[str, dict[str, Any]] = {
+    "int": {"v": 1},
+    "float": {"v": 1.0},
+    "str": {"v": "1"},
+    "text": {"v": "abc"},
+    "bool": {"v": True},
+    "list": {"v": [1]},
+    "dict": {"v": {"a": 1}},
+    "null": {"v": None},
+    "absent": {},
+}
 
 
 @pytest.mark.parametrize(
     ("value", "keys"),
     [
-        pytest.param("1", ["int", "str"], id="str_matches_int"),
-        pytest.param(1, ["int", "str"], id="int_matches_str"),
+        pytest.param("1", ["str"], id="str"),
+        pytest.param(1, ["float", "int"], id="int"),
+        pytest.param(True, ["bool"], id="bool"),
         pytest.param(None, ["absent", "null"], id="none"),
     ],
 )
-def test_filter_items_matches_in_sql(store: DuckDBStore, value: Any, keys: list[str]) -> None:
-    store.set_many({"int": {"v": 1}, "str": {"v": "1"}, "null": {"v": None}, "absent": {}})
-    assert sorted(store.filter_items(v=value)) == keys
+def test_filter_compares_json_types(store: DuckDBStore, value: Any, keys: list[str]) -> None:
+    store.set_many(OTHER_VALUES)
+    assert sorted(store.filter(v=value)) == keys
+
+
+def test_filter_int_with_other_values_in_the_column(store: DuckDBStore) -> None:
+    # An implicit cast of the text of the field raised ConversionException.
+    store.set_many(OTHER_VALUES)
+    assert sorted(store.filter(v=1)) == ["float", "int"]
 
 
 async def test_afilter(store: DuckDBStore) -> None:
     store.set_many({"1": {"a": 1}, "2": {"a": 2}})
-    assert await store.afilter(a=2) == [{"a": 2}]
+    assert await store.afilter(a=2) == {"2": {"a": 2}}
 
 
 # --- repr ---
 
 
 def test_repr(store: DuckDBStore) -> None:
-    assert repr(store) == (
-        "DuckDBStore(\n  (database): :memory:\n  (closed): False\n  (count): 0\n)"
-    )
+    assert repr(store) == ("DuckDBStore(\n  (database): :memory:\n  (closed): False\n)")
 
 
 ########################################
@@ -480,3 +510,22 @@ def test__get_database_lock_other_files(tmp_path: Path) -> None:
 def test__get_database_lock_missing_file(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match=r"data"):
         _get_database_lock(tmp_path / "data")
+
+
+def test_open_checks_the_driver(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = DuckDBStore()
+    error = RuntimeError("the driver is missing")
+    monkeypatch.setattr("persista.store.duckdb.check_duckdb", MagicMock(side_effect=error))
+    with pytest.raises(RuntimeError, match=r"the driver is missing"):
+        store.open()
+    assert store.closed
+
+
+def test_repr_runs_no_query(store: DuckDBStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store, "_fetch", MagicMock(side_effect=AssertionError("query")))
+    assert "DuckDBStore(" in repr(store)
+
+
+def test_repr_hides_the_arguments_of_the_driver() -> None:
+    store = DuckDBStore(config={"s3_secret_access_key": "s3cret"})
+    assert "s3cret" not in repr(store)

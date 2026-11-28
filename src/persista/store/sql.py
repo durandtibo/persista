@@ -8,13 +8,15 @@ key, and ``value``, whose type depends on the codec of the store.
 from __future__ import annotations
 
 __all__ = [
-    "SQLFilterStore",
+    "MAX_PUSH_DOWN_INT",
     "SQLStore",
     "build_where",
+    "can_push_down",
     "check_sql_codec",
     "check_table_layout",
     "decode_sql_uri",
     "encode_sql_uri",
+    "select_push_down_fields",
     "value_column_type",
 ]
 
@@ -27,7 +29,7 @@ from coola.utils.batching import batchify
 from persista.store.base import BaseStore
 from persista.store.codec import JsonCodec
 from persista.store.uri import decode_codec_uri, encode_path_uri
-from persista.store.validation import check_is_open
+from persista.store.validation import is_valid_field_name
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -36,6 +38,14 @@ if TYPE_CHECKING:
 
     from persista.store.codec import Codec
     from persista.store.types import Payload, Plan
+
+#: The largest integer, in absolute value, that a filter selects in the
+#: database: every integer up to it is exact as a floating-point number.
+MAX_PUSH_DOWN_INT = 2**53 - 1
+
+# The largest number of conditions of a filter that a query applies. The
+# databases limit the size of a query, and the others are applied in Python.
+_MAX_PUSH_DOWN_CONDITIONS = 100
 
 # The type of the value column for each codec name.
 _VALUE_COLUMN_TYPES: dict[str, str] = {"json": "JSON", "pickle": "BLOB"}
@@ -161,42 +171,133 @@ def check_table_layout(
         raise ValueError(msg)
 
 
-def build_where(
-    fields: Mapping[str, Any], expression: Callable[[str], str], *, placeholder: str = "?"
-) -> tuple[str, list[Any]]:
-    r"""Build the ``WHERE`` clause that selects the rows whose fields are
-    equal to some values.
+def can_push_down(codec: Codec) -> bool:
+    r"""Indicate whether a database can read the payloads of a codec, to
+    select the candidates of a filter.
 
     Args:
-        fields: The expected value of each field. ``None`` is matched with
-            ``IS NULL``, because ``NULL = ?`` is never true in SQL.
-        expression: A function that returns the SQL expression that
-            reads a field. It must raise if the field name cannot be
-            safely interpolated into SQL.
-        placeholder: The text that marks a parameter in the SQL of the
-            database.
+        codec: The codec of the store.
 
     Returns:
-        The condition, without ``WHERE`` (empty if ``fields`` is empty),
-        and the values of its parameters.
+        ``True`` for a :class:`~persista.store.JsonCodec`. A subclass of it
+        can encode the values in another way, so it is ``False``.
+
+    Example:
+        ```pycon
+        >>> from persista.store import JsonCodec, PickleCodec
+        >>> from persista.store.sql import can_push_down
+        >>> can_push_down(JsonCodec()), can_push_down(PickleCodec())
+        (True, False)
+
+        ```
+    """
+    return type(codec) is JsonCodec
+
+
+def select_push_down_fields(fields: Mapping[str, Any]) -> dict[str, str | int]:
+    r"""Select the conditions of a filter that a database can apply to
+    JSON values without excluding a match.
+
+    A condition is selected if the name of its field can be safely
+    interpolated into SQL (see
+    :func:`~persista.store.validation.is_valid_field_name`), and if its
+    value is:
+
+    - a ``str`` without a NUL character or a lone surrogate, which the
+      databases cannot all compare; or
+    - an ``int`` (not a ``bool``) between ``-MAX_PUSH_DOWN_INT`` and
+      ``MAX_PUSH_DOWN_INT`` (``2**53 - 1``). The databases do not all read
+      a larger number of a JSON value without rounding it.
+
+    Args:
+        fields: The expected value of each field.
+
+    At most 100 conditions are selected, because the databases limit the
+    size of a query.
+
+    Returns:
+        The selected conditions, in the order of ``fields``. An instance of
+        a subclass of ``str`` or ``int`` is converted to the built-in type.
+
+    Example:
+        ```pycon
+        >>> from persista.store.sql import select_push_down_fields
+        >>> select_push_down_fields({"author": "Alice", "year": None, "user-id": 1, "page": 2})
+        {'author': 'Alice', 'page': 2}
+
+        ```
+    """
+    selected: dict[str, str | int] = {}
+    for name, value in fields.items():
+        if len(selected) == _MAX_PUSH_DOWN_CONDITIONS:
+            break
+        if not is_valid_field_name(name):
+            continue
+        # The conversions use the methods of the built-in types, which a
+        # subclass cannot change.
+        if isinstance(value, str):
+            text = str.__str__(value)
+            if chr(0) not in text and _is_unicode(text):
+                selected[str.__str__(name)] = text
+        elif isinstance(value, int) and not isinstance(value, bool):
+            number = int.__int__(value)
+            if -MAX_PUSH_DOWN_INT <= number <= MAX_PUSH_DOWN_INT:
+                selected[str.__str__(name)] = number
+    return selected
+
+
+def _is_unicode(text: str) -> bool:
+    r"""Indicate whether a string is valid Unicode.
+
+    Args:
+        text: The string to check.
+
+    Returns:
+        ``False`` if ``text`` contains a lone surrogate.
+    """
+    try:
+        text.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def build_where(
+    fields: Mapping[str, Any],
+    condition: Callable[[str, str | int], tuple[str, Sequence[Any]]],
+) -> tuple[str, list[Any]]:
+    r"""Build the ``WHERE`` clause that selects the candidates of a filter.
+
+    Only the conditions given by :func:`select_push_down_fields` are in the
+    clause, so the rows that it selects are a superset of the matches.
+
+    Args:
+        fields: The expected value of each field.
+        condition: A function that returns the SQL condition of a field
+            and its parameters. The condition must be true for every row
+            whose field is equal to the value. The function must raise if
+            the field name cannot be safely interpolated into SQL.
+
+    Returns:
+        The condition, without ``WHERE`` (empty if no condition is
+        selected), and the values of its parameters.
 
     Example:
         ```pycon
         >>> from persista.store.sql import build_where
-        >>> build_where({"author": "Alice", "year": None}, lambda name: name)
-        ('author = ? AND year IS NULL', ['Alice'])
+        >>> build_where(
+        ...     {"author": "Alice", "year": None}, lambda name, value: (f"{name} = ?", [value])
+        ... )
+        ('author = ?', ['Alice'])
 
         ```
     """
     conditions: list[str] = []
     params: list[Any] = []
-    for name, expected in fields.items():
-        expr = expression(name)
-        if expected is None:
-            conditions.append(f"{expr} IS NULL")
-        else:
-            conditions.append(f"{expr} = {placeholder}")
-            params.append(expected)
+    for name, value in select_push_down_fields(fields).items():
+        text, values = condition(name, value)
+        conditions.append(text)
+        params.extend(values)
     return " AND ".join(conditions), params
 
 
@@ -257,108 +358,7 @@ def decode_sql_uri(uri: str, *, scheme: str, codec: Codec | None = None) -> tupl
     )
 
 
-class SQLFilterStore(BaseStore):
-    r"""Define the base class of the stores whose database can apply the
-    filters.
-
-    With a :class:`~persista.store.JsonCodec`, the candidates that a
-    subclass selects in ``_filter_candidates`` are the matches: the values
-    are compared by the database. With another codec, they are compared
-    in Python, as in the other stores.
-
-    This class also provides :meth:`filter_items`, which keeps the key of
-    each matching value.
-
-    Example:
-        ```pycon
-        >>> from persista.store import SQLiteStore
-        >>> from persista.store.sql import SQLFilterStore
-        >>> issubclass(SQLiteStore, SQLFilterStore)
-        True
-
-        ```
-    """
-
-    def filter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
-        r"""Like :meth:`filter`, but keyed by the keys of the matching
-        values.
-
-        This lets callers that need to know which key each matching
-        value belongs to (e.g. a record store layered on top) filter in
-        SQL instead of reading every value.
-
-        Args:
-            **field_filters: The value that each field must be equal to.
-                Calling with no arguments returns every pair.
-
-        Returns:
-            The matching values, keyed by their keys.
-
-        Raises:
-            RuntimeError: If the store is closed.
-            ValueError: If a field name cannot be used in SQL (JSON codec
-                only).
-        """
-        check_is_open(self)
-        matches: dict[str, dict[str, Any]] = {}
-        for batch in self._batches(self._filter_candidates, field_filters):
-            matches.update(self._matching_items(batch, field_filters))
-        return matches
-
-    async def afilter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
-        r"""Async equivalent of :meth:`filter_items`."""
-        check_is_open(self)
-        matches: dict[str, dict[str, Any]] = {}
-        async with contextlib.aclosing(self._afilter_candidates(field_filters)) as batches:
-            async for batch in batches:
-                matches.update(self._matching_items(batch, field_filters))
-        return matches
-
-    def _matching_values(
-        self, batch: Mapping[str, Payload], fields: Mapping[str, Any]
-    ) -> list[dict[str, Any]]:
-        if not self._filters_in_sql():
-            return super()._matching_values(batch, fields)
-        # The rows were already selected by the database.
-        decode = self._codec.decode
-        return [decode(payload) for payload in batch.values()]
-
-    ###########################
-    #     Template helpers    #
-    ###########################
-
-    def _filters_in_sql(self) -> bool:
-        r"""Indicate whether the database applies the filters.
-
-        Returns:
-            ``True`` if the codec is a
-            :class:`~persista.store.JsonCodec`, whose payloads the database
-            can read. Otherwise the filters are applied to the decoded
-            values.
-        """
-        return type(self._codec) is JsonCodec
-
-    def _matching_items(
-        self, batch: Mapping[str, Payload], fields: Mapping[str, Any]
-    ) -> dict[str, dict[str, Any]]:
-        r"""Decode a batch of candidates and keep the pairs that match a
-        filter.
-
-        Args:
-            batch: The payloads of the candidates, keyed by their key.
-            fields: The value that each field must be equal to.
-
-        Returns:
-            The matching values, keyed by their key.
-        """
-        decode = self._codec.decode
-        values = {key: decode(payload) for key, payload in batch.items()}
-        if self._filters_in_sql():
-            return values
-        return {key: value for key, value in values.items() if self._matches(value, fields)}
-
-
-class SQLStore(SQLFilterStore):
+class SQLStore(BaseStore):
     r"""Define a base class for the stores that keep their values in a
     SQL table, through a connection with a ``qmark`` parameter style.
 
@@ -366,7 +366,14 @@ class SQLStore(SQLFilterStore):
     with SQL statements. A subclass implements ``_open`` and ``_close``,
     the methods that run a statement (``_fetch``, ``_execute``,
     ``_executemany`` and ``_transaction``), ``_table_columns`` and
-    ``_filter_expr``, and sets ``_scheme`` and ``_key_type``.
+    ``_filter_condition``, and sets ``_scheme`` and ``_key_type``.
+
+    With a :class:`~persista.store.JsonCodec`, the candidates of
+    :meth:`filter` are selected with one query, whose ``WHERE`` clause
+    applies the conditions on strings and integers (see
+    :func:`select_push_down_fields`). The filter is then applied to the
+    decoded values, as in every store. With another codec, every value is
+    read.
 
     A write of several rows, and a write that depends on the existing
     values, run in one transaction. An iteration reads the keys in
@@ -428,7 +435,11 @@ class SQLStore(SQLFilterStore):
         r"""Reconstruct a store from a URI produced by :meth:`to_uri`.
 
         The scheme of the URI gives the codec. The other arguments of the
-        constructor are not part of the URI: pass them again.
+        constructor, such as the arguments of the driver, are not part of
+        the URI: pass them again. The URI of a ``":memory:"`` database gives
+        a new, empty database. A database file is an absolute path, so its
+        URI is only valid on a machine with the same files (a SQLite
+        ``file:`` URI is kept as it was given).
 
         Args:
             uri: A URI produced by :meth:`to_uri`.
@@ -518,14 +529,18 @@ class SQLStore(SQLFilterStore):
         """
 
     @abstractmethod
-    def _filter_expr(self, field: str) -> str:
-        r"""Build the SQL expression that reads a field of a JSON value.
+    def _filter_condition(self, field: str, value: str | int) -> tuple[str, list[Any]]:
+        r"""Build the SQL condition that selects the rows whose JSON
+        value may have a field equal to a value.
 
         Args:
             field: The name of the field.
+            value: The value, as selected by
+                :func:`select_push_down_fields`.
 
         Returns:
-            The expression.
+            A condition that is true for every row whose field is equal to
+            ``value``, and the values of its parameters.
 
         Raises:
             ValueError: If ``field`` cannot be safely interpolated into
@@ -544,7 +559,7 @@ class SQLStore(SQLFilterStore):
             columns = self._table_columns()
             if not columns:
                 if self._read_only:
-                    msg = f"The database {str(self._database)!r} has no table 'store'"
+                    msg = f"The database {str(self._safe_database())!r} has no table 'store'"
                     raise ValueError(msg)
                 self._execute(
                     "CREATE TABLE IF NOT EXISTS store ("
@@ -554,7 +569,7 @@ class SQLStore(SQLFilterStore):
                 # Read again: another writer may have created the table.
                 columns = self._table_columns()
         check_table_layout(
-            columns, codec=self._codec, key_type=self._key_type, database=self._database
+            columns, codec=self._codec, key_type=self._key_type, database=self._safe_database()
         )
 
     ######################
@@ -631,9 +646,9 @@ class SQLStore(SQLFilterStore):
             rows = self._fetch(_SELECT_NEXT_KEYS, [rows[-1][0], batch_size])
 
     def _filter_candidates(self, fields: Mapping[str, Any]) -> Iterator[dict[str, Payload]]:
-        if not self._filters_in_sql():
+        if not can_push_down(self._codec):
             return super()._filter_candidates(fields)
-        return self._select_matches(fields)
+        return self._select_candidates(fields)
 
     ###########################
     #     Template helpers    #
@@ -663,29 +678,35 @@ class SQLStore(SQLFilterStore):
         placeholders = ", ".join("?" * len(keys))
         self._execute(f"{_DELETE_ALL} WHERE key IN ({placeholders})", keys)
 
-    def _select_matches(self, fields: Mapping[str, Any]) -> Iterator[dict[str, Payload]]:
-        r"""Select with one query the rows that match a filter.
+    def _select_candidates(self, fields: Mapping[str, Any]) -> Iterator[dict[str, Payload]]:
+        r"""Select with one query the rows that may match a filter.
 
         Args:
             fields: The value that each field must be equal to.
 
         Yields:
-            The matching pairs, in one batch, if there are any.
-
-        Raises:
-            ValueError: If a field name cannot be used in SQL.
+            A superset of the matching pairs, in one batch, if it is not
+            empty.
         """
-        where, params = build_where(fields, self._filter_expr)
+        where, params = build_where(fields, self._filter_condition)
         sql = f"{_SELECT_ALL} WHERE {where}" if where else _SELECT_ALL
         if rows := self._fetch(sql, params):
             yield dict(rows)
 
+    def _safe_database(self) -> Path | str:
+        r"""Return the location of the database as a repr, a log message
+        or an error can show it.
+
+        Returns:
+            The database. A subclass removes what could be secret.
+        """
+        return self._database
+
     def _get_repr_kwargs(self) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {"database": self._database, "closed": self.closed}
+        kwargs: dict[str, Any] = {"database": self._safe_database(), "closed": self.closed}
         if self._codec.name != "json":
             kwargs["codec"] = self._codec
         if self._read_only:
             kwargs["read_only"] = True
-        if not self.closed:
-            kwargs["count"] = f"{self.count():,}"
-        return kwargs | self._kwargs
+        # The arguments of the driver are left out: they could hold secrets.
+        return kwargs

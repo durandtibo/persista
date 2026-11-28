@@ -11,11 +11,12 @@ import weakref
 from typing import TYPE_CHECKING, Any
 
 from coola.display import MultilineDisplayMixin
+from coola.utils.imports import lazy_import
 from coola.utils.path import sanitize_path
 
 from persista.store.sql import SQLStore
 from persista.store.validation import validate_field_name
-from persista.utils.imports import check_duckdb, is_duckdb_available
+from persista.utils.imports import check_duckdb
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
@@ -23,8 +24,11 @@ if TYPE_CHECKING:
 
     from persista.store.codec import Codec
 
-if TYPE_CHECKING or is_duckdb_available():  # pragma: no cover
+if TYPE_CHECKING:
     import duckdb
+else:
+    # Imported when the first store is opened.
+    duckdb = lazy_import("duckdb")
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -45,7 +49,9 @@ class DuckDBStore(SQLStore, MultilineDisplayMixin):
     kept in the table ``store``, which has a ``key`` column and a
     ``value`` column. With the default
     :class:`~persista.store.JsonCodec`, the ``value`` column holds JSON
-    and :meth:`filter` is applied by the database. With a
+    and :meth:`filter` uses it to read only the values that may match a
+    condition on a string or an integer (see
+    :func:`~persista.store.sql.select_push_down_fields`). With a
     :class:`~persista.store.PickleCodec`, it holds opaque bytes, which
     keep Python types, and :meth:`filter` reads every value.
 
@@ -149,6 +155,7 @@ class DuckDBStore(SQLStore, MultilineDisplayMixin):
         return self._conn
 
     def _open(self) -> None:
+        check_duckdb()
         database = self._database
         if not self._read_only and not isinstance(database, str):
             database.parent.mkdir(parents=True, exist_ok=True)
@@ -200,9 +207,16 @@ class DuckDBStore(SQLStore, MultilineDisplayMixin):
         # dflt_value, pk.
         return [(row[1], row[2], bool(row[5])) for row in self._fetch("PRAGMA table_info('store')")]
 
-    def _filter_expr(self, field: str) -> str:
+    def _filter_condition(self, field: str, value: str | int) -> tuple[str, list[Any]]:
         validate_field_name(field)
-        return f"json_extract_string(value, '$.{field}')"
+        text = f"json_extract_string(value, '$.{field}')"
+        if isinstance(value, int):
+            # A number is extracted as text, such as '1' or '1.0'. It is
+            # cast to an integer: comparing the text with an integer would
+            # fail on a field that holds another text. A number with
+            # decimals is rounded, and is then excluded by the filter.
+            return f"TRY_CAST({text} AS BIGINT) = ?", [value]
+        return f"{text} = ?", [value]
 
 
 def _get_database_lock(database: Path) -> threading.RLock:

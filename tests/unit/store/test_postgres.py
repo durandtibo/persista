@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import traceback
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -109,6 +110,13 @@ def async_connection() -> MagicMock:
     connection.close = AsyncMock()
     connection.set_isolation_level = AsyncMock()
     return connection
+
+
+def built_store(**kwargs: Any) -> PostgresStore:
+    r"""Return a store that is not open, with its queries."""
+    store = PostgresStore(URL, **kwargs)
+    store._build_queries()
+    return store
 
 
 def statements(connection: MagicMock) -> list[str]:
@@ -501,36 +509,50 @@ def test__filter_candidates_pickle(connection: MagicMock) -> None:
 
 
 @psycopg_available
-def test__select_matches_no_match(store: PostgresStore, connection: MagicMock) -> None:
+def test__select_candidates_no_match(store: PostgresStore, connection: MagicMock) -> None:
     connection.execute.return_value = cursor([])
-    assert list(store._select_matches({"a": 1})) == []
+    assert list(store._select_candidates({"a": 1})) == []
 
 
 @psycopg_available
-def test__filter_expr() -> None:
-    assert PostgresStore(URL)._filter_expr("author") == "value->>'author'"
+def test__filter_condition_str() -> None:
+    assert PostgresStore(URL)._filter_condition("author", "Alice") == (
+        "value->>'author' = %s::text",
+        ["Alice"],
+    )
 
 
 @psycopg_available
-def test__filter_expr_invalid_field() -> None:
+def test__filter_condition_int() -> None:
+    assert PostgresStore(URL)._filter_condition("year", -7) == (
+        "value @> %s::jsonb",
+        ['{"year": -7}'],
+    )
+
+
+@psycopg_available
+@pytest.mark.parametrize("field", ["a'; DROP TABLE store; --", "a b", "a%s", "a\n"])
+def test__filter_condition_invalid_field(field: str) -> None:
     with pytest.raises(ValueError, match=r"Invalid filter field name"):
-        PostgresStore(URL)._filter_expr("a'; DROP TABLE store; --")
+        PostgresStore(URL)._filter_condition(field, "x")
 
 
 @psycopg_available
-def test__filter_statement_without_field() -> None:
-    query, params = PostgresStore(URL)._filter_statement({})
+@pytest.mark.parametrize(
+    "fields", [{}, {"a": None, "b": True, "c": 1.5, "d": [1], "e-f": "x", "g": 2**53}]
+)
+def test__filter_statement_without_condition(fields: dict[str, Any]) -> None:
+    query, params = built_store()._filter_statement(fields)
     assert (text(query), params) == ('SELECT key, value::text FROM "store"', None)
 
 
 @psycopg_available
-def test__filter_statement_none_matches_null_and_absent_fields() -> None:
-    query, params = PostgresStore(URL)._filter_statement({"a": None, "b": 1})
+def test__filter_statement() -> None:
+    query, params = built_store()._filter_statement({"a": "x", "b": None, "c": 1})
     expected = (
-        "SELECT key, value::text FROM \"store\" WHERE value->>'a' IS NULL AND "
-        "value->>'b' = %s::text"
+        "SELECT key, value::text FROM \"store\" WHERE value->>'a' = %s::text AND value @> %s::jsonb"
     )
-    assert (text(query), params) == (expected, [1])
+    assert (text(query), params) == (expected, ["x", '{"c": 1}'])
 
 
 # --- async primitives ---
@@ -692,14 +714,16 @@ async def test__afilter_candidates_pickle(connection: MagicMock, aconnection: Ma
 
 
 @psycopg_available
-async def test__aselect_matches_no_match(astore: PostgresStore) -> None:
-    assert [batch async for batch in astore._aselect_matches({"a": 1})] == []
+async def test__aselect_candidates_no_match(astore: PostgresStore) -> None:
+    assert [batch async for batch in astore._aselect_candidates({"a": 1})] == []
 
 
 @psycopg_available
-async def test__aselect_matches_closed_store(astore: PostgresStore, aconnection: MagicMock) -> None:
+async def test__aselect_candidates_closed_store(
+    astore: PostgresStore, aconnection: MagicMock
+) -> None:
     aconnection.execute.return_value = acursor([("a", "{}")])
-    batches = astore._aselect_matches({"a": 1})
+    batches = astore._aselect_candidates({"a": 1})
     await anext(batches)
     await astore.aclose()
     with pytest.raises(RuntimeError, match=r"PostgresStore is not open"):
@@ -814,19 +838,19 @@ async def test__afetch(astore: PostgresStore, aconnection: MagicMock) -> None:
 
 @psycopg_available
 def test__read_statement_one_key() -> None:
-    query, params = PostgresStore(URL)._read_statement(["a"])
+    query, params = built_store()._read_statement(["a"])
     assert (text(query).endswith("WHERE key = %s"), params) == (True, ("a",))
 
 
 @psycopg_available
 def test__read_statement_several_keys() -> None:
-    query, params = PostgresStore(URL)._read_statement(["a", "b"])
+    query, params = built_store()._read_statement(["a", "b"])
     assert (text(query).endswith("WHERE key = ANY(%s)"), params) == (True, (["a", "b"],))
 
 
 @psycopg_available
 def test__write_statement_one_pair() -> None:
-    query, params = PostgresStore(URL)._write_statement({"a": b"{}"})
+    query, params = built_store()._write_statement({"a": b"{}"})
     assert (text(query).startswith('INSERT INTO "store"'), params) == (
         True,
         {"space": SPACE, "table": '"store"', "key": "a", "value": "{}"},
@@ -835,7 +859,7 @@ def test__write_statement_one_pair() -> None:
 
 @psycopg_available
 def test__write_statement_several_pairs() -> None:
-    query, params = PostgresStore(URL)._write_statement({"a": "{}", "b": '{"x": 1e+22}'})
+    query, params = built_store()._write_statement({"a": "{}", "b": '{"x": 1e+22}'})
     assert ("unnest(%(keys)b::text[], %(values)b::text[])" in text(query), params) == (
         True,
         {
@@ -850,7 +874,7 @@ def test__write_statement_several_pairs() -> None:
 @psycopg_available
 def test__write_statement_many_pairs_lock_the_table() -> None:
     items = {str(i): "{}" for i in range(65)}
-    query, params = PostgresStore(URL)._write_statement(items)
+    query, params = built_store()._write_statement(items)
     assert (
         "pg_advisory_xact_lock_shared" in text(query),
         len(params["keys"]),
@@ -861,16 +885,14 @@ def test__write_statement_many_pairs_lock_the_table() -> None:
 @psycopg_available
 def test__write_statement_pickle_keeps_the_bytes() -> None:
     payload = NUL_ESCAPE.encode() + b"e+\xff"
-    query, params = PostgresStore(URL, codec=PickleCodec())._write_statement(
-        {"a": payload, "b": b"x"}
-    )
+    query, params = built_store(codec=PickleCodec())._write_statement({"a": payload, "b": b"x"})
     assert ("%(values)b::bytea[]" in text(query), params["values"]) == (True, [payload, b"x"])
 
 
 @psycopg_available
 def test__write_statement_does_not_modify_the_items() -> None:
     items = {"a": '{"x": 1e+22}'}
-    PostgresStore(URL)._write_statement(items)
+    built_store()._write_statement(items)
     assert items == {"a": '{"x": 1e+22}'}
 
 
@@ -907,7 +929,7 @@ def test__lock_params(keys: list[str] | None, kind: str, extra: dict) -> None:
     ],
 )
 def test__lock_statement(keys: list[str] | None, fragments: list[str]) -> None:
-    query, _ = PostgresStore(URL)._lock_statement(keys)
+    query, _ = built_store()._lock_statement(keys)
     assert all(fragment in text(query) for fragment in fragments)
 
 
@@ -1417,3 +1439,55 @@ def test__conninfo_to_uri(conninfo: str, uri: str) -> None:
 def test__conninfo_to_uri_keeps_the_options(conninfo: str) -> None:
     parse = psycopg.conninfo.conninfo_to_dict
     assert parse(_conninfo_to_uri(conninfo)) == parse(conninfo)
+
+
+@psycopg_available
+def test_open_checks_the_driver(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = PostgresStore(URL)
+    error = RuntimeError("the driver is missing")
+    monkeypatch.setattr("persista.store.postgres.check_psycopg", MagicMock(side_effect=error))
+    with pytest.raises(RuntimeError, match=r"the driver is missing"):
+        store.open()
+    assert store.closed
+
+
+@psycopg_available
+@pytest.mark.parametrize(
+    "conninfo",
+    [
+        "redis://user:s3cret@localhost:1/0",
+        "user:s3cret@localhost",
+        "host=localhost password=s3cret bogus",
+        "password=s3cret host='unterminated",
+    ],
+)
+def test_to_uri_malformed_string_hides_the_password(conninfo: str) -> None:
+    store = PostgresStore(conninfo)
+    with pytest.raises(ValueError, match=r"Invalid PostgreSQL connection string") as info:
+        store.to_uri()
+    assert "s3cret" not in "".join(traceback.format_exception(info.value))
+
+
+@psycopg_available
+def test_to_uri_does_not_parse_a_uri_with_invalid_characters() -> None:
+    uri = f"postgresql://user:s3cret@ho{chr(0x2100)}st/db"
+    assert PostgresStore(uri).to_uri() == uri
+
+
+@psycopg_available
+def test_init_builds_no_query() -> None:
+    assert not hasattr(PostgresStore(URL), "_select")
+
+
+@psycopg_available
+def test__build_queries() -> None:
+    store = PostgresStore(URL, table="docs")
+    store._build_queries()
+    assert text(store._select) == 'SELECT key, value::text FROM "docs"'
+
+
+@psycopg_available
+def test__build_queries_pickle_codec() -> None:
+    store = PostgresStore(URL, codec=PickleCodec())
+    store._build_queries()
+    assert text(store._select) == 'SELECT key, value FROM "store"'

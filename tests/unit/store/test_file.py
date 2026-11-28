@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -460,7 +461,16 @@ def test_from_uri_other_scheme(uri: str) -> None:
 
 
 def test_repr(filled_store: FileStore) -> None:
-    assert "(count): 3" in repr(filled_store)
+    assert repr(filled_store) == (
+        f"FileStore(\n  (path): {filled_store.path}\n  (closed): False\n)"
+    )
+
+
+def test_repr_does_not_list_the_directory(
+    filled_store: FileStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(filled_store, "_list_keys", MagicMock(side_effect=AssertionError("scan")))
+    assert "FileStore(" in repr(filled_store)
 
 
 def test__get_repr_kwargs_closed(tmp_path: Path) -> None:

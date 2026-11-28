@@ -6,9 +6,6 @@ A backend is added to these tests by adding it to ``BACKENDS`` once it
 implements the primitives. The behaviour that every backend already
 shares is tested in ``test_consistency.py``.
 
-Some properties are not covered yet, because the filter semantics are
-not final (``True`` and ``1`` still match, and the SQL stores with a JSON
-codec compare in the database, so the filter matrix leaves them out).
 The writes of several instances of the same data are tested in
 ``test_sql_concurrency.py``, ``test_lmdb_concurrency.py``,
 ``test_redis_concurrency.py`` and ``test_postgres_concurrency.py``. A file
@@ -27,6 +24,7 @@ import hashlib
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -43,6 +41,7 @@ from persista.store import (
     PostgresStore,
     RedisStore,
     SQLiteStore,
+    store_from_uri,
 )
 from persista.testing.fixtures import (
     duckdb_available,
@@ -97,9 +96,9 @@ class PrimitivesOnlyStore(BaseStore):
         return "primitives://"
 
     @classmethod
-    def from_uri(cls, uri: str, *, read_only: bool = False) -> PrimitivesOnlyStore:
+    def from_uri(cls, uri: str, *, read_only: bool = False, **kwargs: Any) -> PrimitivesOnlyStore:
         del uri, read_only
-        return cls()
+        return cls(**kwargs)
 
     def _open(self) -> None:
         pass
@@ -134,6 +133,16 @@ class PrimitivesOnlyStore(BaseStore):
                     yield batch
         finally:
             self.closed_iterators += 1
+
+
+class IntValue(int):
+    r"""A subclass of ``int``."""
+
+
+class StrValue(str):
+    r"""A subclass of ``str``."""
+
+    __slots__ = ()
 
 
 class BlockingStore(PrimitivesOnlyStore):
@@ -204,9 +213,6 @@ REJECTED_KEYS: dict[str, list[str]] = {
     ],
 }
 
-# The backends that apply the filters in SQL with a JSON codec.
-SQL_BACKENDS = ["sqlite", "sqlite_memory", "duckdb", "duckdb_memory", "postgres"]
-
 
 def backend_params(names: list[str]) -> list[Any]:
     r"""Return one parameter per backend, with the mark of its optional
@@ -245,6 +251,15 @@ def unopened_store(request: pytest.FixtureRequest, codec: Codec, tmp_path: Path)
 @pytest.fixture
 def store(unopened_store: BaseStore) -> Generator[BaseStore, None, None]:
     with unopened_store as store:
+        yield store
+
+
+@pytest.fixture(params=backend_params(list(BACKENDS)))
+def pickle_store(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Generator[BaseStore, None, None]:
+    r"""Return an open store of every backend, with the pickle codec."""
+    with BACKENDS[request.param](PickleCodec(), tmp_path) as store:
         yield store
 
 
@@ -387,7 +402,7 @@ async def test_rejected_key_raises_and_changes_nothing_async(
         await store.aset("a", {"v": 1})
         with pytest.raises(ValueError, match=r"FileStore|LmdbStore|RedisStore|PostgresStore"):
             await operation(store, key)
-        assert await store.afilter() == [{"v": 1}]
+        assert await store.afilter() == {"a": {"v": 1}}
 
 
 @pytest.mark.parametrize("key", [1, None, b"a", ("a",)])
@@ -468,7 +483,7 @@ def typed(value: Any) -> str:
     [
         pytest.param(lambda s: s.get("a"), id="get"),
         pytest.param(lambda s: s.get_many(["a"])[0], id="get_many"),
-        pytest.param(lambda s: s.filter()[0], id="filter"),
+        pytest.param(lambda s: s.filter()["a"], id="filter"),
         pytest.param(lambda s: next(iter(s.values())), id="values"),
         pytest.param(lambda s: next(iter(s.iter_batches()))["a"], id="iter_batches"),
     ],
@@ -488,7 +503,7 @@ async def test_async_read_returns_codec_round_trip(
     results = [
         await store.aget("a"),
         *await store.aget_many(["a"]),
-        *await store.afilter(),
+        *(await store.afilter()).values(),
         *await collect(store.avalues()),
     ]
     assert typed(results) == typed([codec.decode(codec.encode(value))] * 4)
@@ -521,7 +536,7 @@ def test_mutating_a_written_value_does_not_change_the_store(
     [
         pytest.param(lambda s: s.get("a"), id="get"),
         pytest.param(lambda s: s.get_many(["a"])[0], id="get_many"),
-        pytest.param(lambda s: s.filter()[0], id="filter"),
+        pytest.param(lambda s: s.filter()["a"], id="filter"),
         pytest.param(lambda s: next(iter(s.values())), id="values"),
         pytest.param(lambda s: next(iter(s.iter_batches()))["a"], id="iter_batches"),
     ],
@@ -619,52 +634,313 @@ def test_merge_with_concurrent_overwrite_and_delete(store: BaseStore) -> None:
 #     Filter semantics     #
 ############################
 
+EMOJI = chr(0x1F389)
+# "é" as one character, and as "e" followed by a combining accent.
+COMPOSED = chr(0xE9)
+DECOMPOSED = "e" + chr(0x301)
 
-@pytest.fixture
-def filter_store(request: pytest.FixtureRequest, store: BaseStore, codec: Codec) -> BaseStore:
-    r"""Return the store, except for the backends that do not use the
-    filter of the base class yet."""
-    backend = request.node.callspec.params["unopened_store"]
-    if backend in SQL_BACKENDS and codec.name == "json":
-        pytest.skip("The SQL stores with a JSON codec compare the values in the database")
-    return store
-
-
-DOCUMENTS = {
-    "int": {"v": 1},
-    "str": {"v": "1"},
-    "float": {"v": 1.5},
+# One document per kind of value of the field "v".
+DOCUMENTS: dict[str, dict[str, Any]] = {
+    "int_0": {"v": 0},
+    "int_1": {"v": 1},
+    "float_1": {"v": 1.0},
+    "float_1_5": {"v": 1.5},
+    "negative_zero": {"v": -0.0},
+    "str_1": {"v": "1"},
+    "str_1_0": {"v": "1.0"},
+    "str_padded": {"v": " 1"},
+    "str": {"v": "abc"},
+    "str_upper": {"v": "ABC"},
+    "str_empty": {"v": ""},
+    "str_true": {"v": "true"},
+    "str_null": {"v": "null"},
+    "str_list": {"v": "[1]"},
+    "str_quote": {"v": "a'b\"c\\d\n"},
+    "composed": {"v": COMPOSED},
+    "decomposed": {"v": DECOMPOSED},
+    "emoji": {"v": EMOJI},
+    "true": {"v": True},
+    "false": {"v": False},
     "none": {"v": None},
     "absent": {},
-    "list": {"v": [1, "1"]},
+    "other_case": {"V": 1},
+    "nested_field": {"w": {"v": 1}},
+    "list_empty": {"v": []},
+    "list_1": {"v": [1]},
+    "list_float": {"v": [1.0]},
+    "list_true": {"v": [True]},
+    "list_str": {"v": ["1"]},
+    "list_pair": {"v": [1, "1"]},
+    "list_nested": {"v": [[1, {"a": False}]]},
+    "dict_empty": {"v": {}},
+    "dict_1": {"v": {"a": 1}},
+    "dict_true": {"v": {"a": True}},
+    "dict_two": {"v": {"a": 1, "b": None}},
+    # The largest integers that a double keeps exactly, and beyond.
+    "safe_int": {"v": 2**53 - 1},
+    "int_2_53": {"v": 2**53},
+    "int_2_53_plus_1": {"v": 2**53 + 1},
+    "float_2_53": {"v": float(2**53)},
+    "int_64": {"v": 2**63 - 1},
+    "int_2_64": {"v": 2**64},
+    "int_10_30": {"v": 10**30},
+    "int_10_22": {"v": 10**22},
+    "float_10_22": {"v": 1e22},
 }
+
+# The expected value of the field "v", and the keys of the matching
+# documents.
+FILTERS: list[Any] = [
+    pytest.param(0, ["int_0", "negative_zero"], id="int_0"),
+    pytest.param(1, ["float_1", "int_1"], id="int_1"),
+    pytest.param(1.0, ["float_1", "int_1"], id="float_1"),
+    pytest.param(1.5, ["float_1_5"], id="float_1_5"),
+    pytest.param(-0.0, ["int_0", "negative_zero"], id="negative_zero"),
+    pytest.param("1", ["str_1"], id="str_1"),
+    pytest.param("1.0", ["str_1_0"], id="str_1_0"),
+    pytest.param(" 1", ["str_padded"], id="str_padded"),
+    pytest.param("abc", ["str"], id="str"),
+    pytest.param("", ["str_empty"], id="str_empty"),
+    pytest.param("true", ["str_true"], id="str_true"),
+    pytest.param("null", ["str_null"], id="str_null"),
+    pytest.param("[1]", ["str_list"], id="str_list"),
+    pytest.param('{"a":1}', [], id="str_dict"),
+    pytest.param("a'b\"c\\d\n", ["str_quote"], id="str_quote"),
+    pytest.param("' OR '1'='1", [], id="str_injection"),
+    pytest.param(COMPOSED, ["composed"], id="composed"),
+    pytest.param(DECOMPOSED, ["decomposed"], id="decomposed"),
+    pytest.param(EMOJI, ["emoji"], id="emoji"),
+    pytest.param("abc" + chr(0), [], id="str_nul"),
+    pytest.param(chr(0), [], id="nul"),
+    pytest.param(chr(0xD800), [], id="surrogate"),
+    pytest.param(True, ["true"], id="true"),
+    pytest.param(False, ["false"], id="false"),
+    pytest.param(None, ["absent", "nested_field", "none", "other_case"], id="none"),
+    pytest.param([], ["list_empty"], id="list_empty"),
+    pytest.param([1], ["list_1", "list_float"], id="list_1"),
+    pytest.param((1,), ["list_1", "list_float"], id="tuple_1"),
+    pytest.param([True], ["list_true"], id="list_true"),
+    pytest.param(["1"], ["list_str"], id="list_str"),
+    pytest.param([1, "1"], ["list_pair"], id="list_pair"),
+    pytest.param(["1", 1], [], id="list_other_order"),
+    pytest.param([[1, {"a": False}]], ["list_nested"], id="list_nested"),
+    pytest.param([[1, {"a": 0}]], [], id="list_nested_int_for_bool"),
+    pytest.param({}, ["dict_empty"], id="dict_empty"),
+    pytest.param({"a": 1}, ["dict_1"], id="dict_1"),
+    pytest.param({"a": 1.0}, ["dict_1"], id="dict_float"),
+    pytest.param({"a": True}, ["dict_true"], id="dict_true"),
+    pytest.param({"b": None, "a": 1}, ["dict_two"], id="dict_other_order"),
+    pytest.param({"a": 1, "c": None}, [], id="dict_other_key"),
+    pytest.param(2**53 - 1, ["safe_int"], id="safe_int"),
+    pytest.param(2**53, ["float_2_53", "int_2_53"], id="int_2_53"),
+    pytest.param(float(2**53), ["float_2_53", "int_2_53"], id="float_2_53"),
+    pytest.param(2**53 + 1, ["int_2_53_plus_1"], id="int_2_53_plus_1"),
+    pytest.param(2**63 - 1, ["int_64"], id="int_64"),
+    pytest.param(2**64, ["int_2_64"], id="int_2_64"),
+    pytest.param(10**30, ["int_10_30"], id="int_10_30"),
+    pytest.param(1e30, [], id="float_10_30"),
+    pytest.param(10**22, ["float_10_22", "int_10_22"], id="int_10_22"),
+    pytest.param(1e22, ["float_10_22", "int_10_22"], id="float_10_22"),
+    pytest.param(10**400, [], id="int_10_400"),
+    pytest.param(float("nan"), [], id="nan"),
+    pytest.param([float("nan")], [], id="list_nan"),
+    pytest.param(float("inf"), [], id="inf"),
+    pytest.param({1}, [], id="set"),
+    pytest.param(b"abc", [], id="bytes"),
+    pytest.param(2, [], id="no_match"),
+]
+
+
+@pytest.mark.parametrize(("expected", "keys"), FILTERS)
+def test_filter_matches_equal_values(store: BaseStore, expected: object, keys: list[str]) -> None:
+    store.set_many(DOCUMENTS)
+    assert sorted(store.filter(v=expected)) == keys
+
+
+@pytest.mark.parametrize(("expected", "keys"), FILTERS)
+async def test_afilter_matches_equal_values(
+    store: BaseStore, expected: object, keys: list[str]
+) -> None:
+    await store.aset_many(DOCUMENTS)
+    assert sorted(await store.afilter(v=expected)) == keys
+
+
+def test_filter_returns_values_by_key(store: BaseStore) -> None:
+    store.set_many({"a": {"v": 1, "w": "x"}, "b": {"v": 2}, "c": {"v": 1}})
+    assert store.filter(v=1) == {"a": {"v": 1, "w": "x"}, "c": {"v": 1}}
+
+
+def test_filter_without_field_returns_every_pair(store: BaseStore) -> None:
+    store.set_many({str(i): {"v": i} for i in range(600)})
+    assert store.filter() == {str(i): {"v": i} for i in range(600)}
+
+
+def test_filter_empty_store(store: BaseStore) -> None:
+    assert store.filter(v=1) == {}
+
+
+# Integers of several magnitudes that a database can be asked for.
+NUMBERS = [
+    -(2**53 - 1),
+    -(10**15),
+    -123456789,
+    -1,
+    7,
+    2**31,
+    123456789012345,
+    10**15,
+    2**52 + 1,
+    2**53 - 1,
+]
+
+
+@pytest.mark.parametrize("number", NUMBERS)
+def test_filter_int_matches_int_and_float(store: BaseStore, number: int) -> None:
+    store.set_many(
+        {
+            "int": {"v": number},
+            "float": {"v": float(number)},
+            "str": {"v": str(number)},
+            "next": {"v": number - 1},
+        }
+    )
+    assert sorted(store.filter(v=number)) == ["float", "int"]
 
 
 @pytest.mark.parametrize(
-    ("expected_value", "keys"),
+    ("fields", "keys"),
     [
-        pytest.param(1, ["int"], id="int"),
-        pytest.param(1.0, ["int"], id="float_equal_to_int"),
-        pytest.param("1", ["str"], id="str"),
-        pytest.param(1.5, ["float"], id="float"),
-        pytest.param(None, ["absent", "none"], id="none"),
-        pytest.param([1, "1"], ["list"], id="list"),
-        pytest.param(2, [], id="no_match"),
+        pytest.param({"a": 1, "b": "x"}, ["both"], id="int_str"),
+        pytest.param({"a": 1, "b": None}, ["no_b"], id="int_none"),
+        pytest.param({"a": 1, "c d": True}, ["unsafe"], id="int_unsafe_name"),
+        pytest.param({"a": 1.0, "b": "x"}, ["both"], id="float_str"),
+        pytest.param({"a": "1", "b": "x"}, ["text"], id="str_str"),
     ],
 )
-def test_filter_matches_equal_values(
-    filter_store: BaseStore, expected_value: object, keys: list[str]
+def test_filter_combines_fields(store: BaseStore, fields: dict, keys: list[str]) -> None:
+    store.set_many(
+        {
+            "both": {"a": 1, "b": "x"},
+            "no_b": {"a": 1},
+            "unsafe": {"a": 1, "b": "y", "c d": True},
+            "text": {"a": "1", "b": "x"},
+            "other": {"a": True, "b": "x", "c d": 1},
+        }
+    )
+    assert sorted(store.filter(**fields)) == keys
+
+
+FIELD_NAMES = [
+    "x-y",
+    "a b",
+    "a.b",
+    "a'b",
+    'a"b',
+    "a\\b",
+    "a[0]",
+    "$",
+    "%s",
+    "?",
+    "*",
+    "/a",
+    "1",
+    "",
+    "a\n",
+    COMPOSED,
+    EMOJI,
+    "order",
+    "select",
+    "key",
+    "value",
+    "null",
+    "true",
+    "self",
+    "fields",
+    "field_filters",
+    "batch_size",
+    "_",
+    "__x__",
+    "A1_b",
+    "x" * 200,
+]
+
+
+@pytest.mark.parametrize("expected", [1, "x", None])
+@pytest.mark.parametrize("field", FIELD_NAMES)
+def test_filter_accepts_any_field_name(store: BaseStore, field: str, expected: object) -> None:
+    store.set_many({"match": {field: expected}, "other": {field: 2}})
+    assert store.filter(**{field: expected}) == {"match": {field: expected}}
+
+
+@pytest.mark.parametrize(("field", "other"), [("a", "A"), ("A", "a")])
+@pytest.mark.parametrize("expected", [1, "x"])
+def test_filter_field_names_are_case_sensitive(
+    store: BaseStore, field: str, other: str, expected: object
 ) -> None:
-    store = filter_store
-    store.set_many({key: {"key": key, **value} for key, value in DOCUMENTS.items()})
-    assert sorted(value["key"] for value in store.filter(v=expected_value)) == keys
+    store.set_many({"first": {other: 2, field: expected}, "second": {field: 2, other: expected}})
+    assert list(store.filter(**{field: expected})) == ["first"]
 
 
-@pytest.mark.parametrize("field", ["x-y", "a b", "a.b", "a'b", 'a"b', "1", "é", "order", "fields"])
-def test_filter_accepts_any_field_name(filter_store: BaseStore, field: str) -> None:
-    store = filter_store
-    store.set_many({"a": {field: 1}, "b": {field: 2}})
-    assert store.filter(**{field: 1}) == [{field: 1}]
+def test_filter_many_fields(store: BaseStore) -> None:
+    fields = {f"f{i}": i for i in range(1500)}
+    store.set_many({"match": fields, "other": {**fields, "f1499": 0}})
+    assert list(store.filter(**fields)) == ["match"]
+
+
+def test_filter_does_not_read_a_dotted_name_as_a_path(store: BaseStore) -> None:
+    store.set_many({"flat": {"a.b": 1}, "nested": {"a": {"b": 1}}})
+    assert list(store.filter(**{"a.b": 1})) == ["flat"]
+
+
+@pytest.mark.parametrize("expected", [1, "x"])
+def test_filter_deeply_nested_value(store: BaseStore, expected: object) -> None:
+    # Deeper than what the JSON functions of SQLite accept.
+    deep: list[Any] = []
+    for _ in range(1500):
+        deep = [deep]
+    store.set_many({"deep": {"v": expected, "deep": deep}, "flat": {"v": expected}})
+    assert sorted(store.filter(v=expected)) == ["deep", "flat"]
+
+
+def test_filter_str_with_nul(request: pytest.FixtureRequest, store: BaseStore) -> None:
+    params = request.node.callspec.params
+    if params["unopened_store"] == "postgres" and params["codec"] == "json":
+        pytest.skip("JSONB cannot keep a NUL character")
+    text = "a" + chr(0) + "b"
+    store.set_many({"nul": {"v": text}, "prefix": {"v": "a"}})
+    assert list(store.filter(v=text)) == ["nul"]
+
+
+@pytest.mark.parametrize(
+    ("expected", "key"),
+    [pytest.param(IntValue(1), "int", id="int"), pytest.param(StrValue("1"), "str", id="str")],
+)
+def test_filter_value_of_a_subclass(store: BaseStore, expected: object, key: str) -> None:
+    store.set_many({"int": {"v": 1}, "str": {"v": "1"}, "bool": {"v": True}})
+    assert list(store.filter(v=expected)) == [key]
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [
+        pytest.param({1, 2}, id="set"),
+        pytest.param(b"ab", id="bytes"),
+        pytest.param((1, [2]), id="tuple"),
+        pytest.param({1: "a", (2,): None}, id="non_str_keys"),
+        pytest.param(Decimal("1.5"), id="decimal"),
+        pytest.param(float("inf"), id="inf"),
+    ],
+)
+def test_filter_matches_values_that_only_pickle_keeps(
+    pickle_store: BaseStore, expected: object
+) -> None:
+    pickle_store.set_many({"match": {"v": expected}, "other": {"v": 2}})
+    assert list(pickle_store.filter(v=expected)) == ["match"]
+
+
+def test_filter_nan_matches_nothing_with_a_stored_nan(pickle_store: BaseStore) -> None:
+    pickle_store.set("a", {"v": float("nan")})
+    assert pickle_store.filter(v=float("nan")) == {}
 
 
 @pytest.mark.parametrize("fields", [{}, {"v": 1}])
@@ -745,6 +1021,23 @@ def test_uri_reconnects_to_the_data(backend: str, codec: Codec, tmp_path: Path) 
         store.set("a", {"v": 1})
     with store.from_uri(store.to_uri(), **uri_options(store)) as restored:
         assert restored.get("a") == {"v": 1}
+
+
+@pytest.mark.parametrize("backend", backend_params(["file", "sqlite", "duckdb", "lmdb"]))
+def test_store_from_uri_reads_the_data_of_a_local_store(
+    backend: str, codec: Codec, tmp_path: Path
+) -> None:
+    with BACKENDS[backend](codec, tmp_path) as store:
+        store.set("a", {"v": 1})
+    with store_from_uri(store.to_uri()) as restored:
+        assert restored.get("a") == {"v": 1}
+
+
+@pytest.mark.parametrize("backend", backend_params([*BACKENDS]))
+def test_from_uri_accepts_the_codec(backend: str, codec: Codec, tmp_path: Path) -> None:
+    store = BACKENDS[backend](codec, tmp_path)
+    restored = store.from_uri(store.to_uri(), codec=codec)
+    assert restored._codec is codec
 
 
 @pytest.mark.parametrize("backend", backend_params(PERSISTENT))
@@ -880,6 +1173,13 @@ def test_invalid_on_conflict_with_empty_input_raises(
 ) -> None:
     with any_store, pytest.raises(ValueError, match=r"Invalid on_conflict value"):
         operation(any_store)
+
+
+def test_repr_does_not_show_the_number_of_values(any_store: BaseStore) -> None:
+    with any_store as store:
+        before = repr(store)
+        store.set("a", {})
+        assert repr(store) == before
 
 
 def test_constructor_does_not_open(any_store: BaseStore) -> None:

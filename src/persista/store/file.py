@@ -179,7 +179,8 @@ class FileStore(BaseStore, MultilineDisplayMixin):
     ) -> Self:
         r"""Reconstruct a store from a URI produced by :meth:`to_uri`.
 
-        The scheme of the URI gives the codec.
+        The scheme of the URI gives the codec. The path is absolute, so
+        the URI is only valid on a machine with the same files.
 
         Args:
             uri: A URI produced by :meth:`to_uri`.
@@ -354,8 +355,6 @@ class FileStore(BaseStore, MultilineDisplayMixin):
         kwargs: dict[str, Any] = {"path": str(self._path), "closed": self.closed}
         if self._codec.name != "json":
             kwargs["codec"] = self._codec
-        if not self.closed:
-            kwargs["count"] = f"{self.count():,}"
         return kwargs
 
 

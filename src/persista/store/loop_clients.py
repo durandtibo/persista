@@ -3,9 +3,9 @@ per event loop.
 
 An async client belongs to the event loop that created it: its
 connections cannot be used, or closed, from another loop. A
-:class:`LoopClients` therefore keeps one client per event loop, closes it
-with its loop, and tells whether a client is still open, which forbids
-closing the store synchronously.
+:class:`LoopClients` therefore keeps one client per event loop, closes
+it with its loop, and tells whether a client is still open, which
+forbids closing the store synchronously.
 """
 
 from __future__ import annotations
@@ -21,15 +21,14 @@ if TYPE_CHECKING:
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+ClientT = TypeVar("ClientT", bound="SupportsAclose")
+
 
 class SupportsAclose(Protocol):
     r"""Define the interface of an async client."""
 
     async def aclose(self) -> Any:
         r"""Close the client."""
-
-
-ClientT = TypeVar("ClientT", bound=SupportsAclose)
 
 
 class LoopClient(Generic[ClientT]):

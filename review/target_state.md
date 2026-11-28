@@ -485,7 +485,7 @@ the later steps change less code.
 | 6    | **`FileStore` and LMDB on the template.**                                                                                                                                  | S10                        | yes (file names)    | #374 |
 | 7    | **Redis on the template**, with the namespace.                                                                                                                             | S6, S14, S15               | yes (key layout)    | #375 |
 | 8    | **PostgreSQL on the template**, with real-server concurrency tests. Delete the old base paths.                                                                             | S2, S4, S17, S20           | yes                 | #376 |
-| 9    | **One filter**: the predicate, the safe push-down, the keyed result; lazy driver imports; cheap `repr`; the URI limitations.                                               | S1, S2, S15, S16, S19, S21 | yes                 |      |
+| 9    | **One filter**: the predicate, the safe push-down, the keyed result; lazy driver imports; cheap `repr`; the URI limitations.                                               | S1, S2, S15, S16, S19, S21 | yes                 | #377 |
 | 10   | **Canonical encoding and the cache API.**                                                                                                                                  | C3-C7                      | yes                 |      |
 | 11   | **Records and analyses** on the canonical encoding.                                                                                                                        | R1-R6                      | yes                 |      |
 | 12   | **HTTP**: two `httpx` classes and one retry policy; delete the module functions; apply the retry properties to `requests`.                                                 | H4-H7                      | yes                 |      |
@@ -527,14 +527,14 @@ The conventions of `CLAUDE.md` apply. Each finding gets a regression test that f
 | --- | ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
 | D1  | Keep the typed stores?                | decided | **No.** Remove them and document the expression index (section 9.2).                                           |
 | D2  | Keep native async SQLite?             | decided | **No.** Each store that is not thread-safe gets its own worker thread (section 9.3).                           |
-| D3  | Keep the factory classes?             | open    | Recommended: **no**, `resolve_object({"_target_": ...})` builds any object. Check the dependent projects.      |
+| D3  | Keep the factory classes?             | open    | Recommended: **no**, `resolve_object({"_target_": ...})` builds any object. Check dependents. Applied in #370. |
 | D4  | Keep the store URIs?                  | decided | **Yes**, with their limitations stated (section 4.4).                                                          |
 | D5  | JSON values that change or lose data? | decided | **Normalise tuples and subclasses, reject non-`str` keys, NaN and infinity** (section 9.4).                    |
 | D6  | File names of `FileStore`?            | decided | **Escape upper case** (section 9.5).                                                                           |
 | D7  | A key limit shared by all backends?   | decided | **No.** The limit of one backend does not restrict the others; interchangeability in every case is not a goal. |
 | D8  | Keep `requests` support?              | decided | **Yes** (section 4.8).                                                                                         |
 | D9  | Keep `record.analysis` in `persista`? | open    | Recommended: **yes**, it is small, pure and depends only on `Record`.                                          |
-| D10 | Keep the SQL filter push-down?        | open    | Recommended: **yes**, as a pre-filter (rule 4 of section 4.1): large tables stay fast, results stay right.     |
+| D10 | Keep the SQL filter push-down?        | open    | Recommended: **yes**, as a pre-filter (rule 4 of section 4.1). Applied in #377: PostgreSQL integers use `@>`.  |
 | D11 | Retry `POST` and `PATCH`?             | open    | Recommended: **not by default** (H5); the caller adds them to `retry_methods`.                                 |
 
 The measurements below are medians of one run on an Apple M1 **[verified]**. They compare options;

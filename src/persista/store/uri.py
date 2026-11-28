@@ -8,7 +8,13 @@ its scheme.
 
 from __future__ import annotations
 
-__all__ = ["codec_uri_scheme", "decode_codec_uri", "decode_path_uri", "encode_path_uri"]
+__all__ = [
+    "codec_uri_scheme",
+    "decode_codec_uri",
+    "decode_path_uri",
+    "encode_path_uri",
+    "split_uri",
+]
 
 from typing import TYPE_CHECKING
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
@@ -17,8 +23,44 @@ from persista.store.codec import JsonCodec, PickleCodec
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from urllib.parse import SplitResult
 
     from persista.store.codec import Codec
+
+
+def split_uri(uri: str) -> SplitResult:
+    """Split a URI into its components, with an error that does not
+    quote it.
+
+    The errors of :func:`urllib.parse.urlsplit` can quote the location of
+    a URI, which can contain a password.
+
+    Args:
+        uri: The URI to split.
+
+    Returns:
+        The components of the URI.
+
+    Raises:
+        ValueError: If the URI cannot be parsed.
+
+    Example:
+        ```pycon
+        >>> from persista.store.uri import split_uri
+        >>> split_uri("sqlite:/tmp/data.db").scheme
+        'sqlite'
+
+        ```
+    """
+    try:
+        return urlsplit(uri)
+    except ValueError:
+        msg = (
+            "Invalid URI: it cannot be parsed. Percent-encode the special characters of the "
+            "username and of the password"
+        )
+        # The original error is hidden because it can quote the password.
+        raise ValueError(msg) from None
 
 
 def encode_path_uri(scheme: str, path: str) -> str:
@@ -54,8 +96,9 @@ def decode_path_uri(uri: str, *, expected_scheme: str) -> str:
         The decoded path/identifier.
 
     Raises:
-        ValueError: If ``uri``'s scheme does not match
-            ``expected_scheme``.
+        ValueError: If ``uri`` cannot be parsed, or if its scheme does
+            not match ``expected_scheme``. The message does not quote
+            ``uri``, which can contain a password.
 
     Example:
         ```pycon
@@ -65,9 +108,9 @@ def decode_path_uri(uri: str, *, expected_scheme: str) -> str:
 
         ```
     """
-    parsed = urlsplit(uri)
+    parsed = split_uri(uri)
     if parsed.scheme != expected_scheme:
-        msg = f"Invalid scheme for {uri!r}: expected {expected_scheme!r}, got {parsed.scheme!r}"
+        msg = f"Invalid scheme of the URI: expected {expected_scheme!r}, got {parsed.scheme!r}"
         raise ValueError(msg)
     return unquote(parsed.netloc + parsed.path)
 
@@ -120,8 +163,10 @@ def decode_codec_uri(
         The path/identifier and the codec.
 
     Raises:
-        ValueError: If the scheme of ``uri`` is not in ``schemes``, or
-            if the name of ``codec`` does not match the scheme.
+        ValueError: If ``uri`` cannot be parsed, if its scheme is not in
+            ``schemes``, or if the name of ``codec`` does not match the
+            scheme. The message does not quote ``uri``, which can contain
+            a password.
 
     Example:
         ```pycon
@@ -133,10 +178,10 @@ def decode_codec_uri(
 
         ```
     """
-    scheme = urlsplit(uri).scheme
+    scheme = split_uri(uri).scheme
     names = {value: name for name, value in schemes.items()}
     if scheme not in names:
-        msg = f"Invalid scheme for {uri!r}: expected one of {sorted(names)}, got {scheme!r}"
+        msg = f"Invalid scheme of the URI: expected one of {sorted(names)}, got {scheme!r}"
         raise ValueError(msg)
     location = decode_path_uri(uri, expected_scheme=scheme)
     default: Codec = PickleCodec() if names[scheme] == "pickle" else JsonCodec()
@@ -144,7 +189,7 @@ def decode_codec_uri(
         return location, default
     if codec.name != default.name:
         msg = (
-            f"The codec {codec.name!r} does not match the scheme of {uri!r}, "
+            f"The codec {codec.name!r} does not match the scheme {scheme!r} of the URI, "
             f"which is for the codec {default.name!r}"
         )
         raise ValueError(msg)

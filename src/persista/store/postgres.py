@@ -11,14 +11,16 @@ import logging
 import re
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import quote, urlencode
 
 from coola.display import MultilineDisplayMixin
+from coola.utils.imports import lazy_import
 
+from persista.store.base import BaseStore
 from persista.store.loop_clients import LoopClients
-from persista.store.sql import SQLFilterStore, build_where, check_sql_codec, check_table_layout
+from persista.store.sql import build_where, can_push_down, check_sql_codec, check_table_layout
 from persista.store.validation import check_is_open, validate_field_name, validate_table_name
-from persista.utils.imports import check_psycopg, is_psycopg_available
+from persista.utils.imports import check_psycopg
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -39,10 +41,15 @@ if TYPE_CHECKING:
     # The named parameters of a query.
     _Params = dict[str, Any]
 
-if TYPE_CHECKING or is_psycopg_available():  # pragma: no cover
+if TYPE_CHECKING:
     import psycopg
+    import psycopg.conninfo
     from psycopg import sql
-    from psycopg.conninfo import conninfo_to_dict
+else:
+    # Imported when the first store is opened, or when the repr or the URI
+    # of a store needs the library to read the connection string.
+    psycopg = lazy_import("psycopg")
+    sql = lazy_import("psycopg.sql")
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -117,16 +124,18 @@ _JSON_NUL = re.compile(r"(?<!\\)(?:\\\\)*" + re.escape(_NUL_ESCAPE))
 _JSON_STRING_OR_LARGE_NUMBER = re.compile(r'("[^"\\]*(?:\\.[^"\\]*)*")|(-?\d+(?:\.\d+)?e\+\d+)')
 
 
-class PostgresStore(SQLFilterStore, MultilineDisplayMixin):
+class PostgresStore(BaseStore, MultilineDisplayMixin):
     r"""A PostgreSQL-backed key-value store.
 
     The values are kept in a table with two columns: ``key``, a ``TEXT``
     primary key, and ``value``, whose type depends on the codec. With the
     default :class:`~persista.store.JsonCodec`, the column is ``JSONB``,
-    which any PostgreSQL client can query, and :meth:`filter` is applied
-    by the database. With a :class:`~persista.store.PickleCodec`, it is
-    ``BYTEA``: the values keep their Python types, and :meth:`filter`
-    reads every value.
+    which any PostgreSQL client can query, and :meth:`filter` uses it to
+    read only the values that may match a condition on a string or an
+    integer (see :func:`~persista.store.sql.select_push_down_fields`).
+    With a :class:`~persista.store.PickleCodec`, it is ``BYTEA``: the
+    values keep their Python types, and :meth:`filter` reads every
+    value.
 
     Opening the store creates the table if it does not exist, in the first
     schema of the search path. It raises ``ValueError`` if an existing table
@@ -256,65 +265,6 @@ class PostgresStore(SQLFilterStore, MultilineDisplayMixin):
             abandon=_AsyncConnection.abandon,
         )
 
-        # JSONB is read as text, which the codec decodes.
-        value: LiteralString = "value::text" if self._value_type == "JSONB" else "value"
-        # The type of the array of the values of a write.
-        array: LiteralString = "text[]" if self._value_type == "JSONB" else "bytea[]"
-        value_type: LiteralString = "jsonb" if self._value_type == "JSONB" else "bytea"
-        parts: dict[str, sql.Composable] = {
-            "value": sql.SQL(value),
-            "value_type": sql.SQL(value_type),
-        }
-        query = functools.partial(self._query, **parts)
-        select: LiteralString = "SELECT key, {value} FROM {table}"
-        self._create_table = query(
-            "CREATE TABLE IF NOT EXISTS {table} (key TEXT PRIMARY KEY, value {value_type} NOT NULL)"
-        )
-        self._select = query(select)
-        self._select_one = query(select + " WHERE key = %s")
-        self._select_many = query(select + " WHERE key = ANY(%s)")
-        self._select_first_batch = query(select + " ORDER BY key LIMIT %s")
-        self._select_next_batch = query(select + " WHERE key > %s ORDER BY key LIMIT %s")
-        self._select_keys = query("SELECT key FROM {table} WHERE key = ANY(%s)")
-        self._select_first_keys = query("SELECT key FROM {table} ORDER BY key LIMIT %s")
-        self._select_next_keys = query(
-            "SELECT key FROM {table} WHERE key > %s ORDER BY key LIMIT %s"
-        )
-        # The lock of the table that PostgreSQL takes for a write.
-        self._lock_relation = query("LOCK TABLE {table} IN ROW EXCLUSIVE MODE")
-        self._delete = query("DELETE FROM {table} WHERE key = ANY(%s)")
-        self._delete_all = query("DELETE FROM {table}")
-        self._select_count = query("SELECT COUNT(*) FROM {table}")
-
-        # The statements that take the locks of a write, and the statements
-        # that add or replace pairs once they hold these locks, for each
-        # kind of lock.
-        rows: LiteralString = (
-            "SELECT rows.key, rows.value::{value_type} FROM {locks}, "
-            "unnest(%(keys)b::text[], %(values)b::{array}) AS rows (key, value)"
-        )
-        sources: dict[str, LiteralString] = {
-            "key": "SELECT %(key)s::text, %(value)s::{value_type} FROM {locks}",
-            "keys": rows,
-            "table": rows,
-        }
-        self._lock_queries = {
-            kind: query("SELECT 1 FROM {locks}", locks=sql.SQL(locks))
-            for kind, locks in _LOCKS.items()
-        }
-        self._upsert_queries = {
-            kind: query(
-                "INSERT INTO {table} (key, value) {source} "
-                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                source=sql.SQL(source).format(
-                    locks=sql.SQL(_LOCKS[kind]),
-                    value_type=sql.SQL(value_type),
-                    array=sql.SQL(array),
-                ),
-            )
-            for kind, source in sources.items()
-        }
-
     @property
     def connection(self) -> psycopg.Connection:
         r"""Return the underlying sync psycopg connection.
@@ -341,9 +291,16 @@ class PostgresStore(SQLFilterStore, MultilineDisplayMixin):
 
         Returns:
             The URI.
+
+        Raises:
+            ValueError: If a keyword/value connection string cannot be
+                read. The message does not quote it.
         """
-        if urlsplit(self._conninfo).scheme in _URL_SCHEMES:
+        scheme, separator, _ = self._conninfo.partition("://")
+        if separator and scheme.lower() in _URL_SCHEMES:
             return self._conninfo
+        # The errors of the client library can quote the password.
+        _check_conninfo(self._conninfo)
         return _conninfo_to_uri(self._conninfo)
 
     @classmethod
@@ -351,7 +308,9 @@ class PostgresStore(SQLFilterStore, MultilineDisplayMixin):
         r"""Reconstruct a store from a URI produced by :meth:`to_uri`.
 
         The URI does not describe the table, the codec or the other
-        arguments of the constructor: pass them again.
+        arguments of the constructor: pass them again, otherwise the new
+        store uses the table ``store`` and the
+        :class:`~persista.store.JsonCodec`.
 
         Args:
             uri: A PostgreSQL connection URI.
@@ -370,7 +329,9 @@ class PostgresStore(SQLFilterStore, MultilineDisplayMixin):
     ######################
 
     def _open(self) -> None:
+        check_psycopg()
         _check_conninfo(self._conninfo)
+        self._build_queries()
         self._conn = psycopg.connect(self._conninfo, autocommit=True, **self._kwargs)
         # Each statement must see the writes committed before the locks of
         # its transaction were taken.
@@ -439,9 +400,9 @@ class PostgresStore(SQLFilterStore, MultilineDisplayMixin):
             rows = self._fetch(self._select_next_keys, (rows[-1][0], batch_size))
 
     def _filter_candidates(self, fields: Mapping[str, Any]) -> Iterator[dict[str, Payload]]:
-        if not self._filters_in_sql():
+        if not can_push_down(self._codec):
             return super()._filter_candidates(fields)
-        return self._select_matches(fields)
+        return self._select_candidates(fields)
 
     ############################
     #     Async primitives     #
@@ -501,9 +462,9 @@ class PostgresStore(SQLFilterStore, MultilineDisplayMixin):
             rows = await self._afetch(self._select_next_keys, (rows[-1][0], batch_size))
 
     def _afilter_candidates(self, fields: Mapping[str, Any]) -> AsyncGenerator[dict[str, Payload]]:
-        if not self._filters_in_sql():
+        if not can_push_down(self._codec):
             return self._aiter_batches(_SCAN_BATCH_SIZE)
-        return self._aselect_matches(fields)
+        return self._aselect_candidates(fields)
 
     async def _aclose(self) -> None:
         await self._aclients.aclose()
@@ -528,6 +489,68 @@ class PostgresStore(SQLFilterStore, MultilineDisplayMixin):
             The query, with the quoted name of the table.
         """
         return sql.SQL(template).format(table=sql.Identifier(self._table), **parts)
+
+    def _build_queries(self) -> None:
+        r"""Build the queries of the table of the store, with the
+        ``sql`` module of psycopg."""
+        # JSONB is read as text, which the codec decodes.
+        value: LiteralString = "value::text" if self._value_type == "JSONB" else "value"
+        # The type of the array of the values of a write.
+        array: LiteralString = "text[]" if self._value_type == "JSONB" else "bytea[]"
+        value_type: LiteralString = "jsonb" if self._value_type == "JSONB" else "bytea"
+        parts: dict[str, sql.Composable] = {
+            "value": sql.SQL(value),
+            "value_type": sql.SQL(value_type),
+        }
+        query = functools.partial(self._query, **parts)
+        select: LiteralString = "SELECT key, {value} FROM {table}"
+        self._create_table = query(
+            "CREATE TABLE IF NOT EXISTS {table} (key TEXT PRIMARY KEY, value {value_type} NOT NULL)"
+        )
+        self._select = query(select)
+        self._select_one = query(select + " WHERE key = %s")
+        self._select_many = query(select + " WHERE key = ANY(%s)")
+        self._select_first_batch = query(select + " ORDER BY key LIMIT %s")
+        self._select_next_batch = query(select + " WHERE key > %s ORDER BY key LIMIT %s")
+        self._select_keys = query("SELECT key FROM {table} WHERE key = ANY(%s)")
+        self._select_first_keys = query("SELECT key FROM {table} ORDER BY key LIMIT %s")
+        self._select_next_keys = query(
+            "SELECT key FROM {table} WHERE key > %s ORDER BY key LIMIT %s"
+        )
+        # The lock of the table that PostgreSQL takes for a write.
+        self._lock_relation = query("LOCK TABLE {table} IN ROW EXCLUSIVE MODE")
+        self._delete = query("DELETE FROM {table} WHERE key = ANY(%s)")
+        self._delete_all = query("DELETE FROM {table}")
+        self._select_count = query("SELECT COUNT(*) FROM {table}")
+
+        # The statements that take the locks of a write, and the statements
+        # that add or replace pairs once they hold these locks, for each
+        # kind of lock.
+        rows: LiteralString = (
+            "SELECT rows.key, rows.value::{value_type} FROM {locks}, "
+            "unnest(%(keys)b::text[], %(values)b::{array}) AS rows (key, value)"
+        )
+        sources: dict[str, LiteralString] = {
+            "key": "SELECT %(key)s::text, %(value)s::{value_type} FROM {locks}",
+            "keys": rows,
+            "table": rows,
+        }
+        self._lock_queries = {
+            kind: query("SELECT 1 FROM {locks}", locks=sql.SQL(locks))
+            for kind, locks in _LOCKS.items()
+        }
+        self._upsert_queries = {
+            kind: query(
+                "INSERT INTO {table} (key, value) {source} "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                source=sql.SQL(source).format(
+                    locks=sql.SQL(_LOCKS[kind]),
+                    value_type=sql.SQL(value_type),
+                    array=sql.SQL(array),
+                ),
+            )
+            for kind, source in sources.items()
+        }
 
     def _init_schema(self) -> None:
         r"""Create the table of the store if needed, and check that it
@@ -779,73 +802,80 @@ class PostgresStore(SQLFilterStore, MultilineDisplayMixin):
             raise
         return connection
 
-    def _filter_expr(self, field: str) -> str:
-        r"""Build the SQL expression that reads a field of a JSON value
-        as text.
+    def _filter_condition(self, field: str, value: str | int) -> tuple[str, list[Any]]:
+        r"""Build the SQL condition that selects the rows whose JSON
+        value may have a field equal to a value.
+
+        A string is compared with the text of the field, which uses a
+        B-tree index on ``(value->>'field')``. An integer is searched with
+        the containment operator, which compares the ``JSONB`` numbers by
+        their value, however they are written (``1`` or ``1.0``), and uses
+        a GIN index on ``value``. It does not select a number that another
+        program wrote with more digits than a float keeps (such as
+        ``0.99999999999999999999``): ``PostgresStore`` writes none.
 
         Args:
             field: The name of the field.
+            value: The value, as selected by
+                :func:`~persista.store.sql.select_push_down_fields`.
 
         Returns:
-            The expression, which is ``NULL`` for a null or absent field.
+            A condition that is true for every row whose field is equal to
+            ``value``, and the values of its parameters.
 
         Raises:
             ValueError: If ``field`` cannot be safely interpolated into SQL.
         """
         validate_field_name(field)
-        return f"value->>'{field}'"
+        # The expressions of the documented indexes: they must not change.
+        if isinstance(value, int):
+            return "value @> %s::jsonb", [f'{{"{field}": {value}}}']
+        return f"value->>'{field}' = %s::text", [value]
 
     def _filter_statement(self, fields: Mapping[str, Any]) -> tuple[sql.Composed, list[Any] | None]:
-        r"""Build the query that selects the pairs that match a filter.
-
-        The values are compared as text, and ``None`` matches a null or
-        absent field.
+        r"""Build the query that selects the pairs that may match a
+        filter.
 
         Args:
             fields: The value that each field must be equal to.
 
         Returns:
             The query and its parameters.
-
-        Raises:
-            ValueError: If a field name cannot be used in SQL.
         """
-        where, params = build_where(fields, self._filter_expr, placeholder="%s::text")
+        where, params = build_where(fields, self._filter_condition)
         if not where:
             return self._select, None
         # The field names are validated, and the values are parameters.
         condition = sql.SQL(cast("LiteralString", where))
         return sql.SQL(" WHERE ").join([self._select, condition]), params
 
-    def _select_matches(self, fields: Mapping[str, Any]) -> Iterator[dict[str, Payload]]:
-        r"""Select with one query the pairs that match a filter.
+    def _select_candidates(self, fields: Mapping[str, Any]) -> Iterator[dict[str, Payload]]:
+        r"""Select with one query the pairs that may match a filter.
 
         Args:
             fields: The value that each field must be equal to.
 
         Yields:
-            The matching pairs, in one batch, if there are any.
-
-        Raises:
-            ValueError: If a field name cannot be used in SQL.
+            A superset of the matching pairs, in one batch, if it is not
+            empty.
         """
         if rows := self._fetch(*self._filter_statement(fields)):
             yield dict(rows)
 
-    async def _aselect_matches(
+    async def _aselect_candidates(
         self, fields: Mapping[str, Any]
     ) -> AsyncGenerator[dict[str, Payload]]:
-        r"""Async equivalent of :meth:`_select_matches`.
+        r"""Async equivalent of :meth:`_select_candidates`.
 
         Args:
             fields: The value that each field must be equal to.
 
         Yields:
-            The matching pairs, in one batch, if there are any.
+            A superset of the matching pairs, in one batch, if it is not
+            empty.
 
         Raises:
             RuntimeError: If the store is closed during the iteration.
-            ValueError: If a field name cannot be used in SQL.
         """
         if rows := await self._afetch(*self._filter_statement(fields)):
             yield dict(rows)
@@ -1022,7 +1052,7 @@ def _parse_location(conninfo: str, kwargs: Mapping[str, Any]) -> tuple[str, str,
         credentials that are not percent-encoded.
     """
     try:
-        params: dict[str, Any] = dict(conninfo_to_dict(conninfo))
+        params: dict[str, Any] = dict(psycopg.conninfo.conninfo_to_dict(conninfo))
     except psycopg.ProgrammingError:
         return None
     names = ("host", "port", "dbname")
@@ -1110,7 +1140,9 @@ def _conninfo_to_uri(conninfo: str) -> str:
 
         ```
     """
-    params = {name: str(value) for name, value in conninfo_to_dict(conninfo).items()}
+    params = {
+        name: str(value) for name, value in psycopg.conninfo.conninfo_to_dict(conninfo).items()
+    }
     user = params.pop("user", None)
     password = params.pop("password", None)
     host = params.pop("host", "")

@@ -337,7 +337,7 @@ def test_filter_no_args_returns_all(store: BaseStore, items: dict[str, dict[str,
 def test_filter_single_field(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     result = store.filter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
+    assert all(r["author"] == "Alice" for r in result.values())
     assert len(result) == 2
 
 
@@ -348,18 +348,18 @@ def test_filter_multiple_fields(store: BaseStore, items: dict[str, dict[str, Any
 
 def test_filter_no_match_returns_empty(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
-    assert store.filter(author="Charlie") == []
+    assert store.filter(author="Charlie") == {}
 
 
 def test_filter_integer_field_value(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     store.set_many(items)
     result = store.filter(year=2022)
     assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
+    assert next(iter(result.values()))["title"] == "Intro to Python"
 
 
 def test_filter_empty_store_returns_empty(store: BaseStore) -> None:
-    assert store.filter(author="Alice") == []
+    assert store.filter(author="Alice") == {}
 
 
 # --- delete / delete_many ---
@@ -567,7 +567,7 @@ def test_context_manager_usable_for_reads_and_writes(store: BaseStore) -> None:
         }
     )
     assert store.count() == 2
-    assert store.filter(author="Alice")[0]["text"] == "hello"
+    assert store.filter(author="Alice")["1"]["text"] == "hello"
     store.delete("1")
     assert store.count() == 1
 
@@ -612,7 +612,7 @@ def test_cross_store_outputs_are_identical(items: dict[str, dict[str, Any]]) -> 
                 "get_missing": store.get("nonexistent"),
                 "get_many": store.get_many(["3", "1", "99"]),
                 "filter_alice": sorted(
-                    (v["title"] for v in store.filter(author="Alice")),
+                    (v["title"] for v in store.filter(author="Alice").values()),
                 ),
                 "filter_none": store.filter(author="Charlie"),
                 "contains_many": store.contains_many(["1", "99", "3"]),
@@ -779,7 +779,7 @@ async def test_afilter_no_args_returns_all(
 async def test_afilter_single_field(store: BaseStore, items: dict[str, dict[str, Any]]) -> None:
     await store.aset_many(items)
     result = await store.afilter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
+    assert all(r["author"] == "Alice" for r in result.values())
     assert len(result) == 2
 
 
@@ -792,7 +792,7 @@ async def test_afilter_no_match_returns_empty(
     store: BaseStore, items: dict[str, dict[str, Any]]
 ) -> None:
     await store.aset_many(items)
-    assert await store.afilter(author="Charlie") == []
+    assert await store.afilter(author="Charlie") == {}
 
 
 async def test_afilter_integer_field_value(
@@ -801,11 +801,11 @@ async def test_afilter_integer_field_value(
     await store.aset_many(items)
     result = await store.afilter(year=2022)
     assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
+    assert next(iter(result.values()))["title"] == "Intro to Python"
 
 
 async def test_afilter_empty_store_returns_empty(store: BaseStore) -> None:
-    assert await store.afilter(author="Alice") == []
+    assert await store.afilter(author="Alice") == {}
 
 
 # --- adelete / adelete_many ---
@@ -979,7 +979,7 @@ async def test_async_context_manager_usable_for_reads_and_writes(store: BaseStor
     )
     assert await store.acount() == 2
     result = await store.afilter(author="Alice")
-    assert result[0]["text"] == "hello"
+    assert result["1"]["text"] == "hello"
     await store.adelete("1")
     assert await store.acount() == 1
 
@@ -1020,7 +1020,7 @@ async def test_cross_store_outputs_are_identical_async(items: dict[str, dict[str
                 "get_missing": await store.aget("nonexistent"),
                 "get_many": await store.aget_many(["3", "1", "99"]),
                 "filter_alice": sorted(
-                    (v["title"] for v in await store.afilter(author="Alice")),
+                    (v["title"] for v in (await store.afilter(author="Alice")).values()),
                 ),
                 "filter_none": await store.afilter(author="Charlie"),
                 "contains_many": await store.acontains_many(["1", "99", "3"]),
@@ -1089,7 +1089,7 @@ def test_filter_on_reserved_looking_field_name(
     store: BaseStore, awkward_value: dict[str, Any], field: str
 ) -> None:
     store.set("1", awkward_value)
-    assert store.filter(**{field: awkward_value[field]}) == [awkward_value]
+    assert store.filter(**{field: awkward_value[field]}) == {"1": awkward_value}
 
 
 ######################################################
@@ -1115,12 +1115,8 @@ def test_record_store_filter_matches_store_filter(
     record_store: RecordStore, records: list[Record], field_filters: dict[str, Any]
 ) -> None:
     record_store.set_many(records)
-    result = sorted(
-        (dict(record.metadata) for record in record_store.filter(**field_filters)),
-        key=lambda value: value["title"],
-    )
-    expected = sorted(record_store.store.filter(**field_filters), key=lambda value: value["title"])
-    assert result == expected
+    result = {record.id: dict(record.metadata) for record in record_store.filter(**field_filters)}
+    assert result == record_store.store.filter(**field_filters)
 
 
 def test_record_store_filter_returns_record_ids(

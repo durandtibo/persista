@@ -389,30 +389,21 @@ def test_write_of_any_size(conninfo: str, table: str, codec: Codec, size: int) -
 # --- filter ---
 
 
-@pytest.mark.parametrize(
-    "read",
-    [
-        pytest.param(lambda s: s.filter(v=None), id="filter"),
-        pytest.param(lambda s: list(s.filter_items(v=None).values()), id="filter_items"),
-    ],
-)
-def test_filter_none_matches_null_and_absent_fields(
-    store: PostgresStore, read: Callable[[PostgresStore], list]
-) -> None:
+def test_filter_none_matches_null_and_absent_fields(store: PostgresStore) -> None:
     r"""Regression test: the filter matched nothing."""
     store.set_many({"1": {"id": 1, "v": None}, "2": {"id": 2}, "3": {"id": 3, "v": "x"}})
-    assert sorted(value["id"] for value in read(store)) == [1, 2]
+    assert sorted(store.filter(v=None)) == ["1", "2"]
 
 
 async def test_afilter_none_matches_null_and_absent_fields(store: PostgresStore) -> None:
     await store.aset_many({"1": {"id": 1, "v": None}, "2": {"id": 2}, "3": {"id": 3, "v": 0}})
-    assert sorted(value["id"] for value in await store.afilter(v=None)) == [1, 2]
+    assert sorted(await store.afilter(v=None)) == ["1", "2"]
     await store.aclose()
 
 
 def test_filter_none_and_value(store: PostgresStore) -> None:
     store.set_many({"1": {"a": 1}, "2": {"a": 1, "b": 2}, "3": {"a": 2}})
-    assert store.filter(a=1, b=None) == [{"a": 1}]
+    assert store.filter(a=1, b=None) == {"1": {"a": 1}}
 
 
 def test_record_store_filter_none(store: PostgresStore) -> None:
@@ -422,20 +413,75 @@ def test_record_store_filter_none(store: PostgresStore) -> None:
     assert [record.id for record in records.filter(v=None)] == ["1"]
 
 
+@pytest.mark.parametrize("field", ["bad; DROP TABLE store;--", "a' OR '1'='1", "a%s"])
+@pytest.mark.parametrize("value", ["x", 1, None])
+def test_filter_field_name_is_not_run_as_sql(
+    store: PostgresStore, field: str, value: object
+) -> None:
+    r"""Test that a field name that is not an identifier is not placed
+    in the SQL."""
+    store.set_many({"1": {field: value}, "2": {field: "y"}})
+    assert list(store.filter(**{field: value})) == ["1"]
+
+
+def write_json(store: PostgresStore, key: str, document: str) -> None:
+    r"""Write a JSON document as another program would, with the text of
+    its numbers."""
+    store.connection.execute(
+        sql.SQL("INSERT INTO {} (key, value) VALUES (%s, %s::jsonb)").format(
+            sql.Identifier(store._table)
+        ),
+        (key, document),
+    )
+
+
+@pytest.mark.parametrize("number", ["7", "7.0", "7.00", "7.000000000000000000000000", "0.7e1"])
+def test_filter_int_matches_every_representation_of_a_number(
+    store: PostgresStore, number: str
+) -> None:
+    r"""Test that the query of an int filter selects the numbers that
+    Python reads as this int."""
+    write_json(store, "1", f'{{"v": {number}}}')
+    write_json(store, "2", '{"v": 7.5}')
+    write_json(store, "3", '{"v": "7"}')
+    assert list(store.filter(v=7)) == ["1"]
+
+
+def test_filter_int_excludes_a_number_with_more_digits_than_a_float(
+    store: PostgresStore,
+) -> None:
+    r"""Test the documented limitation of the int filters: Python reads
+    this number, which another program wrote, as 7.0."""
+    write_json(store, "1", '{"v": 6.99999999999999999999}')
+    assert (store.get("1"), store.filter(v=7)) == ({"v": 7.0}, {})
+
+
+@pytest.mark.parametrize("value", [2**53 - 1, -(2**53 - 1)])
+def test_filter_largest_pushed_down_int(store: PostgresStore, value: int) -> None:
+    store.set_many({"int": {"v": value}, "float": {"v": float(value)}, "next": {"v": value - 1}})
+    assert sorted(store.filter(v=value)) == ["float", "int"]
+
+
 @pytest.mark.parametrize(
-    "read",
+    ("index", "fields"),
     [
-        pytest.param(lambda s: s.filter(**{"bad; DROP TABLE store;--": "x"}), id="filter"),
-        pytest.param(lambda s: s.filter_items(**{"a' OR '1'='1": None}), id="filter_items_none"),
+        pytest.param("((value->>'author'))", {"author": "author-1"}, id="str"),
+        pytest.param("USING gin (value jsonb_path_ops)", {"year": 1}, id="int"),
     ],
 )
-def test_filter_rejects_malicious_field_name(
-    store: PostgresStore, read: Callable[[PostgresStore], Any]
+def test_filter_uses_expression_index(
+    store: PostgresStore, index: str, fields: dict[str, Any]
 ) -> None:
-    r"""A field name is interpolated into the SQL (only the value is
-    bound), so anything but a plain identifier must be rejected."""
-    with pytest.raises(ValueError, match=r"Invalid filter field name"):
-        read(store)
+    r"""Test that PostgreSQL uses the documented indexes for the query
+    of a filter."""
+    store.set_many({str(i): {"author": f"author-{i % 500}", "year": i % 500} for i in range(5000)})
+    table = sql.Identifier(store._table)
+    name = sql.Identifier(f"{store._table[-20:]}_index")
+    store.connection.execute(sql.SQL("CREATE INDEX {} ON {} " + index).format(name, table))
+    store.connection.execute(sql.SQL("ANALYZE {}").format(table))
+    query, params = store._filter_statement(fields)
+    plan = store.connection.execute(sql.SQL("EXPLAIN ") + query, params).fetchall()
+    assert any(name.as_string(None).strip('"') in row[0] for row in plan)
 
 
 # --- locks ---

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from unittest.mock import Mock, patch
 
 import pytest
@@ -210,3 +211,12 @@ def test_fetch_response_raises_when_requests_not_available() -> None:
         pytest.raises(RuntimeError, match=r"'requests' package is required but not installed."),
     ):
         fetch_response("https://example.com")
+
+
+def test_fetch_response_does_not_log_the_password(caplog: pytest.LogCaptureFixture) -> None:
+    session = Mock()
+    session.get.return_value = Mock(status_code=200, content=b"")
+    with caplog.at_level(logging.DEBUG, logger="persista"):
+        fetch_response("https://user:s3cret@example.com/items", session=session)
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages[0] == "Fetching https://example.com/items..."

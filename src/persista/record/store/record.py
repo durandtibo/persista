@@ -244,19 +244,15 @@ class RecordStore(MultilineDisplayMixin):
             )
         ]
 
-    def filter(self, **metadata_filters: Any) -> list[Record]:
-        r"""Retrieve records matching all provided metadata filters.
+    def filter(self, /, **metadata_filters: Any) -> list[Record]:
+        r"""Retrieve the records whose metadata fields match all the
+        provided filters.
 
-        The records are selected with the semantics of the ``filter``
-        method of the underlying store (see
-        :meth:`persista.store.BaseStore.filter`): all filters are
-        combined with ``AND``, and the way values are compared, and the
-        field names that are accepted, are those of the backend.
-
-        Because :meth:`~persista.store.BaseStore.filter` does not return
-        the keys of the values, a store that has a ``filter_items``
-        method (the SQL stores) is queried with it, and any other store
-        is scanned in batches, comparing the values for equality.
+        The records are selected by the ``filter`` method of the underlying
+        store, so the filters have its semantics, with every backend (see
+        :meth:`persista.store.BaseStore.filter`): all filters are combined
+        with ``AND``, the values are compared with the types of JSON, and
+        ``None`` matches a field that is ``None`` or absent.
 
         Args:
             **metadata_filters: Key-value pairs where each key is a
@@ -265,35 +261,20 @@ class RecordStore(MultilineDisplayMixin):
 
         Returns:
             A list of matching :class:`~persista.record.Record`
-            instances.
+            instances, in no guaranteed order.
+
+        Raises:
+            RuntimeError: If the store is closed.
         """
-        filter_items = getattr(self._store, "filter_items", None)
-        if filter_items is not None:
-            return [
-                self._from_value(record_id, value)
-                for record_id, value in filter_items(**metadata_filters).items()
-            ]
         return [
             self._from_value(record_id, value)
-            for batch in self._store.iter_batches()
-            for record_id, value in batch.items()
-            if self._matches(value, metadata_filters)
+            for record_id, value in self._store.filter(**metadata_filters).items()
         ]
 
-    async def afilter(self, **metadata_filters: Any) -> list[Record]:
+    async def afilter(self, /, **metadata_filters: Any) -> list[Record]:
         r"""Async equivalent of :meth:`filter`."""
-        afilter_items = getattr(self._store, "afilter_items", None)
-        if afilter_items is not None:
-            return [
-                self._from_value(record_id, value)
-                for record_id, value in (await afilter_items(**metadata_filters)).items()
-            ]
-        return [
-            self._from_value(record_id, value)
-            async for batch in self._store.aiter_batches()
-            for record_id, value in batch.items()
-            if self._matches(value, metadata_filters)
-        ]
+        matches = await self._store.afilter(**metadata_filters)
+        return [self._from_value(record_id, value) for record_id, value in matches.items()]
 
     def delete(self, record_id: str) -> None:
         r"""Delete a record by its ID.
@@ -540,18 +521,3 @@ class RecordStore(MultilineDisplayMixin):
             The record, with a shallow copy of ``value`` as metadata.
         """
         return Record(id=record_id, metadata=dict(value))
-
-    @staticmethod
-    def _matches(value: dict[str, Any], metadata_filters: dict[str, Any]) -> bool:
-        r"""Indicate if a stored value matches all the metadata filters.
-
-        Args:
-            value: The stored value.
-            metadata_filters: The expected value of each field. A field
-                that is absent from ``value`` matches ``None``.
-
-        Returns:
-            ``True`` if every filter matches, including when there is
-            no filter.
-        """
-        return all(value.get(key) == expected for key, expected in metadata_filters.items())

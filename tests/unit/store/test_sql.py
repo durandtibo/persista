@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -9,16 +10,19 @@ from persista.store import JsonCodec, PickleCodec, SQLiteStore
 from persista.store.plan import build_plan
 from persista.store.sql import (
     SQLStore,
+    _is_unicode,
     build_where,
+    can_push_down,
     check_sql_codec,
     check_table_layout,
     decode_sql_uri,
     encode_sql_uri,
+    select_push_down_fields,
     value_column_type,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Mapping
+    from collections.abc import Generator
     from pathlib import Path
 
     from persista.store import Codec
@@ -40,6 +44,16 @@ class OtherCodec(JsonCodec):
 
 class CustomJsonCodec(JsonCodec):
     r"""A custom codec that produces JSON."""
+
+
+class StrSubclass(str):
+    r"""A subclass of ``str``."""
+
+    __slots__ = ()
+
+
+class IntSubclass(int):
+    r"""A subclass of ``int``."""
 
 
 @pytest.fixture
@@ -190,36 +204,155 @@ def test_check_table_layout_does_not_modify_columns() -> None:
     assert columns == [("value", "JSON", False), ("key", "TEXT", True)]
 
 
+###################################
+#     Tests for can_push_down     #
+###################################
+
+
+@pytest.mark.parametrize(
+    ("codec", "expected"),
+    [(JsonCodec(), True), (PickleCodec(), False), (CustomJsonCodec(), False)],
+)
+def test_can_push_down(codec: Codec, expected: bool) -> None:
+    assert can_push_down(codec) is expected
+
+
+#############################################
+#     Tests for select_push_down_fields     #
+#############################################
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "Alice",
+        "1",
+        chr(0xE9),
+        chr(0x1F600),
+        "a' OR '1'='1",
+        0,
+        1,
+        -1,
+        2**53 - 1,
+        -(2**53 - 1),
+    ],
+)
+def test_select_push_down_fields_selected_value(value: object) -> None:
+    assert select_push_down_fields({"a": value}) == {"a": value}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        True,
+        False,
+        1.0,
+        float("nan"),
+        [1],
+        (1,),
+        {"a": 1},
+        b"a",
+        Decimal(1),
+        "a" + chr(0) + "b",
+        chr(0),
+        chr(0xD800),
+        2**53,
+        -(2**53),
+        2**64,
+        10**400,
+    ],
+)
+def test_select_push_down_fields_other_value(value: object) -> None:
+    assert select_push_down_fields({"a": value}) == {}
+
+
+@pytest.mark.parametrize(
+    "field", ["", "1", "a b", "a-b", "a.b", "a'b", 'a"b', "$", chr(0xE9), "a\n"]
+)
+def test_select_push_down_fields_unsafe_name(field: str) -> None:
+    assert select_push_down_fields({field: 1}) == {}
+
+
+def test_select_push_down_fields_keeps_order() -> None:
+    fields = {"c": 1, "a-b": 2, "a": "x"}
+    assert list(select_push_down_fields(fields).items()) == [("c", 1), ("a", "x")]
+
+
+def test_select_push_down_fields_no_field() -> None:
+    assert select_push_down_fields({}) == {}
+
+
+@pytest.mark.parametrize(
+    ("value", "kind"), [(StrSubclass("x"), str), (IntSubclass(3), int)], ids=["str", "int"]
+)
+def test_select_push_down_fields_converts_subclass(value: object, kind: type) -> None:
+    assert type(select_push_down_fields({"a": value})["a"]) is kind
+
+
+def test_select_push_down_fields_converts_name_subclass() -> None:
+    assert type(next(iter(select_push_down_fields({StrSubclass("a"): 1})))) is str
+
+
+def test_select_push_down_fields_does_not_modify_fields() -> None:
+    fields = {"a": 1, "b": None}
+    select_push_down_fields(fields)
+    assert fields == {"a": 1, "b": None}
+
+
+#################################
+#     Tests for _is_unicode     #
+#################################
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("", True), ("a", True), (chr(0x1F600), True), (chr(0xD800), False)],
+)
+def test__is_unicode(text: str, expected: bool) -> None:
+    assert _is_unicode(text) is expected
+
+
 #################################
 #     Tests for build_where     #
 #################################
 
 
+def condition(name: str, value: str | int) -> tuple[str, list[str | int]]:
+    r"""Return a condition with one parameter."""
+    return f"{name.upper()} = ?", [value]
+
+
 def test_build_where() -> None:
-    assert build_where({"a": 1, "b": None, "c": "x"}, str.upper) == (
-        "A = ? AND B IS NULL AND C = ?",
+    assert build_where({"a": 1, "b": None, "c": "x", "d-e": "y"}, condition) == (
+        "A = ? AND C = ?",
         [1, "x"],
     )
 
 
-def test_build_where_placeholder() -> None:
-    assert build_where({"a": 1, "b": None}, str.upper, placeholder="%s::text") == (
-        "A = %s::text AND B IS NULL",
-        [1],
+def test_build_where_several_parameters() -> None:
+    def between(name: str, value: int) -> tuple[str, list[int]]:
+        return f"{name} BETWEEN ? AND ?", [value, value]
+
+    assert build_where({"a": 1, "b": 2}, between) == (
+        "a BETWEEN ? AND ? AND b BETWEEN ? AND ?",
+        [1, 1, 2, 2],
     )
 
 
-def test_build_where_no_field() -> None:
-    assert build_where({}, str.upper) == ("", [])
+@pytest.mark.parametrize("fields", [{}, {"a": None}])
+def test_build_where_no_condition(fields: dict) -> None:
+    assert build_where(fields, condition) == ("", [])
 
 
-def test_build_where_expression_error() -> None:
-    def expression(name: str) -> str:
-        msg = f"bad field {name}"
+def test_build_where_condition_error() -> None:
+    def failing(name: str, value: str | int) -> tuple[str, list]:
+        msg = f"bad field {name}={value}"
         raise ValueError(msg)
 
-    with pytest.raises(ValueError, match=r"bad field a"):
-        build_where({"a": 1}, expression)
+    with pytest.raises(ValueError, match=r"bad field a=1"):
+        build_where({"a": 1}, failing)
 
 
 ####################################
@@ -285,52 +418,6 @@ def test_sql_store_default_codec() -> None:
 def test_sql_store_unsupported_codec() -> None:
     with pytest.raises(ValueError, match=r"A SQL store needs a codec"):
         SQLiteStore(codec=OtherCodec())
-
-
-# --- filter_items ---
-
-
-def test_filter_items_no_field(filled_store: SQLiteStore) -> None:
-    assert filled_store.filter_items() == {"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}}
-
-
-def test_filter_items_field(filled_store: SQLiteStore) -> None:
-    assert filled_store.filter_items(a=2) == {"2": {"a": 2}}
-
-
-def test_filter_items_no_match(filled_store: SQLiteStore) -> None:
-    assert filled_store.filter_items(a=4) == {}
-
-
-def test_filter_items_empty_store(store: SQLiteStore) -> None:
-    assert store.filter_items() == {}
-
-
-def test_filter_items_pickle_codec(pickle_store: SQLiteStore) -> None:
-    assert pickle_store.filter_items(tags={"b"}) == {"2": {"tags": {"b"}}}
-
-
-def test_filter_items_pickle_codec_several_batches(pickle_store: SQLiteStore) -> None:
-    pickle_store.set_many({str(i): {"even": i % 2 == 0} for i in range(600)})
-    assert len(pickle_store.filter_items(even=True)) == 300
-
-
-def test_filter_items_closed_store() -> None:
-    with pytest.raises(RuntimeError, match=r"is not open"):
-        SQLiteStore().filter_items()
-
-
-async def test_afilter_items(filled_store: SQLiteStore) -> None:
-    assert await filled_store.afilter_items(a=2) == {"2": {"a": 2}}
-
-
-async def test_afilter_items_pickle_codec(pickle_store: SQLiteStore) -> None:
-    assert await pickle_store.afilter_items(tags={"b"}) == {"2": {"tags": {"b"}}}
-
-
-async def test_afilter_items_closed_store() -> None:
-    with pytest.raises(RuntimeError, match=r"is not open"):
-        await SQLiteStore().afilter_items()
 
 
 # --- URI ---
@@ -642,59 +729,62 @@ def test__filter_candidates_other_codec_yields_every_pair(codec: Codec) -> None:
 def test_filter_custom_json_codec_applies_predicate() -> None:
     with SQLiteStore(codec=CustomJsonCodec()) as store:
         store.set_many({"1": {"a": 1}, "2": {"a": 2}})
-        assert store.filter(a=2) == [{"a": 2}]
+        assert store.filter(a=2) == {"2": {"a": 2}}
 
 
-@pytest.mark.parametrize(
-    ("codec", "fields", "expected"),
-    [
-        # The database selected the candidates: they are not filtered again.
-        pytest.param(JsonCodec(), {"a": 2}, [{"a": 1}, {"a": 2}], id="json"),
-        pytest.param(CustomJsonCodec(), {"a": 2}, [{"a": 2}], id="custom"),
-    ],
-)
-def test__matching_values(
-    codec: Codec, fields: Mapping[str, Any], expected: list[dict[str, Any]]
+def test_filter_selects_candidates_with_one_query(filled_store: SQLiteStore) -> None:
+    statements = trace(filled_store)
+    filled_store.filter(a=2)
+    assert statements == ["SELECT key, value FROM store WHERE json_extract(value, '$.a') = 2"]
+
+
+@pytest.mark.parametrize("fields", [{}, {"a": None}, {"a": 1.0}, {"a-b": 1}, {"a": [1]}])
+def test_filter_without_condition_reads_every_row_with_one_query(
+    filled_store: SQLiteStore, fields: dict[str, Any]
 ) -> None:
-    store = SQLiteStore(codec=codec)
-    assert store._matching_values({"1": '{"a": 1}', "2": '{"a": 2}'}, fields) == expected
+    statements = trace(filled_store)
+    filled_store.filter(**fields)
+    assert statements == ["SELECT key, value FROM store"]
 
 
-@pytest.mark.parametrize(
-    ("codec", "expected"),
-    [
-        pytest.param(JsonCodec(), {"1": {"a": 1}, "2": {"a": 2}}, id="json"),
-        pytest.param(CustomJsonCodec(), {"2": {"a": 2}}, id="custom"),
-    ],
-)
-def test__matching_items(codec: Codec, expected: dict[str, dict[str, Any]]) -> None:
-    store = SQLiteStore(codec=codec)
-    assert store._matching_items({"1": '{"a": 1}', "2": '{"a": 2}'}, {"a": 2}) == expected
+def test_filter_applies_predicate_to_candidates(store: SQLiteStore) -> None:
+    # SQLite extracts true as the integer 1.
+    store.set_many({"1": {"a": 1}, "2": {"a": True}})
+    assert store.filter(a=1) == {"1": {"a": 1}}
 
 
-@pytest.mark.parametrize(
-    ("codec", "expected"),
-    [(JsonCodec(), True), (PickleCodec(), False), (CustomJsonCodec(), False)],
-)
-def test__filters_in_sql(codec: Codec, expected: bool) -> None:
-    assert SQLiteStore(codec=codec)._filters_in_sql() is expected
+async def test_afilter(filled_store: SQLiteStore) -> None:
+    assert await filled_store.afilter(a=2) == {"2": {"a": 2}}
 
 
-def test__select_matches(filled_store: SQLiteStore) -> None:
-    assert list(filled_store._select_matches({"a": 3})) == [{"3": '{"a": 3}'}]
+async def test_afilter_pickle_codec(pickle_store: SQLiteStore) -> None:
+    assert await pickle_store.afilter(tags={"b"}) == {"2": {"tags": {"b"}}}
 
 
-def test__select_matches_no_field(filled_store: SQLiteStore) -> None:
-    assert list(filled_store._select_matches({})) == [PAYLOADS]
+def test_filter_pickle_codec_several_batches(pickle_store: SQLiteStore) -> None:
+    pickle_store.set_many({str(i): {"even": i % 2 == 0} for i in range(600)})
+    assert len(pickle_store.filter(even=True)) == 300
 
 
-def test__select_matches_no_match(filled_store: SQLiteStore) -> None:
-    assert list(filled_store._select_matches({"a": 4})) == []
+def test__select_candidates(filled_store: SQLiteStore) -> None:
+    assert list(filled_store._select_candidates({"a": 3})) == [{"3": '{"a": 3}'}]
 
 
-def test__select_matches_invalid_field(store: SQLiteStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid filter field name"):
-        list(store._select_matches({"a b": 1}))
+def test__select_candidates_no_field(filled_store: SQLiteStore) -> None:
+    assert list(filled_store._select_candidates({})) == [PAYLOADS]
+
+
+def test__select_candidates_no_match(filled_store: SQLiteStore) -> None:
+    assert list(filled_store._select_candidates({"a": 4})) == []
+
+
+####################################
+#     Tests for _safe_database     #
+####################################
+
+
+def test__safe_database() -> None:
+    assert SQLStore._safe_database(SQLiteStore()) == ":memory:"
 
 
 # --- helpers ---
@@ -730,11 +820,13 @@ def test__get_repr_kwargs_closed() -> None:
 
 
 def test__get_repr_kwargs_open(filled_store: SQLiteStore) -> None:
-    assert filled_store._get_repr_kwargs() == {
-        "database": ":memory:",
-        "closed": False,
-        "count": "3",
-    }
+    assert filled_store._get_repr_kwargs() == {"database": ":memory:", "closed": False}
+
+
+def test__get_repr_kwargs_runs_no_query(filled_store: SQLiteStore) -> None:
+    statements = trace(filled_store)
+    filled_store._get_repr_kwargs()
+    assert statements == []
 
 
 def test__get_repr_kwargs_options(tmp_path: Path) -> None:
@@ -745,5 +837,24 @@ def test__get_repr_kwargs_options(tmp_path: Path) -> None:
         "closed": True,
         "codec": codec,
         "read_only": True,
-        "timeout": 1.0,
     }
+
+
+def test_from_uri_of_a_memory_database_gives_a_private_empty_database(
+    filled_store: SQLiteStore,
+) -> None:
+    with SQLiteStore.from_uri(filled_store.to_uri()) as restored:
+        restored.set("new", {})
+        assert (restored.count(), filled_store.count()) == (1, 3)
+
+
+@pytest.mark.parametrize(("size", "expected"), [(99, 99), (100, 100), (101, 100), (2000, 100)])
+def test_select_push_down_fields_selects_at_most_100_conditions(size: int, expected: int) -> None:
+    fields = {f"f{i}": i for i in range(size)}
+    assert len(select_push_down_fields(fields)) == expected
+
+
+def test_filter_many_fields(store: SQLiteStore) -> None:
+    fields = {f"f{i}": i for i in range(2000)}
+    store.set_many({"match": fields, "other": {**fields, "f1999": 0}})
+    assert list(store.filter(**fields)) == ["match"]

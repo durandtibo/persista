@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -60,11 +61,18 @@ def test_in_memory_store_has_no_data_property(store: InMemoryStore) -> None:
 
 
 def test_repr(filled_store: InMemoryStore) -> None:
-    assert repr(filled_store) == "InMemoryStore(closed=False, count='3')"
+    assert repr(filled_store) == "InMemoryStore(closed=False)"
+
+
+def test_repr_runs_no_primitive(
+    filled_store: InMemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(filled_store, "_count", MagicMock(side_effect=AssertionError("query")))
+    assert repr(filled_store) == "InMemoryStore(closed=False)"
 
 
 def test_str(filled_store: InMemoryStore) -> None:
-    assert str(filled_store) == "InMemoryStore(closed=False, count=3)"
+    assert str(filled_store) == "InMemoryStore(closed=False)"
 
 
 def test_repr_before_open() -> None:
@@ -254,7 +262,7 @@ def test__iter_batches_deleting_yielded_keys_visits_every_key(
 
 
 def test__get_repr_kwargs(filled_store: InMemoryStore) -> None:
-    assert filled_store._get_repr_kwargs() == {"closed": False, "count": "3"}
+    assert filled_store._get_repr_kwargs() == {"closed": False}
 
 
 def test__get_repr_kwargs_closed() -> None:
@@ -270,8 +278,8 @@ def test__get_repr_kwargs_closed() -> None:
     [
         pytest.param(lambda s: s.get("1"), id="get"),
         pytest.param(lambda s: s.get_many(["1"])[0], id="get_many"),
-        pytest.param(lambda s: s.filter()[0], id="filter"),
-        pytest.param(lambda s: s.filter(n=1)[0], id="filter_field"),
+        pytest.param(lambda s: s.filter()["1"], id="filter"),
+        pytest.param(lambda s: s.filter(n=1)["1"], id="filter_field"),
         pytest.param(lambda s: next(iter(s.values())), id="values"),
         pytest.param(lambda s: next(iter(s.iter_batches()))["1"], id="iter_batches"),
     ],

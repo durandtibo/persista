@@ -173,9 +173,11 @@ conflict are kept.
 ### Filtering Records
 
 `filter` retrieves the records matching all the given metadata keyword arguments, combined with
-`AND`. It follows the `filter` semantics of the underlying store, so the way values are compared,
-and the field names that are accepted, depend on the backend. The SQL stores filter in the database
-(see [indexing a filtered field](store.md#indexing-a-filtered-field)); the other stores are scanned:
+`AND`. It calls the `filter` method of the underlying store, so it has the same
+[semantics](store.md#filtering) with every backend: the values are compared with the types of JSON
+(`True` is not `1`, `"1"` is not `1`), `None` matches a null or absent field, and any field name
+works. The SQL stores can use an index
+(see [indexing a filtered field](store.md#indexing-a-filtered-field)):
 
 ```pycon
 >>> from persista.record import Record
@@ -188,8 +190,8 @@ and the field names that are accepted, depend on the backend. The SQL stores fil
 ...             Record(id="2", metadata={"author": "Bob", "category": "Programming"}),
 ...         ]
 ...     )
-...     len(store.filter(category="Programming"))
-2
+...     print(sorted(record.id for record in store.filter(category="Programming")))
+['1', '2']
 
 ```
 

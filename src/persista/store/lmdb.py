@@ -10,11 +10,12 @@ from typing import TYPE_CHECKING, Any
 
 from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
+from coola.utils.imports import lazy_import
 from coola.utils.path import sanitize_path
 
 from persista.store.base import BaseStore
 from persista.store.uri import codec_uri_scheme, decode_codec_uri, encode_path_uri
-from persista.utils.imports import check_lmdb, is_lmdb_available
+from persista.utils.imports import check_lmdb
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -25,8 +26,11 @@ if TYPE_CHECKING:
     from persista.store.codec import Codec
     from persista.store.types import Payload, Plan
 
-if TYPE_CHECKING or is_lmdb_available():  # pragma: no cover
+if TYPE_CHECKING:
     import lmdb
+else:
+    # Imported when the first store is opened.
+    lmdb = lazy_import("lmdb")
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -190,7 +194,8 @@ class LmdbStore(BaseStore, MultilineDisplayMixin):
 
         The scheme of the URI gives the codec. The other arguments of the
         constructor, such as ``map_size``, are not part of the URI: pass
-        them again.
+        them again. The path is absolute, so the URI is only valid on a
+        machine with the same files.
 
         Args:
             uri: A URI produced by :meth:`to_uri`.
@@ -213,6 +218,7 @@ class LmdbStore(BaseStore, MultilineDisplayMixin):
     ######################
 
     def _open(self) -> None:
+        check_lmdb()
         kwargs: dict[str, Any] = dict(self._kwargs)
         if self._read_only:
             _check_environment_files(
@@ -333,9 +339,8 @@ class LmdbStore(BaseStore, MultilineDisplayMixin):
             kwargs["codec"] = self._codec
         if self._read_only:
             kwargs["read_only"] = True
-        if not self.closed:
-            kwargs["count"] = f"{self.count():,}"
-        return kwargs | self._kwargs
+        # The arguments of the driver are left out: they could hold secrets.
+        return kwargs
 
 
 def _encode_key(key: str) -> bytes:

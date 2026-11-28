@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1245,3 +1246,28 @@ def test__check_url_invalid(url: str) -> None:
 )
 def test__redact_url(url: str, expected: str) -> None:
     assert _redact_url(url) == expected
+
+
+@redis_available
+def test_open_checks_the_driver(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = RedisStore()
+    error = RuntimeError("the driver is missing")
+    monkeypatch.setattr("persista.store.redis.check_redis", MagicMock(side_effect=error))
+    with pytest.raises(RuntimeError, match=r"the driver is missing"):
+        store.open()
+    assert store.closed
+
+
+@redis_available
+@pytest.mark.parametrize(
+    "url",
+    [
+        "redis://user:s3cret@[bad",
+        # A character that NFKC normalization turns into "a/c".
+        f"redis://user:s3cret@ho{chr(0x2100)}st",
+    ],
+)
+def test_init_invalid_url_hides_the_password(url: str) -> None:
+    with pytest.raises(ValueError, match=r"Invalid URI: it cannot be parsed") as info:
+        RedisStore(url)
+    assert "s3cret" not in "".join(traceback.format_exception(info.value))
