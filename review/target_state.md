@@ -487,7 +487,7 @@ the later steps change less code.
 | 8    | **PostgreSQL on the template**, with real-server concurrency tests. Delete the old base paths.                                                                             | S2, S4, S17, S20           | yes                 | #376 |
 | 9    | **One filter**: the predicate, the safe push-down, the keyed result; lazy driver imports; cheap `repr`; the URI limitations.                                               | S1, S2, S15, S16, S19, S21 | yes                 | #377 |
 | 10   | **Canonical encoding and the cache API.**                                                                                                                                  | C3-C7                      | yes                 | #378 |
-| 11   | **Records and analyses** on the canonical encoding.                                                                                                                        | R1-R6                      | yes                 |      |
+| 11   | **Records and analyses** on the canonical encoding.                                                                                                                        | R1-R6                      | yes                 | #379 |
 | 12   | **HTTP**: two `httpx` classes and one retry policy; delete the module functions; apply the retry properties to `requests`.                                                 | H4-H7                      | yes                 |      |
 | 13   | **Utils, extras, documentation**: one imports module, the Properties tables in the user guides, a migration page, section 3.5.                                             | 3.5                        | yes (imports)       |      |
 
@@ -533,7 +533,7 @@ The conventions of `CLAUDE.md` apply. Each finding gets a regression test that f
 | D6  | File names of `FileStore`?            | decided | **Escape upper case** (section 9.5).                                                                           |
 | D7  | A key limit shared by all backends?   | decided | **No.** The limit of one backend does not restrict the others; interchangeability in every case is not a goal. |
 | D8  | Keep `requests` support?              | decided | **Yes** (section 4.8).                                                                                         |
-| D9  | Keep `record.analysis` in `persista`? | open    | Recommended: **yes**, it is small, pure and depends only on `Record`.                                          |
+| D9  | Keep `record.analysis` in `persista`? | open    | Recommended: **yes**, it is small and depends only on `Record`. Applied in #379.                               |
 | D10 | Keep the SQL filter push-down?        | open    | Recommended: **yes**, as a pre-filter (rule 4 of section 4.1). Applied in #377: PostgreSQL integers use `@>`.  |
 | D11 | Retry `POST` and `PATCH`?             | open    | Recommended: **not by default** (H5); the caller adds them to `retry_methods`.                                 |
 
