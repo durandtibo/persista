@@ -15,7 +15,6 @@ from persista.store.redis import (
     _encode_key,
     _encode_keys,
     _encode_members,
-    _LoopClient,
     _present,
     _redact_url,
 )
@@ -776,6 +775,29 @@ async def test__async_client_closed_store() -> None:
 
 
 @redis_available
+def test__create_async_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    from_url = MagicMock()
+    monkeypatch.setattr(f"{MODULE}.aredis.Redis.from_url", from_url)
+    client = RedisStore(URL, socket_timeout=5.0)._create_async_client()
+    from_url.assert_called_once_with(URL, socket_timeout=5.0)
+    assert client is from_url.return_value
+
+
+@redis_available
+async def test__aclients_names_the_store_in_its_errors(store: RedisStore) -> None:
+    await store.acount()
+    with pytest.raises(RuntimeError, match=r"An async client of RedisStore is open"):
+        store._check_close()
+    await store.aclose()
+
+
+@redis_available
+def test__check_close_without_async_client(store: RedisStore) -> None:
+    store._check_close()
+    assert not store.closed
+
+
+@redis_available
 async def test__async_client_being_closed(store: RedisStore) -> None:
     entry = await store._async_client()
     entry.closing = True
@@ -812,7 +834,7 @@ def test_loop_shutdown_closes_the_client(server: Any, monkeypatch: pytest.Monkey
     monkeypatch.setattr(f"{MODULE}.aredis.Redis.from_url", lambda _url: client)
     with RedisStore() as store:
         asyncio.run(store.acount())
-        assert (closed, store._aclients) == ([True], {})
+        assert (closed, len(store._aclients)) == ([True], 0)
 
 
 @redis_available
@@ -870,7 +892,7 @@ def test_aclose_with_the_client_of_another_loop_raises(store: RedisStore) -> Non
 async def test_aclose(store: RedisStore) -> None:
     await store.acount()
     await store.aclose()
-    assert (store.closed, store._aclients) == (True, {})
+    assert (store.closed, len(store._aclients)) == (True, 0)
 
 
 @redis_available
@@ -935,41 +957,7 @@ async def test_aclose_cancelled_keeps_the_client_usable(store: RedisStore) -> No
 async def test__aclose_keeps_the_store_open(store: RedisStore) -> None:
     await store.acount()
     await store._aclose()
-    assert (store.closed, store._aclients) == (False, {})
-
-
-@redis_available
-async def test__close_with_loop(store: RedisStore) -> None:
-    client = AsyncMock()
-    loop = asyncio.get_running_loop()
-    store._aclients[loop] = MagicMock()
-    guard = store._close_with_loop(client, loop)
-    await anext(guard)
-    await guard.aclose()
-    assert (store._aclients, client.aclose.await_count) == ({}, 1)
-
-
-@redis_available
-def test__forget_closed_loops(store: RedisStore, caplog: pytest.LogCaptureFixture) -> None:
-    loop = asyncio.new_event_loop()
-    loop.close()
-    store._aclients[loop] = MagicMock()
-    with caplog.at_level(logging.WARNING):
-        store._forget_closed_loops()
-    assert (store._aclients, len(caplog.messages)) == ({}, 1)
-
-
-@redis_available
-def test__forget_closed_loops_keeps_open_loops(store: RedisStore) -> None:
-    loop = asyncio.new_event_loop()
-    entry = MagicMock()
-    store._aclients[loop] = entry
-    try:
-        store._forget_closed_loops()
-        assert store._aclients == {loop: entry}
-    finally:
-        store._aclients.clear()
-        loop.close()
+    assert (store.closed, len(store._aclients)) == (False, 0)
 
 
 @redis_available
@@ -1109,61 +1097,6 @@ def test__queue_delete() -> None:
         ("delete", (b"persista:v:1", b"persista:v:2"), {}),
         ("srem", (b"persista:keys", b"1", b"2"), {}),
     ]
-
-
-#################################
-#     Tests for _LoopClient     #
-#################################
-
-
-def test__loop_client_enter_gives_the_client() -> None:
-    client = MagicMock()
-    with _LoopClient(client, MagicMock()) as entered:
-        assert entered is client
-
-
-def test__loop_client_not_closing() -> None:
-    assert not _LoopClient(MagicMock(), MagicMock()).closing
-
-
-async def test__loop_client_wait_until_idle_without_call() -> None:
-    entry = _LoopClient(MagicMock(), MagicMock())
-    await asyncio.wait_for(entry.wait_until_idle(), timeout=1)
-    assert entry._calls == 0
-
-
-async def test__loop_client_wait_until_idle_waits_for_every_call() -> None:
-    entry = _LoopClient(MagicMock(), MagicMock())
-    entry.__enter__()
-    entry.__enter__()
-    task = asyncio.ensure_future(entry.wait_until_idle())
-    await asyncio.sleep(0)
-    entry.__exit__()
-    await asyncio.sleep(0)
-    waiting = not task.done()
-    entry.__exit__()
-    await asyncio.wait_for(task, timeout=1)
-    assert waiting
-
-
-async def test__loop_client_wait_until_idle_after_a_previous_idle_time() -> None:
-    entry = _LoopClient(MagicMock(), MagicMock())
-    with entry:
-        pass
-    entry.__enter__()
-    task = asyncio.ensure_future(entry.wait_until_idle())
-    await asyncio.sleep(0)
-    waiting = not task.done()
-    entry.__exit__()
-    await asyncio.wait_for(task, timeout=1)
-    assert waiting
-
-
-def test__loop_client_exit_after_an_error() -> None:
-    entry = _LoopClient(MagicMock(), MagicMock())
-    entry.__enter__()
-    entry.__exit__(ValueError, ValueError("failed"), None)
-    assert entry._calls == 0
 
 
 #################################

@@ -109,10 +109,9 @@ TypeError: dict keys must be str, not int: 1
 :warning: Decoding a `pickle` payload can execute arbitrary code. Only use `PickleCodec` with data
 from trusted sources.
 
-`InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore` and `RedisStore` take a
-codec (`NullStore` always uses `JsonCodec`, to check the values it discards). `PostgresStore`
-encodes the values itself, as JSON and without all the checks above. For example, it turns an `int`
-key of a value into a `str` instead of rejecting it.
+All the stores take a codec (`NullStore` always uses `JsonCodec`, to check the values it discards).
+`PostgresStore` with a `JsonCodec` also rejects a string with a NUL character, which `JSONB` cannot
+keep (see [PostgreSQL](#postgresql)).
 
 ### Setting Multiple Values
 
@@ -186,8 +185,7 @@ key already exists:
 
 ### Errors
 
-`InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore`, `RedisStore`,
-`NullStore` and the [custom stores](#writing-a-custom-store) check the state of the store and the
+Every store, including the [custom stores](#writing-a-custom-store), checks its state and the
 arguments before doing anything, also when there is nothing to do (for example `get_many([])`):
 
 | Situation                                                          | Error          |
@@ -197,11 +195,6 @@ arguments before doing anything, also when there is nothing to do (for example `
 | a single `str` where a list of keys is expected                    | `TypeError`    |
 | an invalid `on_conflict` or `batch_size`                           | `ValueError`   |
 | a key that the backend cannot keep (see [key limits](#key-limits)) | `ValueError`   |
-
-The other stores also raise `RuntimeError` when a closed store is used, and `ValueError` for an
-invalid `on_conflict` or `batch_size`, but some of their methods accept an empty input without these
-checks (`set_batches` and `aset_batches` check them on every store). They do not all reject a key
-that is not a `str`.
 
 ```pycon
 >>> from persista.store import InMemoryStore
@@ -219,11 +212,17 @@ A key is a `str`, compared exactly: `"a"` and `"A"` are two keys. Some backends 
 string. Their limits apply to them only, and every method that takes a key (reads and deletes
 included) raises `ValueError` for a key outside them, before anything is read or written:
 
-| Store        | Limit                                                                                                            |
-| ------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `LmdbStore`  | 1 to 511 UTF-8 bytes, so not the empty string; no lone surrogate                                                 |
-| `FileStore`  | the file name, with its extension, has at most 255 characters (see [File Store](#file-store)); no lone surrogate |
-| `RedisStore` | no lone surrogate                                                                                                |
+| Store           | Limit                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `LmdbStore`     | 1 to 511 UTF-8 bytes, so not the empty string; no lone surrogate                                                 |
+| `FileStore`     | the file name, with its extension, has at most 255 characters (see [File Store](#file-store)); no lone surrogate |
+| `RedisStore`    | no lone surrogate                                                                                                |
+| `PostgresStore` | no NUL character and no lone surrogate; at most 2692 UTF-8 bytes (see below)                                     |
+
+The limit of `PostgresStore` is the largest key that the index of its primary key accepts, whatever
+the content of the key, with the default page size of the server. PostgreSQL compresses long index
+entries, so a table written by an earlier version can contain a longer key: it is listed by `keys` and
+by the iterations, and removed by `clear`, but the methods that take a key reject it.
 
 ## File Store
 
@@ -390,8 +389,8 @@ database:
 
 ### PostgreSQL
 
-`PostgresStore` connects to a PostgreSQL database using a connection string, and stores values
-in a configurable `table` (requires the `psycopg` extra):
+`PostgresStore` connects to a PostgreSQL database using a connection string or URI, and stores
+values in a configurable `table` (requires the `psycopg` extra):
 
 ```python
 from persista.store import PostgresStore
@@ -406,10 +405,60 @@ with PostgresStore("postgresql://user:pass@localhost/dbname", table="documents")
     len(store.filter(author="Alice"))  # 2
 ```
 
-!!! warning
-Unlike the SQLite, DuckDB, LMDB, and Redis stores, `BasePostgresStore` does not automatically
-reopen a closed connection when re-entering a `with` block. Create a new store instance
-instead of reusing one after `close()`.
+- The codec selects the type of the `value` column: `JSONB` for `JsonCodec` (default), which any
+  PostgreSQL client can query, and `BYTEA` for `PickleCodec`, which keeps Python types.
+- Opening the store creates the table (`key TEXT PRIMARY KEY`, `value`) in the first schema of the
+  search path if it does not exist, and raises `ValueError` if an existing table does not have exactly
+  these two columns, with the type of the codec.
+- The table name has at most 63 letters, digits and underscores, does not start with a digit, and
+  its case is significant. The other keyword arguments, such as `connect_timeout`, are passed to
+  `psycopg.connect` and to its async equivalent.
+- A key cannot contain a NUL character and has at most 2692 UTF-8 bytes (see
+  [key limits](#key-limits)).
+- With the `JsonCodec`, a string of a value cannot contain a NUL character: the write raises
+  `ValueError` and writes nothing. `JSONB` keeps the numbers as decimals, so `-0.0` is read back as
+  `0.0`, and it does not keep the order of the keys of a `dict`.
+- `repr` shows the host, the port and the database without the credentials, and runs no query.
+  Percent-encode the special characters of a username or a password in a URI, and quote the values
+  that contain spaces in a keyword/value string: `open` raises `ValueError` for a string it cannot
+  read, without quoting it. `to_uri` returns the password: treat the URI as a secret.
+
+:warning: Decoding a `pickle` payload can execute arbitrary code. Only use `PickleCodec` with a
+trusted database.
+
+#### PostgreSQL Concurrent Writes
+
+- Each write or delete is one transaction, so a write of several keys is atomic.
+- A transaction first takes advisory locks: a shared lock of the table and an exclusive lock of each
+  key. A write or a delete of more than 64 keys, and `clear`, take an exclusive lock of the table
+  instead, so that the server never runs out of locks: the other writes of this table wait for it.
+- So `on_conflict="raise"`, `"skip"` and `"merge"` are atomic against every other write and delete
+  made by a `PostgresStore`, including the ones of other processes. A program that writes to the
+  table without these locks is not covered.
+- Reads take no lock and do not wait for the writes.
+- A write waits without time limit for the locks it needs. Set a limit with the options of the server,
+  for example `PostgresStore(url, options="-c lock_timeout=5000")`.
+
+#### PostgreSQL Iteration
+
+An iteration reads the pairs in the order of the keys, one query per batch (keyset pagination), and
+keeps no transaction open between two batches.
+
+#### PostgreSQL Async Connections
+
+The sync methods use one connection, protected by the lock of the instance. The async methods use a
+`psycopg.AsyncConnection` per event loop, without threads. It runs one operation at a time, so the
+transactions of concurrent calls cannot nest. It follows the same rules as the async client of
+`RedisStore` (see [event loops and closing](#event-loops-and-closing)): another event loop gets its
+own connection, `aclose` closes it, and `close` raises `RuntimeError` while it is open. A connection
+that the network or the server closed fails the current call, and the next call opens a new one. The
+sync connection is not reopened: close and open the store again.
+
+#### PostgreSQL Changes from Earlier Versions
+
+:warning: `BasePostgresStore` was removed. The table of an earlier `PostgresStore` is read as is.
+`codec` and `table` are keyword-only arguments. A table with other columns, which was accepted
+before, is now rejected when the store is opened.
 
 ## Indexing a Filtered Field
 
@@ -450,9 +499,10 @@ SEARCH store USING INDEX store_author (<expr>=?)
 
 ### PostgreSQL
 
-`PostgresStore.filter` compares `value->>'<field>'` with the expected value cast to text, so the
-corresponding index is an expression index on `value->>'<field>'` (note the double parentheses).
-Replace `store` with the name of your table:
+With a `JsonCodec`, `PostgresStore.filter` compares `value->>'<field>'` with the expected value cast
+to text (`None` matches a null or absent field, with `IS NULL`), so the corresponding index is an
+expression index on `value->>'<field>'` (note the double parentheses). Replace `store` with the name
+of your table:
 
 ```python
 from persista.store import PostgresStore
@@ -463,6 +513,8 @@ with PostgresStore("postgresql://user:pass@localhost/dbname") as store:
     )
     store.filter(author="Alice")
 ```
+
+A store with a `PickleCodec` cannot be indexed this way.
 
 :warning: Unlike the SQLite example, this one is not verified: the tests of `persista` do not
 check that PostgreSQL uses this index for the query of `filter`, and its speed was not measured.
@@ -610,16 +662,16 @@ The key `__keys__` is no longer reserved.
 
 ## Async Usage
 
-Every store also exposes `a`-prefixed asynchronous methods (`aget`, `aset`, `acount`, ...) that
-are coroutines (or async iterators), so they must be `await`ed and used from an `async` function.
-The same store instance can be used from both sync and async code -- there is no separate async
-class. Async methods are available on every store. Those of `RedisStore` and `PostgresStore`
-use the async driver of their library (see [event loops and closing](#event-loops-and-closing) for
-`RedisStore`). The async methods of `InMemoryStore`, `FileStore`,
-`SQLiteStore`, `DuckDBStore` and `LmdbStore` run in a worker thread of the store, one call at a time,
-so calls that wait for the store do not fill the default executor of your application. Cancelling an
-async call that already runs in a thread does not stop it. Iterating asynchronously takes one thread
-hop per batch, so a larger `batch_size` is faster.
+Every store also exposes `a`-prefixed asynchronous methods (`aget`, `aset`, `acount`, ...) that are
+coroutines (or async iterators), so they must be `await`ed and used from an `async` function. The
+same store instance can be used from both sync and async code -- there is no separate async class.
+Async methods are available on every store. Those of `RedisStore` and `PostgresStore` use the async
+driver of their library (see [event loops and closing](#event-loops-and-closing) for `RedisStore`
+and [async connections](#postgresql-async-connections) for `PostgresStore`). The async methods of
+`InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore` and `LmdbStore` run in a worker thread of
+the store, one call at a time, so calls that wait for the store do not fill the default executor of
+your application. Cancelling an async call that already runs in a thread does not stop it. Iterating
+asynchronously takes one thread hop per batch, so a larger `batch_size` is faster.
 
 ```pycon
 >>> import asyncio
@@ -696,17 +748,16 @@ as the input, without fetching the values themselves:
 
 ```
 
-`split_present_missing` turns those flags into two key lists, which is often more convenient than
-zipping keys and flags yourself:
+Two comprehensions turn those flags into the keys that are present and the missing ones:
 
 ```pycon
->>> from persista.store import InMemoryStore, split_present_missing
+>>> from persista.store import InMemoryStore
 >>> with InMemoryStore() as store:
 ...     store.set_many({"1": {"a": 1}, "2": {"a": 2}})
 ...     keys = ["1", "2", "3"]
-...     present, missing = split_present_missing(keys, store.contains_many(keys))
-...     print(present)
-...     print(missing)
+...     flags = store.contains_many(keys)
+...     print([key for key, flag in zip(keys, flags) if flag])
+...     print([key for key, flag in zip(keys, flags) if not flag])
 ['1', '2']
 ['3']
 
@@ -740,23 +791,23 @@ in mini-batches, which is useful when the source data does not fit comfortably i
 
 ```
 
-With `InMemoryStore`, `FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore` and `RedisStore`, a
-key that is present during a whole iteration is yielded exactly once, even if you write or delete
-keys during the iteration (for example, you can delete each batch after processing it). The SQL
-stores read the keys in order and start each batch after the last key of the previous one (keyset
-pagination). `InMemoryStore`, `FileStore`, `LmdbStore` and `RedisStore` take a snapshot of the keys
-when the iteration starts, so a batch can be smaller than `batch_size` (`keys` of `RedisStore` can
-also yield a key deleted during the iteration). `keys` and `akeys` do not read the values of
-`FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore` and `RedisStore`. A custom store must give the
-same guarantee in `_iter_batches`. Closing one of these stores, or a custom store, during an
-iteration raises `RuntimeError`.
+With every store, a key that is present during a whole iteration is yielded exactly once, even if you
+write or delete keys during the iteration (for example, you can delete each batch after processing
+it). The SQL stores and `PostgresStore` read the keys in order and start each batch after the last key
+of the previous one (keyset pagination). `InMemoryStore`, `FileStore`, `LmdbStore` and `RedisStore`
+take a snapshot of the keys when the iteration starts, so a batch can be smaller than `batch_size`
+(`keys` of `RedisStore` can also yield a key deleted during the iteration). `keys` and `akeys` do not
+read the values of the stores that keep data outside the process. A custom store must give the same
+guarantee in `_iter_batches`. Closing a store during an iteration raises `RuntimeError`.
 
 ## Writing a Custom Store
 
 `BaseStore` implements the public methods once: it checks that the store is open, validates the
 arguments, applies the codec, resolves the conflicts, filters, and derives the async methods. A new
 backend implements `to_uri`, `from_uri`, and the _primitives_, which are called with the store open,
-with validated and non-empty arguments, and with encoded payloads (`str` or `bytes`):
+with validated and non-empty arguments, and with encoded payloads (`str` or `bytes`). It does not
+override the other public methods, which are the contract that every store shares. The primitives
+are:
 
 | Primitive                   | Role                                                             |
 | --------------------------- | ---------------------------------------------------------------- |
@@ -833,7 +884,11 @@ never fewer: the base applies the filter to the decoded values.
   calls use the default executor.
 - Each data primitive has an async twin (`_aget_many`, `_aput_many`, `_aupdate`,
   `_aiter_key_batches`, ...) which runs the sync one in a thread. A backend with a native async
-  driver replaces the twins, and releases the resources that only they use in `_aclose()`.
+  driver replaces the twins, and releases the resources that only they use in `_aclose()`. If `close`
+  cannot release them, `_check_close()` raises while they are open, and the class attribute
+  `_close_in_event_loop = True` makes `aclose` call `close` in the event loop instead of a thread.
+  `persista.store.loop_clients.LoopClients` keeps one async client per event loop, as `RedisStore` and
+  `PostgresStore` do.
 
 ## Store URIs
 
@@ -867,11 +922,12 @@ local stores:
 
 Other constructor options, such as the `timeout` of `SQLiteStore`, the `map_size` of `LmdbStore` or
 the `namespace` of `RedisStore` or the `table` of `PostgresStore`, are not part of the URI. The
-`redis://` URLs do not carry the codec either. The `from_uri` methods of `FileStore`, `SQLiteStore`,
-`DuckDBStore`, `LmdbStore` and `RedisStore` accept the other keyword arguments of the constructor, to
-pass them again (for example `RedisStore.from_uri(uri, codec=PickleCodec(), namespace="documents")`);
-the other stores are reconstructed with the default options. The URL of a server store contains the
-password: treat it as a secret.
+`redis://` and `postgresql://` URIs do not carry the codec either. The `from_uri` methods of
+`FileStore`, `SQLiteStore`, `DuckDBStore`, `LmdbStore` and `RedisStore` accept the other keyword
+arguments of the constructor, to pass them again (for example `RedisStore.from_uri(uri,
+codec=PickleCodec(), namespace="documents")`); `PostgresStore.from_uri` accepts them too. The other
+stores are reconstructed with the default options. The URL of a server store contains the password:
+treat it as a secret.
 
 ```pycon
 >>> from persista.store import PickleCodec, SQLiteStore
@@ -957,7 +1013,7 @@ arbitrary code. Only use it with a configuration from a trusted source.
 | `DuckDBStore`   | DuckDB                     | Yes       | Yes (codec)   | Yes (worker thread) |
 | `LmdbStore`     | LMDB                       | Yes       | Yes (codec)   | Yes (worker thread) |
 | `RedisStore`    | Redis                      | Yes       | Yes (codec)   | Yes                 |
-| `PostgresStore` | PostgreSQL                 | Yes       | No            | Yes                 |
+| `PostgresStore` | PostgreSQL                 | Yes       | Yes (codec)   | Yes                 |
 | `NullStore`     | None (discards everything) | No        | N/A           | Yes                 |
 
 Use `InMemoryStore` for tests and prototyping, `FileStore` for values that you want to read as files,

@@ -100,7 +100,8 @@ def store_from_uri(uri: str, *, read_only: bool = False) -> BaseStore:
     scheme = urlsplit(uri).scheme
     store_cls = _SCHEMES.get(scheme)
     if store_cls is None:
-        msg = f"No store registered for scheme {scheme!r} (from {uri!r})"
+        # The URI is not quoted: it can contain a password.
+        msg = f"No store registered for scheme {scheme!r}"
         raise ValueError(msg)
     store = store_cls.from_uri(uri, read_only=read_only)
     store.open()

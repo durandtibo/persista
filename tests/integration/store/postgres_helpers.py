@@ -12,7 +12,12 @@ the startup cost multiple times.
 
 from __future__ import annotations
 
-__all__ = ["POSTGRES_URL", "get_postgres_conninfo", "postgres_available"]
+__all__ = [
+    "POSTGRES_URL",
+    "drop_tables",
+    "get_postgres_conninfo",
+    "postgres_available",
+]
 
 import atexit
 import os
@@ -24,6 +29,7 @@ from persista.utils.imports import is_psycopg_available
 
 if is_psycopg_available():
     import psycopg
+    from psycopg import sql
     from testcontainers.community.postgres import PostgresContainer
 
 try:
@@ -81,3 +87,23 @@ def get_postgres_conninfo() -> str | None:
 postgres_available = pytest.mark.skipif(
     get_postgres_conninfo() is None, reason="Requires a reachable Postgres server or Docker"
 )
+
+
+def drop_tables(prefix: str) -> None:
+    r"""Drop the tables whose name starts with a prefix, if a server is
+    reachable.
+
+    Args:
+        prefix: The start of the names of the tables.
+    """
+    conninfo = get_postgres_conninfo()
+    if conninfo is None:
+        return
+    with psycopg.connect(conninfo, autocommit=True) as connection:
+        rows = connection.execute(
+            "SELECT tablename FROM pg_tables "
+            "WHERE schemaname = current_schema() AND starts_with(tablename, %s)",
+            (prefix,),
+        ).fetchall()
+        for (table,) in rows:
+            connection.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(table)))

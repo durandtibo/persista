@@ -10,16 +10,20 @@ Some properties are not covered yet, because the filter semantics are
 not final (``True`` and ``1`` still match, and the SQL stores with a JSON
 codec compare in the database, so the filter matrix leaves them out).
 The writes of several instances of the same data are tested in
-``test_sql_concurrency.py``, ``test_lmdb_concurrency.py`` and
-``test_redis_concurrency.py``. A file store makes no such guarantee.
-The credentials of the Redis URLs are tested in ``test_redis.py``.
+``test_sql_concurrency.py``, ``test_lmdb_concurrency.py``,
+``test_redis_concurrency.py`` and ``test_postgres_concurrency.py``. A file
+store makes no such guarantee.
+The credentials of the Redis URLs are tested in ``test_redis.py``, and
+those of the PostgreSQL connection strings in ``test_postgres.py``.
 
-The Redis backend needs a reachable server, and removes its data from it.
+The Redis and PostgreSQL backends need a reachable server, and remove
+their data from it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -36,10 +40,21 @@ from persista.store import (
     LmdbStore,
     NullStore,
     PickleCodec,
+    PostgresStore,
     RedisStore,
     SQLiteStore,
 )
-from persista.testing.fixtures import duckdb_available, lmdb_available, redis_available
+from persista.testing.fixtures import (
+    duckdb_available,
+    lmdb_available,
+    psycopg_available,
+    redis_available,
+)
+from tests.integration.store.postgres_helpers import (
+    drop_tables,
+    get_postgres_conninfo,
+    postgres_available,
+)
 from tests.integration.store.redis_helpers import (
     REDIS_URL,
     delete_namespaces,
@@ -58,6 +73,15 @@ NUM_WRITES = 50
 
 # The prefix of the Redis namespaces of this run of the tests.
 REDIS_PREFIX = f"persista-contract-{uuid.uuid4().hex}"
+# The prefix of the PostgreSQL tables of this run of the tests.
+POSTGRES_PREFIX = f"contract_{uuid.uuid4().hex[:12]}_"
+
+
+def postgres_store(codec: Codec, path: Path) -> BaseStore:
+    r"""Return a PostgreSQL store with one table per directory, as the
+    backends that use files."""
+    table = POSTGRES_PREFIX + hashlib.sha256(str(path).encode()).hexdigest()[:24]
+    return PostgresStore(get_postgres_conninfo() or "", codec=codec, table=table)
 
 
 class PrimitivesOnlyStore(BaseStore):
@@ -141,6 +165,7 @@ BACKENDS: dict[str, Callable[[Codec, Path], BaseStore]] = {
     "redis": lambda codec, path: RedisStore(
         REDIS_URL, codec=codec, namespace=f"{REDIS_PREFIX}:{path}"
     ),
+    "postgres": postgres_store,
 }
 
 # The backends that need an optional library or a server, and the marks
@@ -150,13 +175,14 @@ MARKS: dict[str, list[pytest.MarkDecorator]] = {
     "duckdb_memory": [duckdb_available],
     "lmdb": [lmdb_available],
     "redis": [redis_available, redis_server_available],
+    "postgres": [psycopg_available, postgres_available],
 }
 
 # The backends whose data outlives the store.
-PERSISTENT = ["sqlite", "duckdb", "file", "lmdb", "redis"]
+PERSISTENT = ["sqlite", "duckdb", "file", "lmdb", "redis", "postgres"]
 
 # The backends whose data records the codec that wrote it.
-CODEC_CHECKED = ["sqlite", "duckdb"]
+CODEC_CHECKED = ["sqlite", "duckdb", "postgres"]
 
 # The backends that have a read-only mode, which rejects the writes.
 READ_ONLY = ["sqlite", "duckdb", "lmdb"]
@@ -167,10 +193,19 @@ REJECTED_KEYS: dict[str, list[str]] = {
     "file": ["a" * 251, "A" * 84, "x" * 2000, SURROGATE_KEY],
     "lmdb": ["", "x" * 512, "é" * 256, "x" * 2000, SURROGATE_KEY],
     "redis": [SURROGATE_KEY],
+    # A NUL character, and more than 2692 bytes in UTF-8, whether the key
+    # can be compressed or not.
+    "postgres": [
+        "a" + chr(0) + "b",
+        SURROGATE_KEY,
+        "x" * 2693,
+        "é" * 1347,
+        "".join(hashlib.sha256(str(i).encode()).hexdigest() for i in range(160)),
+    ],
 }
 
 # The backends that apply the filters in SQL with a JSON codec.
-SQL_BACKENDS = ["sqlite", "sqlite_memory", "duckdb", "duckdb_memory"]
+SQL_BACKENDS = ["sqlite", "sqlite_memory", "duckdb", "duckdb_memory", "postgres"]
 
 
 def backend_params(names: list[str]) -> list[Any]:
@@ -187,6 +222,14 @@ def _redis_cleanup() -> Generator[None, None, None]:
     r"""Remove the data of the Redis stores once the tests have run."""
     yield
     delete_namespaces(REDIS_PREFIX)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _postgres_cleanup() -> Generator[None, None, None]:
+    r"""Remove the tables of the PostgreSQL stores once the tests have
+    run."""
+    yield
+    drop_tables(POSTGRES_PREFIX)
 
 
 @pytest.fixture(params=list(CODECS))
@@ -330,7 +373,7 @@ def test_rejected_key_raises_and_changes_nothing(
 ) -> None:
     with BACKENDS[backend](JsonCodec(), tmp_path) as store:
         store.set("a", {"v": 1})
-        with pytest.raises(ValueError, match=r"FileStore|LmdbStore|RedisStore"):
+        with pytest.raises(ValueError, match=r"FileStore|LmdbStore|RedisStore|PostgresStore"):
             operation(store, key)
         assert dict(next(store.iter_batches())) == {"a": {"v": 1}}
 
@@ -342,7 +385,7 @@ async def test_rejected_key_raises_and_changes_nothing_async(
 ) -> None:
     async with BACKENDS[backend](JsonCodec(), tmp_path) as store:
         await store.aset("a", {"v": 1})
-        with pytest.raises(ValueError, match=r"FileStore|LmdbStore|RedisStore"):
+        with pytest.raises(ValueError, match=r"FileStore|LmdbStore|RedisStore|PostgresStore"):
             await operation(store, key)
         assert await store.afilter() == [{"v": 1}]
 
@@ -397,7 +440,26 @@ VALUES = [
     pytest.param({"none": None, "true": True, "int": 1, "float": 1.0, "str": "1"}, id="scalars"),
     pytest.param({"point": (1, 2), "nested": [{"a": ()}]}, id="tuples"),
     pytest.param({"big": 2**80, "é": "🎉", "": [[]]}, id="other"),
+    pytest.param({"large": 1e22, "negative": -1.5e300, "small": 1e-7}, id="floats"),
 ]
+
+
+def typed(value: Any) -> str:
+    r"""Return the ``repr`` of a value with the keys of its dicts sorted.
+
+    It also compares the types (``1``, ``1.0`` and ``True``, or
+    ``tuple`` and ``list``), but not the order of the keys, which a
+    ``JSONB`` column does not keep.
+    """
+
+    def order(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {key: order(item[key]) for key in sorted(item, key=repr)}
+        if isinstance(item, (list, tuple)):
+            return type(item)(map(order, item))
+        return item
+
+    return repr(order(value))
 
 
 @pytest.mark.parametrize("value", VALUES)
@@ -415,8 +477,7 @@ def test_read_returns_codec_round_trip(
     store: BaseStore, codec: Codec, value: dict, read: Callable[[BaseStore], dict]
 ) -> None:
     store.set("a", value)
-    # repr also compares the types: 1, 1.0 and True, or tuple and list.
-    assert repr(read(store)) == repr(codec.decode(codec.encode(value)))
+    assert typed(read(store)) == typed(codec.decode(codec.encode(value)))
 
 
 @pytest.mark.parametrize("value", VALUES)
@@ -430,7 +491,7 @@ async def test_async_read_returns_codec_round_trip(
         *await store.afilter(),
         *await collect(store.avalues()),
     ]
-    assert repr(results) == repr([codec.decode(codec.encode(value))] * 4)
+    assert typed(results) == typed([codec.decode(codec.encode(value))] * 4)
 
 
 def test_pickle_codec_keeps_what_json_cannot_represent(tmp_path: Path) -> None:
@@ -673,6 +734,8 @@ def uri_options(store: BaseStore) -> dict[str, Any]:
     does not describe, and that ``from_uri`` needs to read its data."""
     if isinstance(store, RedisStore):
         return {"codec": store._codec, "namespace": store.namespace}
+    if isinstance(store, PostgresStore):
+        return {"codec": store._codec, "table": store._table}
     return {}
 
 
