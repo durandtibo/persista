@@ -143,6 +143,47 @@ def test_check_table_layout_error_message() -> None:
         check_table_layout(COLUMNS, codec=PickleCodec(), key_type="TEXT", database="db")
 
 
+def test_check_table_layout_error_message_names_the_table() -> None:
+    with pytest.raises(ValueError, match=r"The table 'documents' of 'db' does not match"):
+        check_table_layout([], codec=JsonCodec(), key_type="TEXT", database="db", table="documents")
+
+
+@pytest.mark.parametrize(
+    ("codec", "value_type"), [(JsonCodec(), "JSONB"), (PickleCodec(), "BYTEA")]
+)
+def test_check_table_layout_column_types(codec: Codec, value_type: str) -> None:
+    columns = [("key", "text", True), ("value", value_type.lower(), False)]
+    check_table_layout(
+        columns,
+        codec=codec,
+        key_type="TEXT",
+        database="db",
+        column_types={"json": "JSONB", "pickle": "BYTEA"},
+    )
+
+
+def test_check_table_layout_column_types_mismatch() -> None:
+    with pytest.raises(ValueError, match=r"expected the columns .*value JSONB"):
+        check_table_layout(
+            COLUMNS,
+            codec=JsonCodec(),
+            key_type="TEXT",
+            database="db",
+            column_types={"json": "JSONB"},
+        )
+
+
+def test_check_table_layout_column_types_unsupported_codec() -> None:
+    with pytest.raises(ValueError, match=r"A SQL store needs a codec"):
+        check_table_layout(
+            COLUMNS,
+            codec=OtherCodec(),
+            key_type="TEXT",
+            database="db",
+            column_types={"yaml": "JSON"},
+        )
+
+
 def test_check_table_layout_does_not_modify_columns() -> None:
     columns = COLUMNS[::-1]
     check_table_layout(columns, codec=JsonCodec(), key_type="TEXT", database="db")
@@ -158,6 +199,13 @@ def test_build_where() -> None:
     assert build_where({"a": 1, "b": None, "c": "x"}, str.upper) == (
         "A = ? AND B IS NULL AND C = ?",
         [1, "x"],
+    )
+
+
+def test_build_where_placeholder() -> None:
+    assert build_where({"a": 1, "b": None}, str.upper, placeholder="%s::text") == (
+        "A = %s::text AND B IS NULL",
+        [1],
     )
 
 

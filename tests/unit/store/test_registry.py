@@ -99,8 +99,14 @@ def test_register_scheme_overrides_existing() -> None:
 
 
 def test_store_from_uri_unknown_scheme_raises() -> None:
-    with pytest.raises(ValueError, match="No store registered"):
+    with pytest.raises(ValueError, match=r"No store registered for scheme 'bogus'"):
         store_from_uri("bogus://x")
+
+
+def test_store_from_uri_unknown_scheme_hides_the_password() -> None:
+    with pytest.raises(ValueError, match=r"No store registered") as info:
+        store_from_uri("postgresx://user:s3cret@localhost/db")
+    assert "s3cret" not in str(info.value)
 
 
 @pytest.mark.parametrize("scheme", ["sqlite+typed", "duckdb+typed"])

@@ -157,6 +157,24 @@ class NativeAsyncStore(DictStore):
         self.record("aclose")
 
 
+class GuardedStore(DictStore):
+    r"""Refuse to be closed while ``busy`` is set."""
+
+    busy = True
+
+    def _check_close(self) -> None:
+        self.record("check_close")
+        if self.busy:
+            msg = "still busy"
+            raise RuntimeError(msg)
+
+
+class CloseInLoopStore(DictStore):
+    r"""Close the store in the event loop."""
+
+    _close_in_event_loop = True
+
+
 class KeysOnlyStore(DictStore):
     r"""List the keys without reading the values."""
 
@@ -511,6 +529,67 @@ class FakeExecutor:
 
     def shutdown(self, wait: bool = True) -> None:
         self.shutdowns.append(wait)
+
+
+# --- _check_close ---
+
+
+def test_base_store_check_close_default(store: DictStore) -> None:
+    store._check_close()
+    assert not store.closed
+
+
+def test_base_store_close_checks_before_it_closes() -> None:
+    store = GuardedStore()
+    store.busy = False
+    with store:
+        store.calls.clear()
+    assert store.calls == [("check_close",), ("close",)]
+
+
+def test_base_store_close_check_failure_stays_open() -> None:
+    store = GuardedStore()
+    store.open()
+    store.calls.clear()
+    with pytest.raises(RuntimeError, match=r"still busy"):
+        store.close()
+    assert (store.closed, store.calls) == (False, [("check_close",)])
+
+
+def test_base_store_close_closed_store_does_not_check() -> None:
+    store = GuardedStore()
+    store.close()
+    assert store.calls == []
+
+
+def test_base_store_open_failure_does_not_check_close() -> None:
+    class FailingGuardedStore(GuardedStore):
+        def _open(self) -> None:
+            msg = "cannot connect"
+            raise ConnectionError(msg)
+
+    store = FailingGuardedStore()
+    with pytest.raises(ConnectionError, match=r"cannot connect"):
+        store.open()
+    assert store.calls == [("close",)]
+
+
+async def test_base_store_aclose_runs_close_in_worker_thread() -> None:
+    store = DictStore()
+    await store.aopen()
+    await store.aclose()
+    assert store.threads[-1].startswith("persista-DictStore")
+
+
+async def test_base_store_aclose_in_event_loop() -> None:
+    store = CloseInLoopStore()
+    await store.aopen()
+    await store.aclose()
+    assert (store.closed, store.threads[-1], store._executor) == (
+        True,
+        threading.current_thread().name,
+        None,
+    )
 
 
 # --- context managers ---

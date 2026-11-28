@@ -1,342 +1,151 @@
+r"""Unit tests of :class:`~persista.store.PostgresStore`.
+
+They replace the connections by mocks, so they check what the store asks
+the database to do. What a real server does with it is tested in
+``tests/integration/store/``.
+"""
+
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
-import re
-from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from persista.store import PostgresStore
+from persista.store import JsonCodec, PickleCodec, PostgresStore
+from persista.store.plan import build_plan
+from persista.store.postgres import (
+    _JSON_STRING_OR_LARGE_NUMBER,
+    MAX_KEY_BYTES,
+    _AsyncConnection,
+    _check_conninfo,
+    _check_keys,
+    _conninfo_to_uri,
+    _expand_number,
+    _parse_location,
+    _pipeline,
+    _redact_conninfo,
+    _to_jsonb,
+)
+from persista.testing.fixtures import psycopg_available, psycopg_not_available
 from persista.utils.imports import is_psycopg_available
 
-if TYPE_CHECKING:
-    from typing import Self
-
-    from persista.store import BasePostgresStore
-
-
 if is_psycopg_available():
-    from psycopg.types.json import Jsonb
+    import psycopg
 
-psycopg = pytest.importorskip("psycopg")
-
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from collections.abc import Callable, Generator
 
 MODULE = "persista.store.postgres"
 
+URL = "postgresql://localhost:5432/db"
 
-# ---------------------------------------------------------------------------
-# Fake psycopg connection
-#
-# Unlike SQLiteStore (":memory:") or RedisStore (fakeredis), there is no
-# lightweight in-process stand-in for a real Postgres server. This fake
-# mimics just enough of psycopg's connection/cursor protocol -- and the
-# handful of SQL shapes BasePostgresStore/PostgresStore
-# actually generate -- to exercise real store behavior end-to-end without a
-# live server, the same role fakeredis plays for RedisStore. Real server
-# behavior (actual SQL execution, encoding, transactions) is covered
-# separately in tests/integration/store/test_postgres.py.
-# ---------------------------------------------------------------------------
+SURROGATE = chr(0xD800)
+NUL = chr(0)
+BACKSLASH = chr(92)
+# How a JSON document writes a NUL character in a string.
+NUL_ESCAPE = BACKSLASH + "u0000"
 
+HIDDEN = "<hidden PostgreSQL conninfo>"
 
-def _sql_text(query: Any) -> str:
-    text = query.as_string(None) if hasattr(query, "as_string") else str(query)
-    return " ".join(text.split())
+JSON_COLUMNS = [("key", "text", True), ("value", "jsonb", False)]
+PICKLE_COLUMNS = [("key", "text", True), ("value", "bytea", False)]
 
+SPACE = 0x70657273
 
-def _unwrap(value: Any) -> Any:
-    return value.obj if isinstance(value, Jsonb) else value
+# Every primitive that takes keys.
+KEY_PRIMITIVES = [
+    pytest.param(lambda s, k: s._get_many(["a", k]), id="get_many"),
+    pytest.param(lambda s, k: s._contains_many(["a", k]), id="contains_many"),
+    pytest.param(lambda s, k: s._put_many({"a": "{}", k: "{}"}), id="put_many"),
+    pytest.param(lambda s, k: s._update(["a", k], MagicMock()), id="update"),
+    pytest.param(lambda s, k: s._delete_many(["a", k]), id="delete_many"),
+]
 
-
-_CREATE_RE = re.compile(r'^CREATE TABLE IF NOT EXISTS "(\w+)"')
-_INSERT_RE = re.compile(r'^INSERT INTO "(\w+)"')
-_DELETE_ANY_RE = re.compile(r'^DELETE FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
-_DELETE_ONE_RE = re.compile(r'^DELETE FROM "(\w+)" WHERE "[^"]+" = %s$')
-_DELETE_ALL_RE = re.compile(r'^DELETE FROM "(\w+)"$')
-_COUNT_RE = re.compile(r'^SELECT COUNT\(\*\) FROM "(\w+)"$')
-_EXISTS_RE = re.compile(r'^SELECT 1 FROM "(\w+)" WHERE "([^"]+)" = %s LIMIT 1$')
-_COL_ANY_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)" WHERE "[^"]+" = ANY\(%s\)$')
-_COL_ALL_RE = re.compile(r'^SELECT "([^"]+)" FROM "(\w+)"$')
-_STAR_RE = re.compile(r'^SELECT \* FROM "(\w+)"(?: WHERE (.+))?$')
-_TEXT_COND_RE = re.compile(r"^value->>'([^']+)' = %s::text$")
-_COL_COND_RE = re.compile(r'^"([^"]+)" = %s$')
-_ADVISORY_LOCK_RE = re.compile(
-    r"^SELECT pg_advisory_xact_lock\(hashtextextended\(k, 0\)\) "
-    r"FROM unnest\(%s::text\[\]\) AS k ORDER BY k$"
-)
+ASYNC_KEY_PRIMITIVES = [
+    pytest.param(lambda s, k: s._aget_many(["a", k]), id="aget_many"),
+    pytest.param(lambda s, k: s._acontains_many(["a", k]), id="acontains_many"),
+    pytest.param(lambda s, k: s._aput_many({"a": "{}", k: "{}"}), id="aput_many"),
+    pytest.param(lambda s, k: s._aupdate(["a", k], MagicMock()), id="aupdate"),
+    pytest.param(lambda s, k: s._adelete_many(["a", k]), id="adelete_many"),
+]
 
 
-class FakeCursor:
-    def __init__(self, conn: FakeConnection) -> None:
-        self.conn = conn
-        self.itersize = 32
-        self._rows: list[tuple[Any, ...]] = []
-
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        return None
-
-    def __iter__(self) -> Iterator[tuple[Any, ...]]:
-        return iter(self._rows)
-
-    def execute(self, query: Any, params: Any = None) -> FakeCursor:
-        self._rows = self.conn.dispatch_read(_sql_text(query), params or ())
-        return self
-
-    def executemany(self, query: Any, seq: Any) -> None:
-        text = _sql_text(query)
-        for row in seq:
-            self.conn.dispatch_insert(text, row)
-
-    def fetchall(self) -> list[tuple[Any, ...]]:
-        return list(self._rows)
-
-    def fetchone(self) -> tuple[Any, ...] | None:
-        return self._rows[0] if self._rows else None
+def text(query: Any) -> str:
+    r"""Return the SQL of a query."""
+    return query if isinstance(query, str) else query.as_string(None)
 
 
-class FakeConnection:
-    def __init__(self) -> None:
-        self.tables: dict[str, dict[str, tuple[Any, ...]]] = {}
-        # Wired up by `_connect()` right after the store is constructed, so
-        # filter-condition evaluation can reuse the store's own
-        # `_row_to_value` and key column.
-        self.store: BasePostgresStore | None = None
-        self.closed = False
-        # Keys advisory-locked via pg_advisory_xact_lock, in call order;
-        # lets tests assert set_many/aset_many take the per-key lock before
-        # resolving on_conflict.
-        self.advisory_locked_keys: list[str] = []
-
-    def cursor(self, name: str | None = None) -> FakeCursor:  # noqa: ARG002
-        return FakeCursor(self)
-
-    def execute(self, query: Any, params: Any = None) -> None:
-        self.dispatch_write(_sql_text(query), params or ())
-
-    def close(self) -> None:
-        self.closed = True
-
-    def transaction(self) -> contextlib.AbstractContextManager[None]:
-        return contextlib.nullcontext()
-
-    # -- dispatch --
-
-    def dispatch_write(self, text: str, params: tuple[Any, ...]) -> None:
-        if m := _CREATE_RE.match(text):
-            self.tables.setdefault(m.group(1), {})
-            return
-        if m := _DELETE_ANY_RE.match(text):
-            table = self.tables.setdefault(m.group(1), {})
-            for key in params[0]:
-                table.pop(key, None)
-            return
-        if m := _DELETE_ONE_RE.match(text):
-            table = self.tables.setdefault(m.group(1), {})
-            table.pop(params[0], None)
-            return
-        if m := _DELETE_ALL_RE.match(text):
-            self.tables[m.group(1)] = {}
-            return
-        msg = f"Unsupported write query in FakeConnection: {text!r}"
-        raise AssertionError(msg)
-
-    def dispatch_insert(self, text: str, row: tuple[Any, ...]) -> None:
-        m = _INSERT_RE.match(text)
-        if not m:
-            msg = f"Unsupported insert query in FakeConnection: {text!r}"
-            raise AssertionError(msg)
-        table = self.tables.setdefault(m.group(1), {})
-        table[row[0]] = tuple(_unwrap(v) for v in row)
-
-    def dispatch_read(self, text: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
-        if _ADVISORY_LOCK_RE.match(text):
-            # No real locking needed against this single-threaded fake;
-            # just acknowledge the call the same way a real server would
-            # return one row per locked key, and record which keys were
-            # locked (params[0] is the sorted array of keys).
-            keys = list(params[0])
-            self.advisory_locked_keys.extend(keys)
-            return [(None,)] * len(keys)
-        if m := _COUNT_RE.match(text):
-            return [(len(self.tables.get(m.group(1), {})),)]
-        if m := _EXISTS_RE.match(text):
-            table = self.tables.get(m.group(1), {})
-            return [(1,)] if params[0] in table else []
-        return self._dispatch_select(text, params)
-
-    def _dispatch_select(self, text: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
-        if m := _COL_ANY_RE.match(text):
-            table = self.tables.get(m.group(2), {})
-            return [(key,) for key in params[0] if key in table]
-        if m := _COL_ALL_RE.match(text):
-            table = self.tables.get(m.group(2), {})
-            return [(key,) for key in table]
-        if m := _STAR_RE.match(text):
-            table = self.tables.get(m.group(1), {})
-            where = m.group(2)
-            if where is None:
-                return list(table.values())
-            assert self.store is not None
-            key_col = self.store._key_column
-            single_col_match = _COL_COND_RE.match(where)
-            if single_col_match and single_col_match.group(1) == key_col:
-                row = table.get(params[0])
-                return [row] if row is not None else []
-            if re.match(rf'^"{re.escape(key_col)}" = ANY\(%s\)$', where):
-                return [table[key] for key in params[0] if key in table]
-            return self._filter(table, where, params)
-        msg = f"Unsupported read query in FakeConnection: {text!r}"
-        raise AssertionError(msg)
-
-    def _filter(
-        self, table: dict[str, tuple[Any, ...]], where: str, params: tuple[Any, ...]
-    ) -> list[tuple[Any, ...]]:
-        fields: list[str] = []
-        for cond in (c.strip() for c in where.split(" AND ")):
-            m = _TEXT_COND_RE.match(cond)
-            if not m:
-                msg = f"Unsupported filter condition in FakeConnection: {cond!r}"
-                raise AssertionError(msg)
-            fields.append(m.group(1))
-        assert self.store is not None
-        matches = []
-        for row in table.values():
-            value = self.store._row_to_value(row)
-            if all(
-                str(value.get(field)) == str(param)
-                for field, param in zip(fields, params, strict=True)
-            ):
-                matches.append(row)
-        return matches
+def cursor(rows: list[Any]) -> MagicMock:
+    r"""Return a cursor that reads some rows."""
+    result = MagicMock()
+    result.fetchall.return_value = rows
+    return result
 
 
-def _connect(
-    store_cls: type[BasePostgresStore],
-    table: str = "store",
-    conninfo: str = "postgresql://x",
-    from_uri: bool = False,
-    **kwargs: Any,
-) -> Any:
-    """Construct a store against a fresh :class:`FakeConnection`.
-
-    Also pre-populates the store's lazy async connection slot with an
-    :class:`_AsyncConnAdapter` wrapping the *same* fake connection (and
-    therefore the same in-memory tables), so ``store._ensure_aconn()``
-    returns it immediately without ever calling the real
-    ``psycopg.AsyncConnection.connect`` -- sync and async operations
-    against the returned store share one consistent view of the data,
-    mirroring how a real Postgres server would behave.
-
-    Pass ``from_uri=True`` to construct via ``store_cls.from_uri(conninfo,
-    **kwargs)`` instead of ``store_cls(conninfo, table=table, **kwargs)``.
-    """
-    conn = FakeConnection()
-    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
-        if from_uri:
-            store = store_cls.from_uri(conninfo, **kwargs)
-        else:
-            store = store_cls(conninfo, table=table, **kwargs)
-        conn.store = store
-        store.open()
-    store._aconn = _AsyncConnAdapter(conn)
-    return store
+def acursor(rows: list[Any]) -> MagicMock:
+    r"""Return an async cursor that reads some rows."""
+    result = MagicMock()
+    result.fetchall = AsyncMock(return_value=rows)
+    return result
 
 
-# ---------------------------------------------------------------------------
-# Async adapter over FakeConnection
-#
-# BasePostgresStore's async methods go through psycopg.AsyncConnection, not
-# psycopg.Connection. Rather than duplicate FakeConnection's dispatch logic
-# for a second, async-flavored fake, these adapters wrap the exact same
-# FakeConnection/FakeCursor instance with an async-compatible surface, so a
-# single store's sync and async operations observe the same table state.
-# ---------------------------------------------------------------------------
+def sync_connection(columns: list[Any] | None = None) -> MagicMock:
+    r"""Return a mock connection to a database that has the table."""
+    connection = MagicMock()
+    connection.execute.return_value = cursor(columns or JSON_COLUMNS)
+    return connection
 
 
-class _AsyncCursorAdapter:
-    def __init__(self, cursor: FakeCursor) -> None:
-        self._cursor = cursor
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        return None
-
-    def __aiter__(self) -> Any:
-        return _aiter(self._cursor._rows)
-
-    async def execute(self, query: Any, params: Any = None) -> _AsyncCursorAdapter:
-        self._cursor.execute(query, params)
-        return self
-
-    async def executemany(self, query: Any, seq: Any) -> None:
-        self._cursor.executemany(query, seq)
-
-    async def fetchall(self) -> list[tuple[Any, ...]]:
-        return self._cursor.fetchall()
-
-    async def fetchone(self) -> tuple[Any, ...] | None:
-        return self._cursor.fetchone()
-
-    @property
-    def itersize(self) -> int:
-        return self._cursor.itersize
-
-    @itersize.setter
-    def itersize(self, value: int) -> None:
-        self._cursor.itersize = value
+def async_connection() -> MagicMock:
+    r"""Return a mock async connection, which is idle."""
+    connection = MagicMock()
+    connection.closed = False
+    connection.info.transaction_status = psycopg.pq.TransactionStatus.IDLE
+    connection.execute = AsyncMock(return_value=acursor([]))
+    connection.close = AsyncMock()
+    connection.set_isolation_level = AsyncMock()
+    return connection
 
 
-async def _aiter(rows: list[tuple[Any, ...]]) -> Any:
-    for row in rows:
-        yield row
-
-
-class _AsyncNullContext:
-    async def __aenter__(self) -> None:
-        return None
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        return None
-
-
-class _AsyncConnAdapter:
-    def __init__(self, conn: FakeConnection) -> None:
-        self._conn = conn
-
-    def cursor(self, name: str | None = None) -> _AsyncCursorAdapter:
-        return _AsyncCursorAdapter(self._conn.cursor(name))
-
-    async def execute(self, query: Any, params: Any = None) -> None:
-        self._conn.execute(query, params)
-
-    async def close(self) -> None:
-        self._conn.close()
-
-    def transaction(self) -> _AsyncNullContext:
-        return _AsyncNullContext()
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+def statements(connection: MagicMock) -> list[str]:
+    r"""Return the SQL of the statements run on a mock connection."""
+    return [text(call.args[0]) for call in connection.execute.call_args_list]
 
 
 @pytest.fixture
-def store_cls() -> type[BasePostgresStore]:
-    return PostgresStore
+def connection(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    r"""Replace the sync connection by a mock, and return it."""
+    connection = sync_connection()
+    monkeypatch.setattr(f"{MODULE}.psycopg.connect", MagicMock(return_value=connection))
+    return connection
 
 
 @pytest.fixture
-def store(store_cls: type[BasePostgresStore]) -> BasePostgresStore:
-    return _connect(store_cls)
+def aconnection(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    r"""Replace the async connections by one mock, and return it."""
+    connection = async_connection()
+    monkeypatch.setattr(
+        f"{MODULE}.psycopg.AsyncConnection.connect", AsyncMock(return_value=connection)
+    )
+    return connection
+
+
+@pytest.fixture
+def store(connection: MagicMock) -> Generator[PostgresStore, None, None]:
+    with PostgresStore(URL) as store:
+        connection.reset_mock()
+        yield store
+
+
+@pytest.fixture
+async def astore(store: PostgresStore, aconnection: MagicMock) -> Any:
+    del aconnection  # The store connects to the mock.
+    yield store
+    await store._aclose()
 
 
 ###################################
@@ -347,1768 +156,1264 @@ def store(store_cls: type[BasePostgresStore]) -> BasePostgresStore:
 # --- constructor ---
 
 
-def test_invalid_table_name_raises_before_connect(store_cls: type[BasePostgresStore]) -> None:
-    with patch(f"{MODULE}.psycopg.connect") as mock_connect:
-        with pytest.raises(ValueError, match="Invalid table name"):
-            store_cls("postgresql://x", table="bad; DROP TABLE store;--")
-        mock_connect.assert_not_called()
+@psycopg_not_available
+def test_init_without_psycopg() -> None:
+    with pytest.raises(RuntimeError, match=r"'psycopg' package is required"):
+        PostgresStore(URL)
 
 
-def test_valid_table_name_does_not_connect_before_open(
-    store_cls: type[BasePostgresStore],
-) -> None:
-    with patch(f"{MODULE}.psycopg.connect") as mock_connect:
-        mock_connect.return_value = MagicMock()
-        store_cls("postgresql://x", table="mytable")
-        mock_connect.assert_not_called()
+@psycopg_available
+def test_init_does_not_connect(monkeypatch: pytest.MonkeyPatch) -> None:
+    connect = MagicMock()
+    monkeypatch.setattr(f"{MODULE}.psycopg.connect", connect)
+    assert (PostgresStore(URL).closed, connect.call_count) == (True, 0)
 
 
-def test_opening_valid_table_name_calls_connect(store_cls: type[BasePostgresStore]) -> None:
-    with patch(f"{MODULE}.psycopg.connect") as mock_connect:
-        mock_connect.return_value = MagicMock()
-        store = store_cls("postgresql://x", table="mytable")
-        store.open()
-        mock_connect.assert_called_once()
-        assert mock_connect.call_args.args == ("postgresql://x",)
-        assert mock_connect.call_args.kwargs["autocommit"] is True
+@psycopg_available
+def test_init_default_codec() -> None:
+    assert isinstance(PostgresStore(URL)._codec, JsonCodec)
 
 
-def test_init_creates_table(store: BasePostgresStore) -> None:
-    assert store.count() == 0
+@psycopg_available
+@pytest.mark.parametrize("table", ["", "1a", "a-b", 'a"b', "a; DROP TABLE b"])
+def test_init_invalid_table_name(table: str) -> None:
+    with pytest.raises(ValueError, match=r"Invalid table name"):
+        PostgresStore(URL, table=table)
 
 
-def test_init_accepts_psycopg_connect_kwargs(store_cls: type[BasePostgresStore]) -> None:
-    store = _connect(store_cls, connect_timeout=5)
-    assert store.count() == 0
+@psycopg_available
+def test_init_longest_table_name() -> None:
+    assert PostgresStore(URL, table="a" * 63)._table == "a" * 63
 
 
-def test_two_stores_different_tables_are_isolated(store_cls: type[BasePostgresStore]) -> None:
-    conn = FakeConnection()
-    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
-        store_a = store_cls("postgresql://x", table="store_a")
-        store_b = store_cls("postgresql://x", table="store_b")
-        conn.store = store_a
-        store_a.open()
-        store_b.open()
-    store_a.set("1", {"text": "a"})
-    assert store_b.get("1") is None
-    assert store_b.count() == 0
+@psycopg_available
+def test_init_too_long_table_name() -> None:
+    with pytest.raises(ValueError, match=r"at most 63 characters"):
+        PostgresStore(URL, table="a" * 64)
 
 
-# --- to_uri/from_uri ---
+@psycopg_available
+def test_init_unsupported_codec() -> None:
+    codec = MagicMock()
+    codec.name = "yaml"
+    with pytest.raises(ValueError, match=r"A SQL store needs a codec named"):
+        PostgresStore(URL, codec=codec)
 
 
-def test_to_uri_returns_conninfo_unchanged(store: BasePostgresStore) -> None:
-    assert store.to_uri() == store._conninfo
-
-
-def test_to_uri_converts_keyword_dsn_to_uri(store_cls: type[BasePostgresStore]) -> None:
-    """Regression test: a store constructed from a keyword/value DSN
-    (not a postgresql:// URI) must still produce a URI from to_uri(), so
-    registry.store_from_uri can dispatch on its scheme."""
-    store = _connect(store_cls, conninfo="dbname=foo host=bar user=baz password=qux port=5433")
-
-    uri = store.to_uri()
-
-    assert uri.startswith("postgresql://baz:qux@bar:5433/foo")
-
-
-def test_to_uri_converts_keyword_dsn_without_user_to_uri(
-    store_cls: type[BasePostgresStore],
-) -> None:
-    """Regression test: a keyword/value DSN with no user (e.g. relying
-    on peer/trust auth) must not raise or otherwise fail to build a
-    URI."""
-    store = _connect(store_cls, conninfo="dbname=foo host=bar")
-
-    uri = store.to_uri()
-
-    assert uri.startswith("postgresql://bar/foo")
-
-
-def test_from_uri_constructs_with_same_conninfo(store_cls: type[BasePostgresStore]) -> None:
-    conninfo = "postgresql://user:pass@localhost/dbname"
-    new_store = _connect(store_cls, conninfo=conninfo, from_uri=True)
-    assert new_store._conninfo == conninfo
-    new_store.set("1", {"text": "a"})
-    assert new_store.get("1") == {"text": "a"}
-
-
-def test_from_uri_ignores_read_only(store_cls: type[BasePostgresStore]) -> None:
-    conninfo = "postgresql://user:pass@localhost/dbname"
-    new_store = _connect(store_cls, conninfo=conninfo, from_uri=True, read_only=True)
-    assert new_store._conninfo == conninfo
-    new_store.set("1", {"text": "a"})
-    assert new_store.get("1") == {"text": "a"}
-
-
-# --- repr/str ---
-
-
-def test_repr(store: BasePostgresStore) -> None:
-    assert repr(store).startswith(f"{type(store).__name__}(")
-
-
-def test_str(store: BasePostgresStore) -> None:
-    assert str(store).startswith(f"{type(store).__name__}(")
-
-
-def test_repr_after_close_does_not_raise(store: BasePostgresStore) -> None:
-    store.close()
-    assert repr(store).startswith(f"{type(store).__name__}(")
-
-
-# --- set ---
-
-
-def test_set_increases_count(store: BasePostgresStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.count() == 1
-
-
-def test_set_stores_value(store: BasePostgresStore) -> None:
-    store.set("1", {"text": "hello"})
-    assert store.get("1") == {"text": "hello"}
-
-
-def test_set_default_overwrites_existing(store: BasePostgresStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"})
-    assert store.count() == 1
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_on_conflict_raise(store: BasePostgresStore) -> None:
-    store.set("1", {"text": "original"})
-    with pytest.raises(KeyError, match=r"1"):
-        store.set("1", {"text": "updated"}, on_conflict="raise")
-    assert store.get("1") == {"text": "original"}
-
-
-def test_set_on_conflict_skip(store: BasePostgresStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"}, on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-
-
-def test_set_on_conflict_overwrite(store: BasePostgresStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set("1", {"text": "updated"}, on_conflict="overwrite")
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_on_conflict_merge(store: BasePostgresStore) -> None:
-    store.set("1", {"text": "original", "author": "Alice"})
-    store.set("1", {"text": "updated"}, on_conflict="merge")
-    assert store.get("1") == {"text": "updated", "author": "Alice"}
-
-
-def test_set_on_conflict_new_key_is_unaffected(store: BasePostgresStore) -> None:
-    store.set("1", {"text": "hello"}, on_conflict="raise")
-    assert store.get("1") == {"text": "hello"}
-
-
-def test_set_on_conflict_invalid_raises(store: BasePostgresStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        store.set("1", {"text": "hello"}, on_conflict="bogus")
-
-
-# --- set_many ---
-
-
-def test_set_many_increases_count(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.count() == len(items)
-
-
-def test_set_many_empty_is_no_op(store: BasePostgresStore) -> None:
-    store.set_many({})
-    assert store.count() == 0
-
-
-def test_set_many_default_overwrites_existing(store: BasePostgresStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}})
-    assert store.count() == 1
-    assert store.get("1") == {"text": "updated"}
-
-
-def test_set_many_on_conflict_raise(store: BasePostgresStore) -> None:
-    store.set_many({"1": {"text": "original"}, "2": {"text": "other"}})
-    with pytest.raises(KeyError, match=r"1"):
-        store.set_many({"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("3") is None
-
-
-def test_set_many_on_conflict_skip(store: BasePostgresStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "new"}
-
-
-def test_set_many_on_conflict_overwrite(store: BasePostgresStore) -> None:
-    store.set_many({"1": {"text": "original"}})
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="overwrite")
-    assert store.get("1") == {"text": "updated"}
-    assert store.get("2") == {"text": "new"}
-
-
-def test_set_many_on_conflict_merge(store: BasePostgresStore) -> None:
-    store.set_many({"1": {"text": "original", "author": "Alice"}})
-    store.set_many({"1": {"text": "updated"}}, on_conflict="merge")
-    assert store.get("1") == {"text": "updated", "author": "Alice"}
-
-
-def test_set_many_on_conflict_takes_advisory_lock_per_key(store: BasePostgresStore) -> None:
-    """set_many with on_conflict != "overwrite" must take a Postgres
-    advisory lock per key before resolving conflicts, so concurrent
-    writers to the same keys serialize instead of racing between the
-    conflict check and the write."""
-    store.set_many({"1": {"text": "original"}})
-    conn = store._conn
-    conn.advisory_locked_keys.clear()
-    store.set_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-    assert set(conn.advisory_locked_keys) == {"1", "2"}
-
-
-def test_set_many_on_conflict_locks_keys_in_sorted_order(store: BasePostgresStore) -> None:
-    """Keys must be advisory-locked in a canonical (sorted) order,
-    regardless of the input dict's iteration order, so two concurrent
-    set_many() calls touching overlapping keys can't lock them in
-    reversed orders and trigger Postgres's deadlock detector."""
-    conn = store._conn
-    conn.advisory_locked_keys.clear()
-    store.set_many({"3": {"x": 1}, "1": {"x": 2}, "2": {"x": 3}}, on_conflict="skip")
-    assert conn.advisory_locked_keys == ["1", "2", "3"]
-
-
-def test_set_many_on_conflict_takes_advisory_lock_in_single_round_trip(
-    store: BasePostgresStore,
-) -> None:
-    """Locking must be a single batched query, not one round trip per
-    key, to avoid an N+1 pattern for large set_many() calls."""
-    conn = store._conn
-    calls = []
-    original_dispatch_read = conn.dispatch_read
-
-    def counting_dispatch_read(text: str, params: tuple) -> list[tuple]:
-        if _ADVISORY_LOCK_RE.match(text):
-            calls.append(text)
-        return original_dispatch_read(text, params)
-
-    conn.dispatch_read = counting_dispatch_read
-    store.set_many({"1": {"x": 1}, "2": {"x": 2}, "3": {"x": 3}}, on_conflict="skip")
-    assert len(calls) == 1
-
-
-def test_set_many_on_conflict_overwrite_does_not_take_advisory_lock(
-    store: BasePostgresStore,
-) -> None:
-    conn = store._conn
-    conn.advisory_locked_keys.clear()
-    store.set_many({"1": {"text": "original"}}, on_conflict="overwrite")
-    assert conn.advisory_locked_keys == []
-
-
-def test_set_many_on_conflict_invalid_raises(store: BasePostgresStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        store.set_many({"1": {"text": "hello"}}, on_conflict="bogus")
-
-
-# --- set_batches ---
-
-
-def test_set_batches_empty_is_no_op(store: BasePostgresStore) -> None:
-    store.set_batches([])
-    assert store.count() == 0
-
-
-def test_set_batches_writes_all_pairs(store: BasePostgresStore) -> None:
-    store.set_batches([("1", {"v": 1}), ("2", {"v": 2}), ("3", {"v": 3})], batch_size=2)
-    assert store.count() == 3
-    assert store.get("2") == {"v": 2}
-
-
-def test_set_batches_consumes_a_generator(store: BasePostgresStore) -> None:
-    def gen() -> Iterator[tuple[str, dict[str, int]]]:
-        for i in range(5):
-            yield str(i), {"v": i}
-
-    store.set_batches(gen(), batch_size=2)
-    assert store.count() == 5
-
-
-def test_set_batches_on_conflict_skip(store: BasePostgresStore) -> None:
-    store.set("1", {"text": "original"})
-    store.set_batches([("1", {"text": "updated"}), ("2", {"text": "new"})], on_conflict="skip")
-    assert store.get("1") == {"text": "original"}
-    assert store.get("2") == {"text": "new"}
-
-
-# --- count ---
-
-
-def test_count_empty_store(store: BasePostgresStore) -> None:
-    assert store.count() == 0
-
-
-def test_count_after_set_many(store: BasePostgresStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.count() == len(items)
-
-
-# --- get ---
-
-
-def test_get_existing_value(store: BasePostgresStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.get("1") == items["1"]
-
-
-def test_get_missing_key_returns_none(store: BasePostgresStore) -> None:
-    assert store.get("nonexistent") is None
-
-
-# --- get_many ---
-
-
-def test_get_many_returns_correct_length(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert len(store.get_many(["1", "2", "99"])) == 3
-
-
-def test_get_many_returns_none_for_missing(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.get_many(["1", "99", "2"])
-    assert result[1] is None
-
-
-def test_get_many_preserves_order(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.get_many(["3", "1", "2"])
-    assert result == [items["3"], items["1"], items["2"]]
-
-
-def test_get_many_empty_list_returns_empty_list(store: BasePostgresStore) -> None:
-    assert store.get_many([]) == []
-
-
-def test_get_many_duplicate_keys_returns_value_for_each_occurrence(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.get_many(["1", "1"])
-    assert result == [items["1"], items["1"]]
-
-
-def test_get_propagates_connection_error(store: BasePostgresStore) -> None:
-    with (
-        patch.object(
-            store._conn, "cursor", side_effect=psycopg.OperationalError("connection lost")
-        ),
-        pytest.raises(psycopg.OperationalError, match="connection lost"),
-    ):
-        store.get("1")
-
-
-# --- filter ---
-
-
-def test_filter_no_args_returns_all(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert len(store.filter()) == len(items)
-
-
-def test_filter_single_field(store: BasePostgresStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
-    assert len(result) == 2
-
-
-def test_filter_multiple_fields(store: BasePostgresStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    result = store.filter(author="Alice", category="Programming")
-    assert len(result) == 2
-
-
-def test_filter_no_match_returns_empty(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter(author="Charlie") == []
-
-
-def test_filter_rejects_malicious_field_name(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    """A field name is interpolated into the SQL (only the value is
-    bound), so anything but a plain identifier must be rejected to
-    prevent SQL injection."""
-    store.set_many(items)
-    with pytest.raises(ValueError, match=r"Invalid filter field name"):
-        store.filter(**{"bad; DROP TABLE store;--": "x"})
-
-
-def test_filter_preserves_full_value(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.filter(author="Bob", category="History")
-    expected = [v for v in items.values() if v["author"] == "Bob"]
-    assert sorted(result, key=lambda v: v["title"]) == sorted(expected, key=lambda v: v["title"])
-
-
-def test_filter_empty_store_returns_empty(store: BasePostgresStore) -> None:
-    assert store.filter(author="Alice") == []
-
-
-def test_filter_integer_field_value(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.filter(year=2022)
-    assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
-
-
-def test_filter_integer_value_no_match_returns_empty(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter(year=9999) == []
-
-
-# --- filter_items ---
-
-
-def test_filter_items_no_args_returns_all(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter_items() == items
-
-
-def test_filter_items_single_field(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.filter_items(author="Alice")
-    assert result == {"1": items["1"], "2": items["2"]}
-
-
-def test_filter_items_no_match_returns_empty(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.filter_items(author="Charlie") == {}
-
-
-def test_filter_items_empty_store_returns_empty(store: BasePostgresStore) -> None:
-    assert store.filter_items(author="Alice") == {}
-
-
-def test_filter_matches_filter_items_keys(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert sorted(store.filter(author="Bob"), key=lambda v: v["title"]) == sorted(
-        store.filter_items(author="Bob").values(), key=lambda v: v["title"]
-    )
-
-
-# --- delete ---
-
-
-def test_delete_removes_value(store: BasePostgresStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete("1")
-    assert store.count() == len(items) - 1
-    assert store.get("1") is None
-
-
-def test_delete_nonexistent_is_silent(store: BasePostgresStore) -> None:
-    store.delete("nonexistent")
-
-
-# --- delete_many ---
-
-
-def test_delete_many_removes_values(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many(["1", "3"])
-    assert store.count() == len(items) - 2
-    assert store.get("1") is None
-    assert store.get("3") is None
-
-
-def test_delete_many_preserves_other_values(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many(["1", "3"])
-    assert store.get("2") is not None
-    assert store.get("4") is not None
-
-
-def test_delete_many_empty_list_is_no_op(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.delete_many([])
-    assert store.count() == len(items)
-
-
-def test_delete_many_nonexistent_keys_are_silent(store: BasePostgresStore) -> None:
-    store.delete_many(["99", "100"])
-
-
-def test_delete_many_single_key(store: BasePostgresStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    store.delete_many(["2"])
-    assert store.count() == len(items) - 1
-    assert store.get("2") is None
-
-
-# --- clear ---
-
-
-def test_clear_removes_all_values(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    store.clear()
-    assert store.count() == 0
-    assert list(store.keys()) == []
-
-
-def test_clear_empty_store_is_no_op(store: BasePostgresStore) -> None:
-    store.clear()
-    assert store.count() == 0
-
-
-def test_clear_returns_none(store: BasePostgresStore) -> None:
-    assert store.clear() is None
-
-
-def test_clear_then_set_works(store: BasePostgresStore) -> None:
-    store.set("1", {"text": "hello"})
-    store.clear()
-    store.set("2", {"text": "world"})
-    assert store.count() == 1
-    assert store.get("2") == {"text": "world"}
-
-
-# --- contains ---
-
-
-def test_contains_true_when_key_present(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.contains("1")
-
-
-def test_contains_false_when_key_missing(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert not store.contains("99")
-
-
-def test_contains_false_when_store_empty(store: BasePostgresStore) -> None:
-    assert not store.contains("1")
-
-
-# --- contains_many ---
-
-
-def test_contains_many_all_found(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.contains_many(["1", "2", "3", "4"]) == [True, True, True, True]
-
-
-def test_contains_many_all_missing(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    assert store.contains_many(["99", "100"]) == [False, False]
-
-
-def test_contains_many_mixed(store: BasePostgresStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert store.contains_many(["1", "99", "3", "42"]) == [True, False, True, False]
-
-
-def test_contains_many_empty_input_returns_empty_lists(store: BasePostgresStore) -> None:
-    assert store.contains_many([]) == []
-
-
-def test_contains_many_empty_store_returns_all_missing(store: BasePostgresStore) -> None:
-    assert store.contains_many(["1", "2"]) == [False, False]
-
-
-def test_contains_many_returns_list_of_bools(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = store.contains_many(["1", "99"])
-    assert isinstance(result, list)
-    assert all(isinstance(flag, bool) for flag in result)
-
-
-# --- keys ---
-
-
-def test_keys_empty_store_yields_nothing(store: BasePostgresStore) -> None:
-    assert list(store.keys()) == []
-
-
-def test_keys_returns_all_keys(store: BasePostgresStore, items: dict[str, dict[str, Any]]) -> None:
-    store.set_many(items)
-    assert sorted(store.keys()) == sorted(items.keys())
-
-
-# --- values ---
-
-
-def test_values_empty_store_yields_nothing(store: BasePostgresStore) -> None:
-    assert list(store.values()) == []
-
-
-def test_values_returns_all_values(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result = list(store.values())
-    assert len(result) == len(items)
-    assert {v["title"] for v in result} == {v["title"] for v in items.values()}
-
-
-def test_values_is_lazy_generator(store: BasePostgresStore) -> None:
-    assert isinstance(store.values(), Iterator)
-
-
-# --- iter_batches ---
-
-
-def test_iter_batches_empty_store_yields_nothing(store: BasePostgresStore) -> None:
-    assert list(store.iter_batches()) == []
-
-
-def test_iter_batches_returns_generator(store: BasePostgresStore) -> None:
-    assert isinstance(store.iter_batches(), Iterator)
-
-
-def test_iter_batches_default_batch_size(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches())
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-def test_iter_batches_yields_correct_batch_sizes(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=2))
-    assert sorted(len(b) for b in batches) == [2, 2]
-
-
-def test_iter_batches_last_batch_may_be_smaller(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=3))
-    assert sorted(len(b) for b in batches) == [1, 3]
-
-
-def test_iter_batches_batch_size_larger_than_store(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=100))
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-def test_iter_batches_batch_size_one(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=1))
-    assert sorted(len(b) for b in batches) == [1, 1, 1, 1]
-
-
-def test_iter_batches_returns_all_key_value_pairs(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    for batch in store.iter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
-
-
-def test_iter_batches_batches_are_dicts(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    batches = list(store.iter_batches(batch_size=2))
-    assert all(isinstance(batch, dict) for batch in batches)
-
-
-def test_iter_batches_zero_batch_size_raises(store: BasePostgresStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        list(store.iter_batches(batch_size=0))
-
-
-def test_iter_batches_negative_batch_size_raises(store: BasePostgresStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        list(store.iter_batches(batch_size=-1))
-
-
-def test_iter_batches_error_raised_before_any_query(store: BasePostgresStore) -> None:
-    gen = store.iter_batches(batch_size=0)
-    with pytest.raises(ValueError, match="batch_size"):
-        next(gen)
-
-
-def test_iter_batches_does_not_mutate_store(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    store.set_many(items)
-    list(store.iter_batches(batch_size=2))
-    assert store.count() == len(items)
-
-
-# --- close ---
-
-
-def test_close_closes_underlying_connection(store: BasePostgresStore) -> None:
-    store.close()
-    assert store._conn.closed
-
-
-def test_close_is_idempotent(store: BasePostgresStore) -> None:
-    store.close()
-    store.close()  # should not raise
-
-
-def test_get_before_open_raises(store_cls: type[BasePostgresStore]) -> None:
-    store = store_cls("postgresql://localhost/db", table="items")
-    with pytest.raises(RuntimeError, match="not open"):
-        store.get("1")
-
-
-def test_close_returns_none(store: BasePostgresStore) -> None:
-    assert store.close() is None
-
-
-async def test_close_from_running_event_loop_raises(store: BasePostgresStore) -> None:
-    assert store._aconn is not None
-    with pytest.raises(RuntimeError, match="inside a running event loop"):
-        store.close()
-
-
-def test_close_with_already_closed_event_loop_logs_and_clears_aconn(
-    store: BasePostgresStore,
-) -> None:
-    """If the event loop that owned the async connection is already
-    closed by the time ``close()`` runs synchronously,
-    ``asyncio.run(...)`` raises ``RuntimeError``; ``close()`` should
-    swallow it, log, and still clear ``_aconn``."""
-    store._aconn = MagicMock()
-    with patch(f"{MODULE}.asyncio.run", side_effect=RuntimeError("event loop is closed")):
-        store.close()
-    assert store._aconn is None
-    assert store.closed
-
-
-# --- closed ---
-
-
-def test_closed_false_before_close(store: BasePostgresStore) -> None:
-    assert not store.closed
-
-
-def test_closed_true_after_close(store: BasePostgresStore) -> None:
-    store.close()
-    assert store.closed
-
-
-def test_connection_raises_when_not_open(store_cls: type[BasePostgresStore]) -> None:
-    store = store_cls("postgresql://x", table="store")
-    with pytest.raises(RuntimeError, match="is not open"):
-        _ = store._connection
-
-
-# --- context manager ---
-
-
-def test_context_manager_returns_self(
-    store: BasePostgresStore, store_cls: type[BasePostgresStore]
-) -> None:
-    assert isinstance(store, store_cls)
-
-
-def test_context_manager_closes_on_normal_exit(store_cls: type[BasePostgresStore]) -> None:
-    with _connect(store_cls) as store:
-        store.set("1", {"text": "hello"})
-        assert store.count() == 1
-    assert store._conn.closed
-
-
-def test_context_manager_closes_on_exception(store_cls: type[BasePostgresStore]) -> None:
-    msg = "boom"
-    with pytest.raises(ValueError, match="boom"), _connect(store_cls) as store:
-        raise ValueError(msg)
-    assert store._conn.closed
-
-
-def test_context_manager_usable_for_reads_and_writes(store_cls: type[BasePostgresStore]) -> None:
-    with _connect(store_cls) as store:
-        store.set_many(
-            {
-                "1": {"text": "hello", "author": "Alice"},
-                "2": {"text": "world", "author": "Bob"},
-            }
-        )
-        assert store.count() == 2
-        assert store.filter(author="Alice")[0]["text"] == "hello"
-        store.delete("1")
-        assert store.count() == 1
-
-
-def test_context_manager_reopens_closed_store(store_cls: type[BasePostgresStore]) -> None:
-    """Reopening a closed store via ``__enter__`` must reconnect rather
-    than reusing the closed connection."""
-    store = _connect(store_cls)
-    store.close()
-    assert store.closed
-
-    new_conn = FakeConnection()
-    with patch(f"{MODULE}.psycopg.connect", return_value=new_conn), store:
-        assert not store.closed
-        assert store._conn is new_conn
-        store.set("1", {"text": "hello"})
-        assert store.count() == 1
-
-
-async def test_async_context_manager_reopens_closed_store(
-    store_cls: type[BasePostgresStore],
-) -> None:
-    """Reopening a closed store via ``__aenter__`` must reconnect rather
-    than reusing the closed connection."""
-    store = _connect(store_cls)
-    await store.aclose()
-    assert store.closed
-
-    new_conn = FakeConnection()
-    with patch(f"{MODULE}.psycopg.connect", return_value=new_conn):
-        async with store:
-            assert not store.closed
-            assert store._conn is new_conn
-            store.set("1", {"text": "hello"})
-            assert store.count() == 1
-
-
-##############################################################
-#     PostgresStore-specific SQL-building behavior             #
-##############################################################
-
-# The tests above exercise the store through the FakeConnection, which
-# validates end-to-end behavior but not the exact SQL text generated. The
-# tests below inspect the SQL fragments each internal method builds
-# directly, as a regression guard on their shape.
-
-
-@pytest.fixture
-def sql_store() -> PostgresStore:
-    # These tests only exercise pure SQL-building helpers, which don't touch
-    # the connection, so the store is left unopened.
-    return PostgresStore("postgresql://x", table="store")
-
-
-def test_create_table_sql(sql_store: PostgresStore) -> None:
-    stmt = sql_store._create_table_sql().as_string(None)
-    assert "store" in stmt
-    assert "value JSONB NOT NULL" in stmt
-
-
-def test_row_to_value_is_passthrough(sql_store: PostgresStore) -> None:
-    value = {"title": "Intro to Python", "author": "Alice"}
-    assert sql_store._row_to_value(("1", value)) == value
-
-
-def test_build_filter_condition(sql_store: PostgresStore) -> None:
-    cond = sql_store._build_filter_condition("author").as_string(None)
-    assert "value->>" in cond
-    assert "'author'" in cond
-
-
-def test_build_filter_condition_invalid_field_name(sql_store: PostgresStore) -> None:
-    with pytest.raises(ValueError, match="Invalid filter field name"):
-        sql_store._build_filter_condition("bad; DROP TABLE")
-
-
-# ---------------------------------------------------------------------------
-# Async methods
-#
-# BasePostgresStore holds both a sync psycopg.Connection (eager) and a
-# lazily-opened psycopg.AsyncConnection; the fixtures above pre-populate the
-# latter with an _AsyncConnAdapter wrapping the same FakeConnection (see
-# _connect()), so store.a*() methods below observe the exact same in-memory
-# table state as their sync counterparts tested above.
-# ---------------------------------------------------------------------------
-
-
-# --- aget / aset ---
-
-
-async def test_postgres_store_aget_aset_round_trip(store: BasePostgresStore) -> None:
-    await store.aset("1", {"title": "Intro to Python"})
-    assert await store.aget("1") == {"title": "Intro to Python"}
-    assert await store.aget("missing") is None
-
-
-# --- aset_many / afilter ---
-
-
-async def test_postgres_store_aset_many_and_afilter(store: BasePostgresStore) -> None:
-    await store.aset_many(
-        {
-            "1": {"author": "Alice", "category": "Programming"},
-            "2": {"author": "Bob", "category": "History"},
-        }
-    )
-    assert len(await store.afilter(author="Alice")) == 1
-    assert len(await store.afilter(category="History")) == 1
-
-
-# --- aset (conflict variants) ---
-
-
-async def test_postgres_store_aset_on_conflict_raise(store: BasePostgresStore) -> None:
-    await store.aset("1", {"text": "original"})
-    with pytest.raises(KeyError, match=r"1"):
-        await store.aset("1", {"text": "updated"}, on_conflict="raise")
-    assert await store.aget("1") == {"text": "original"}
-
-
-async def test_postgres_store_aset_on_conflict_merge(store: BasePostgresStore) -> None:
-    await store.aset("1", {"text": "original", "author": "Alice"})
-    await store.aset("1", {"text": "updated"}, on_conflict="merge")
-    assert await store.aget("1") == {"text": "updated", "author": "Alice"}
-
-
-async def test_postgres_store_aset_on_conflict_invalid_raises(store: BasePostgresStore) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        await store.aset("1", {"text": "hello"}, on_conflict="bogus")
-
-
-async def test_postgres_store_aset_many_on_conflict_takes_advisory_lock_per_key(
-    store: BasePostgresStore,
-) -> None:
-    await store.aset_many({"1": {"text": "original"}})
-    conn = store._conn
-    conn.advisory_locked_keys.clear()
-    await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-    assert set(conn.advisory_locked_keys) == {"1", "2"}
-
-
-async def test_postgres_store_aset_many_on_conflict_invalid_raises(
-    store: BasePostgresStore,
-) -> None:
-    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
-        await store.aset_many({"1": {"text": "hello"}}, on_conflict="bogus")
-
-
-# --- adelete / acount ---
-
-
-async def test_postgres_store_adelete_acount(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    await store.adelete("1")
-    assert await store.acount() == 1
-
-
-# --- adelete_many ---
-
-
-async def test_postgres_store_adelete_many(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
-    await store.adelete_many(["1", "3"])
-    assert await store.acount() == 1
-    assert await store.aget("2") is not None
-
-
-# --- aclear ---
-
-
-async def test_postgres_store_aclear(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    await store.aclear()
-    assert await store.acount() == 0
-
-
-# --- acontains ---
-
-
-async def test_postgres_store_acontains(store: BasePostgresStore) -> None:
-    await store.aset("1", {"a": 1})
-    assert await store.acontains("1")
-    assert not await store.acontains("99")
-
-
-# --- acontains_many ---
-
-
-async def test_postgres_store_acontains_many(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    assert await store.acontains_many(["1", "3"]) == [True, False]
-
-
-# --- akeys / aiter_batches ---
-
-
-async def test_postgres_store_akeys_aiter_batches(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
-    assert sorted([key async for key in store.akeys()]) == ["1", "2", "3"]
-    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
-    assert sum(len(b) for b in batches) == 3
-
-
-async def test_postgres_store_aiter_batches_zero_batch_size_raises(
-    store: BasePostgresStore,
-) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        async for _ in store.aiter_batches(batch_size=0):
-            pass
-
-
-# --- close ---
-
-
-async def test_postgres_store_aclose_without_ever_connecting_is_safe(
-    store_cls: type[BasePostgresStore],
-) -> None:
-    """A store whose async connection was never used has ``_aconn is
-    None`` (the sync connection is still opened eagerly, per the class
-    docstring); ``aclose()`` must tolerate that."""
-    with patch(f"{MODULE}.psycopg.connect", return_value=FakeConnection()):
-        store = store_cls("postgresql://x", table="store")
-    assert store._aconn is None
-    await store.aclose()
-    assert store.closed
-
-
-async def test_postgres_store_aclose_is_idempotent(store: BasePostgresStore) -> None:
-    await store.aget("1")  # forces the lazy async connection to be used
-    await store.aclose()
-    await store.aclose()
-    assert store.closed
-
-
-async def test_postgres_store_aclose_returns_none(store: BasePostgresStore) -> None:
-    assert await store.aclose() is None
-
-
-# --- context manager ---
-
-
-async def test_postgres_store_async_context_manager(store_cls: type[BasePostgresStore]) -> None:
-    store = _connect(store_cls)
-    async with store as astore:
-        await astore.aset_many(
-            {
-                "1": {"text": "hello", "author": "Alice"},
-                "2": {"text": "world", "author": "Bob"},
-            }
-        )
-        assert await astore.acount() == 2
-        result = await astore.afilter(author="Alice")
-        assert result[0]["text"] == "hello"
-        await astore.adelete("1")
-        assert await astore.acount() == 1
-    assert store._conn.closed
-
-
-# ---------------------------------------------------------------------------
-# Additional coverage: async branches not exercised above.
-# ---------------------------------------------------------------------------
-
-
-# --- constructor ---
-
-
-async def test_ensure_aconn_opens_connection_lazily(
-    store_cls: type[BasePostgresStore],
-) -> None:
-    """The lazy async connection is opened on first async use; the
-    ``store`` fixture pre-populates it via ``_connect()``, so exercise
-    the real opening path (lines 100-103 of ``_ensure_aconn``) directly
-    here."""
-    conn = FakeConnection()
-    aconn_fake = FakeConnection()
-    aconn = _AsyncConnAdapter(aconn_fake)
-    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
-        store = store_cls("postgresql://x", table="store")
-        store.open()
-    aconn_fake.store = store
-    assert store._aconn is None
-    with patch(f"{MODULE}.psycopg.AsyncConnection.connect", new=AsyncMock(return_value=aconn)):
-        await store.aget("missing")
-    assert store._aconn is aconn
-
-
-# --- aget_many ---
-
-
-async def test_postgres_store_aget_many_empty(store: BasePostgresStore) -> None:
-    assert await store.aget_many([]) == []
-
-
-async def test_postgres_store_aget_many(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    result = await store.aget_many(["1", "missing", "2"])
-    assert result[0] == {"a": 1}
-    assert result[1] is None
-    assert result[2] == {"a": 2}
-
-
-# --- aset_many ---
-
-
-async def test_postgres_store_aset_many_empty_items(store: BasePostgresStore) -> None:
-    assert await store.aset_many({}) is None
-
-
-# --- aset (conflict variants) ---
-
-
-async def test_postgres_store_aset_on_conflict_skip(store: BasePostgresStore) -> None:
-    await store.aset("1", {"text": "original"})
-    await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="skip")
-    assert await store.aget("1") == {"text": "original"}
-    assert await store.aget("2") == {"text": "new"}
-
-
-# --- aset_many (conflict variants) ---
-
-
-async def test_postgres_store_aset_many_merge_with_new_key(store: BasePostgresStore) -> None:
-    """Exercises the non-conflicting-key branch of ``aset_many`` when
-    ``on_conflict != 'overwrite'`` (a key not already present is written
-    directly, without going through ``aget``)."""
-    await store.aset("1", {"text": "original"})
-    await store.aset_many(
-        {"1": {"text": "updated"}, "2": {"text": "brand new"}}, on_conflict="merge"
-    )
-    assert await store.aget("1") == {"text": "updated"}
-    assert await store.aget("2") == {"text": "brand new"}
-
-
-async def test_postgres_store_aset_many_skip_all_writes_nothing(
-    store: BasePostgresStore,
-) -> None:
-    """When every key conflicts and ``on_conflict='skip'``, ``to_write``
-    ends up empty, exercising the ``if items:`` false branch of
-    ``_aset_many``."""
-    await store.aset("1", {"text": "original"})
-    await store.aset_many({"1": {"text": "updated"}}, on_conflict="skip")
-    assert await store.aget("1") == {"text": "original"}
-
-
-# --- afilter ---
-
-
-async def test_postgres_store_afilter_no_filters(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    result = await store.afilter()
-    assert len(result) == 2
-
-
-async def test_postgres_store_afilter_multiple_fields(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    result = await store.afilter(author="Alice", category="Programming")
-    assert len(result) == 2
-
-
-async def test_postgres_store_afilter_rejects_malicious_field_name(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    with pytest.raises(ValueError, match=r"Invalid filter field name"):
-        await store.afilter(**{"bad; DROP TABLE store;--": "x"})
-
-
-# --- adelete_many ---
-
-
-async def test_postgres_store_adelete_many_empty(store: BasePostgresStore) -> None:
-    assert await store.adelete_many([]) is None
-
-
-# --- acontains_many ---
-
-
-async def test_postgres_store_acontains_many_empty(store: BasePostgresStore) -> None:
-    assert await store.acontains_many([]) == []
-
-
-# --- aiter_batches ---
-
-
-async def test_postgres_store_aiter_batches_exact_multiple(
-    store: BasePostgresStore,
-) -> None:
-    """When the item count is an exact multiple of ``batch_size``, the
-    trailing ``if batch:`` check at the end of ``aiter_batches`` is
-    false, exercising that branch."""
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}})
-    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
-    assert sum(len(b) for b in batches) == 2
-
-
-# --- avalues ---
-
-
-async def test_postgres_store_avalues(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"a": 1}, "2": {"a": 2}, "3": {"a": 3}})
-    values = [v async for v in store.avalues(batch_size=2)]
-    assert sorted(v["a"] for v in values) == [1, 2, 3]
-
-
-# --- aset_batches ---
-
-
-async def test_postgres_store_aset_batches(store: BasePostgresStore) -> None:
-    await store.aset_batches([("1", {"a": 1}), ("2", {"a": 2})], batch_size=1)
-    assert await store.acount() == 2
-
-
-# ---------------------------------------------------------------------------
-# Additional async parity coverage (mirrors sync tests above one-for-one).
-# ---------------------------------------------------------------------------
-
-
-# --- constructor ---
-
-
-async def test_two_stores_different_tables_are_isolated_async(
-    store_cls: type[BasePostgresStore],
-) -> None:
-    conn = FakeConnection()
-    with patch(f"{MODULE}.psycopg.connect", return_value=conn):
-        store_a = store_cls("postgresql://x", table="store_a")
-        store_b = store_cls("postgresql://x", table="store_b")
-        conn.store = store_a
-        store_a.open()
-        store_b.open()
-    store_a._aconn = _AsyncConnAdapter(conn)
-    store_b._aconn = _AsyncConnAdapter(conn)
-    await store_a.aset("1", {"text": "a"})
-    assert await store_b.aget("1") is None
-    assert await store_b.acount() == 0
-
-
-# --- aset ---
-
-
-async def test_aset_default_overwrites_existing(store: BasePostgresStore) -> None:
-    await store.aset("1", {"text": "original"})
-    await store.aset("1", {"text": "updated"})
-    assert await store.acount() == 1
-    assert await store.aget("1") == {"text": "updated"}
-
-
-async def test_aset_on_conflict_overwrite(store: BasePostgresStore) -> None:
-    await store.aset("1", {"text": "original"})
-    await store.aset("1", {"text": "updated"}, on_conflict="overwrite")
-    assert await store.aget("1") == {"text": "updated"}
-
-
-async def test_aset_on_conflict_new_key_is_unaffected(store: BasePostgresStore) -> None:
-    await store.aset("1", {"text": "hello"}, on_conflict="raise")
-    assert await store.aget("1") == {"text": "hello"}
-
-
-# --- aset_many ---
-
-
-async def test_aset_many_increases_count(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    assert await store.acount() == len(items)
-
-
-async def test_aset_many_empty_is_no_op(store: BasePostgresStore) -> None:
-    await store.aset_many({})
-    assert await store.acount() == 0
-
-
-async def test_aset_many_default_overwrites_existing(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"text": "original"}})
-    await store.aset_many({"1": {"text": "updated"}})
-    assert await store.acount() == 1
-    assert await store.aget("1") == {"text": "updated"}
-
-
-async def test_aset_many_on_conflict_raise(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"text": "original"}, "2": {"text": "other"}})
-    with pytest.raises(KeyError, match=r"1"):
-        await store.aset_many({"1": {"text": "updated"}, "3": {"text": "new"}}, on_conflict="raise")
-    assert await store.aget("1") == {"text": "original"}
-    assert await store.aget("3") is None
-
-
-async def test_aset_many_on_conflict_overwrite(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"text": "original"}})
-    await store.aset_many({"1": {"text": "updated"}, "2": {"text": "new"}}, on_conflict="overwrite")
-    assert await store.aget("1") == {"text": "updated"}
-    assert await store.aget("2") == {"text": "new"}
-
-
-async def test_aset_many_on_conflict_merge(store: BasePostgresStore) -> None:
-    await store.aset_many({"1": {"text": "original", "author": "Alice"}})
-    await store.aset_many({"1": {"text": "updated"}}, on_conflict="merge")
-    assert await store.aget("1") == {"text": "updated", "author": "Alice"}
-
-
-# --- aset_batches ---
-
-
-async def test_aset_batches_empty_is_no_op(store: BasePostgresStore) -> None:
-    await store.aset_batches([])
-    assert await store.acount() == 0
-
-
-async def test_aset_batches_writes_all_pairs(store: BasePostgresStore) -> None:
-    await store.aset_batches([("1", {"v": 1}), ("2", {"v": 2}), ("3", {"v": 3})], batch_size=2)
-    assert await store.acount() == 3
-    assert await store.aget("2") == {"v": 2}
-
-
-async def test_aset_batches_consumes_a_generator(store: BasePostgresStore) -> None:
-    def gen() -> Iterator[tuple[str, dict[str, int]]]:
-        for i in range(5):
-            yield str(i), {"v": i}
-
-    await store.aset_batches(gen(), batch_size=2)
-    assert await store.acount() == 5
-
-
-async def test_aset_batches_on_conflict_skip(store: BasePostgresStore) -> None:
-    await store.aset("1", {"text": "original"})
-    await store.aset_batches(
-        [("1", {"text": "updated"}), ("2", {"text": "new"})], on_conflict="skip"
-    )
-    assert await store.aget("1") == {"text": "original"}
-    assert await store.aget("2") == {"text": "new"}
-
-
-# --- acount ---
-
-
-async def test_acount_empty_store(store: BasePostgresStore) -> None:
-    assert await store.acount() == 0
-
-
-async def test_acount_after_set_many(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    assert await store.acount() == len(items)
-
-
-# --- aget_many ---
-
-
-async def test_aget_many_returns_correct_length(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    assert len(await store.aget_many(["1", "2", "99"])) == 3
-
-
-async def test_aget_many_preserves_order(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    result = await store.aget_many(["3", "1", "2"])
-    assert result == [items["3"], items["1"], items["2"]]
-
-
-# --- afilter ---
-
-
-async def test_afilter_single_field(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    result = await store.afilter(author="Alice")
-    assert all(r["author"] == "Alice" for r in result)
-    assert len(result) == 2
-
-
-async def test_afilter_no_match_returns_empty(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    assert await store.afilter(author="Charlie") == []
-
-
-async def test_afilter_preserves_full_value(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    result = await store.afilter(author="Bob", category="History")
-    expected = [v for v in items.values() if v["author"] == "Bob"]
-    assert sorted(result, key=lambda v: v["title"]) == sorted(expected, key=lambda v: v["title"])
-
-
-async def test_afilter_empty_store_returns_empty(store: BasePostgresStore) -> None:
-    assert await store.afilter(author="Alice") == []
-
-
-async def test_afilter_integer_field_value(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    result = await store.afilter(year=2022)
-    assert len(result) == 1
-    assert result[0]["title"] == "Intro to Python"
-
-
-async def test_afilter_integer_value_no_match_returns_empty(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    assert await store.afilter(year=9999) == []
-
-
-# --- afilter_items ---
-
-
-async def test_afilter_items_no_args_returns_all(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    assert await store.afilter_items() == items
-
-
-async def test_afilter_items_single_field(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    result = await store.afilter_items(author="Alice")
-    assert result == {"1": items["1"], "2": items["2"]}
-
-
-async def test_afilter_items_no_match_returns_empty(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    assert await store.afilter_items(author="Charlie") == {}
-
-
-# --- adelete ---
-
-
-async def test_adelete_removes_value(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    await store.adelete("1")
-    assert await store.acount() == len(items) - 1
-    assert await store.aget("1") is None
-
-
-async def test_adelete_nonexistent_is_silent(store: BasePostgresStore) -> None:
-    await store.adelete("nonexistent")
-
-
-# --- adelete_many ---
-
-
-async def test_adelete_many_preserves_other_values(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    await store.adelete_many(["1", "3"])
-    assert await store.aget("2") is not None
-    assert await store.aget("4") is not None
-
-
-async def test_adelete_many_empty_list_is_no_op(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    await store.adelete_many([])
-    assert await store.acount() == len(items)
-
-
-async def test_adelete_many_nonexistent_keys_are_silent(store: BasePostgresStore) -> None:
-    await store.adelete_many(["99", "100"])
-
-
-async def test_adelete_many_single_key(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    await store.adelete_many(["2"])
-    assert await store.acount() == len(items) - 1
-    assert await store.aget("2") is None
-
-
-# --- aclear ---
-
-
-async def test_aclear_removes_all_values(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    await store.aclear()
-    assert await store.acount() == 0
-    assert [key async for key in store.akeys()] == []
-
-
-async def test_aclear_empty_store_is_no_op(store: BasePostgresStore) -> None:
-    await store.aclear()
-    assert await store.acount() == 0
-
-
-async def test_aclear_returns_none(store: BasePostgresStore) -> None:
-    assert await store.aclear() is None
-
-
-async def test_aclear_then_set_works(store: BasePostgresStore) -> None:
-    await store.aset("1", {"text": "hello"})
-    await store.aclear()
-    await store.aset("2", {"text": "world"})
-    assert await store.acount() == 1
-    assert await store.aget("2") == {"text": "world"}
-
-
-# --- acontains ---
-
-
-async def test_acontains_true_when_key_present(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    assert await store.acontains("1")
-
-
-async def test_acontains_false_when_store_empty(store: BasePostgresStore) -> None:
-    assert not await store.acontains("1")
-
-
-# --- acontains_many ---
-
-
-async def test_acontains_many_all_found(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    assert await store.acontains_many(["1", "2", "3", "4"]) == [True, True, True, True]
-
-
-async def test_acontains_many_all_missing(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    assert await store.acontains_many(["99", "100"]) == [False, False]
-
-
-async def test_acontains_many_empty_store_returns_all_missing(store: BasePostgresStore) -> None:
-    assert await store.acontains_many(["1", "2"]) == [False, False]
-
-
-async def test_acontains_many_returns_list_of_bools(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    result = await store.acontains_many(["1", "99"])
-    assert isinstance(result, list)
-    assert all(isinstance(flag, bool) for flag in result)
-
-
-# --- akeys ---
-
-
-async def test_akeys_empty_store_yields_nothing(store: BasePostgresStore) -> None:
-    assert [key async for key in store.akeys()] == []
-
-
-# --- avalues ---
-
-
-async def test_avalues_empty_store_yields_nothing(store: BasePostgresStore) -> None:
-    assert [v async for v in store.avalues()] == []
-
-
-async def test_avalues_returns_all_values(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    result = [v async for v in store.avalues()]
-    assert len(result) == len(items)
-    assert {v["title"] for v in result} == {v["title"] for v in items.values()}
-
-
-# --- aiter_batches ---
-
-
-async def test_aiter_batches_empty_store_yields_nothing(store: BasePostgresStore) -> None:
-    assert [batch async for batch in store.aiter_batches()] == []
-
-
-async def test_aiter_batches_default_batch_size(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    batches = [batch async for batch in store.aiter_batches()]
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-async def test_aiter_batches_yields_correct_batch_sizes(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
-    assert sorted(len(b) for b in batches) == [2, 2]
-
-
-async def test_aiter_batches_last_batch_may_be_smaller(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    batches = [batch async for batch in store.aiter_batches(batch_size=3)]
-    assert sorted(len(b) for b in batches) == [1, 3]
-
-
-async def test_aiter_batches_batch_size_larger_than_store(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    batches = [batch async for batch in store.aiter_batches(batch_size=100)]
-    assert len(batches) == 1
-    assert len(batches[0]) == len(items)
-
-
-async def test_aiter_batches_batch_size_one(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    batches = [batch async for batch in store.aiter_batches(batch_size=1)]
-    assert sorted(len(b) for b in batches) == [1, 1, 1, 1]
-
-
-async def test_aiter_batches_returns_all_key_value_pairs(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    result: dict[str, dict[str, Any]] = {}
-    async for batch in store.aiter_batches(batch_size=2):
-        result.update(batch)
-    assert result == items
-
-
-async def test_aiter_batches_batches_are_dicts(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    batches = [batch async for batch in store.aiter_batches(batch_size=2)]
-    assert all(isinstance(batch, dict) for batch in batches)
-
-
-async def test_aiter_batches_negative_batch_size_raises(store: BasePostgresStore) -> None:
-    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
-        async for _ in store.aiter_batches(batch_size=-1):
-            pass
-
-
-async def test_aiter_batches_does_not_mutate_store(
-    store: BasePostgresStore, items: dict[str, dict[str, Any]]
-) -> None:
-    await store.aset_many(items)
-    async for _ in store.aiter_batches(batch_size=2):
-        pass
-    assert await store.acount() == len(items)
-
-
-# --- close/aclose ---
-
-
-async def test_aclose_closes_underlying_connection(store: BasePostgresStore) -> None:
-    await store.aget("1")  # forces the lazy async connection to be used
-    await store.aclose()
-    assert store._conn.closed
-
-
-async def test_closed_false_before_close_async(store: BasePostgresStore) -> None:
-    assert not store.closed
-
-
-async def test_closed_true_after_aclose(store: BasePostgresStore) -> None:
-    await store.aclose()
-    assert store.closed
-
-
-# --- context manager ---
-
-
-async def test_async_context_manager_closes_on_normal_exit(
-    store_cls: type[BasePostgresStore],
-) -> None:
-    async with _connect(store_cls) as store:
-        await store.aset("1", {"text": "hello"})
-        assert await store.acount() == 1
-    assert store._conn.closed
-
-
-async def test_async_context_manager_closes_on_exception(
-    store_cls: type[BasePostgresStore],
-) -> None:
-    msg = "boom"
-    with pytest.raises(ValueError, match="boom"):
-        async with _connect(store_cls) as store:
-            raise ValueError(msg)
-    assert store._conn.closed
+@psycopg_available
+def test_init_codec_and_table_are_keyword_only() -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        PostgresStore(URL, "documents")
 
 
 # --- connection ---
 
 
-def test_connection_returns_underlying_connection(store: BasePostgresStore) -> None:
-    assert store.connection is store._connection
+@psycopg_available
+def test_connection(store: PostgresStore, connection: MagicMock) -> None:
+    assert store.connection is connection
 
 
-def test_connection_before_open_raises(store_cls: type[BasePostgresStore]) -> None:
-    store = store_cls("postgresql://localhost/db", table="items")
-    with pytest.raises(RuntimeError, match="not open"):
-        _ = store.connection
+@psycopg_available
+def test_connection_closed_store() -> None:
+    with pytest.raises(RuntimeError, match=r"PostgresStore is not open"):
+        _ = PostgresStore(URL).connection
+
+
+# --- URI ---
+
+
+@psycopg_available
+@pytest.mark.parametrize("scheme", ["postgresql", "postgres"])
+def test_to_uri_keeps_a_uri(scheme: str) -> None:
+    uri = f"{scheme}://user:secret@localhost/db?sslmode=require"
+    assert PostgresStore(uri, table="t", codec=PickleCodec()).to_uri() == uri
+
+
+@psycopg_available
+def test_to_uri_converts_a_connection_string() -> None:
+    store = PostgresStore("host=localhost port=5433 dbname=db user=ann")
+    assert store.to_uri() == "postgresql://ann@localhost:5433/db"
+
+
+@psycopg_available
+@pytest.mark.parametrize("read_only", [True, False])
+def test_from_uri(read_only: bool) -> None:
+    store = PostgresStore.from_uri(URL, read_only=read_only)
+    assert (store.to_uri(), store.closed) == (URL, True)
+
+
+@psycopg_available
+def test_from_uri_passes_the_arguments() -> None:
+    codec = PickleCodec()
+    store = PostgresStore.from_uri(URL, codec=codec, table="t", connect_timeout=3)
+    assert (store._codec, store._table, store._kwargs) == (codec, "t", {"connect_timeout": 3})
+
+
+# --- _open ---
+
+
+@psycopg_available
+def test__open_connects(monkeypatch: pytest.MonkeyPatch) -> None:
+    connect = MagicMock(return_value=sync_connection())
+    monkeypatch.setattr(f"{MODULE}.psycopg.connect", connect)
+    PostgresStore(URL, connect_timeout=3).open()
+    connect.assert_called_once_with(URL, autocommit=True, connect_timeout=3)
+
+
+@psycopg_available
+def test__open_uses_read_committed(connection: MagicMock) -> None:
+    with PostgresStore(URL):
+        assert (connection.isolation_level, statements(connection)[0]) == (
+            psycopg.IsolationLevel.READ_COMMITTED,
+            "SET default_transaction_isolation = 'read committed'",
+        )
+
+
+@psycopg_available
+def test__open_invalid_conninfo_does_not_connect(monkeypatch: pytest.MonkeyPatch) -> None:
+    connect = MagicMock()
+    monkeypatch.setattr(f"{MODULE}.psycopg.connect", connect)
+    with pytest.raises(ValueError, match=r"Invalid PostgreSQL connection string"):
+        PostgresStore("host=localhost password=a b").open()
+    assert connect.call_count == 0
+
+
+@psycopg_available
+def test__open_failure_closes_the_connection(connection: MagicMock) -> None:
+    connection.execute.return_value = cursor(PICKLE_COLUMNS)
+    store = PostgresStore(URL)
+    with pytest.raises(ValueError, match=r"does not match the codec"):
+        store.open()
+    assert (store.closed, connection.close.call_count, store._conn) == (True, 1, None)
+
+
+# --- _close ---
+
+
+@psycopg_available
+def test__close(store: PostgresStore, connection: MagicMock) -> None:
+    store._close()
+    assert (connection.close.call_count, store._conn) == (1, None)
+
+
+@psycopg_available
+def test__close_without_connection(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.INFO, logger=MODULE):
+        PostgresStore(URL)._close()
+    assert caplog.messages == []
+
+
+@psycopg_available
+def test__close_logs_no_password(connection: MagicMock, caplog: pytest.LogCaptureFixture) -> None:
+    del connection
+    with caplog.at_level(logging.DEBUG), PostgresStore("postgresql://u:s3cret@localhost/db"):
+        pass
+    assert "s3cret" not in caplog.text
+
+
+# --- reads ---
+
+
+@psycopg_available
+def test__get_many_one_key(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([("a", "{}")])
+    assert store._get_many(["a"]) == {"a": "{}"}
+    query, params = connection.execute.call_args.args
+    assert (text(query), params) == (
+        'SELECT key, value::text FROM "store" WHERE key = %s',
+        ("a",),
+    )
+
+
+@psycopg_available
+def test__get_many_several_keys(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([("a", "{}")])
+    assert store._get_many(["a", "b"]) == {"a": "{}"}
+    query, params = connection.execute.call_args.args
+    assert (text(query), params) == (
+        'SELECT key, value::text FROM "store" WHERE key = ANY(%s)',
+        (["a", "b"],),
+    )
+
+
+@psycopg_available
+def test__contains_many(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([("b",)])
+    assert store._contains_many(["a", "b"]) == {"b"}
+
+
+@psycopg_available
+def test__count(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([(3,)])
+    assert store._count() == 3
+
+
+@psycopg_available
+@pytest.mark.parametrize("key", [NUL, SURROGATE, "a" * (MAX_KEY_BYTES + 1)])
+@pytest.mark.parametrize("operation", KEY_PRIMITIVES)
+def test_rejected_key_runs_no_statement(
+    store: PostgresStore,
+    connection: MagicMock,
+    operation: Callable[[PostgresStore, str], Any],
+    key: str,
+) -> None:
+    with pytest.raises(ValueError, match=r"A key of PostgresStore"):
+        operation(store, key)
+    assert connection.mock_calls == []
+
+
+# --- writes ---
+
+
+@psycopg_available
+def test__put_many_runs_one_statement(store: PostgresStore, connection: MagicMock) -> None:
+    store._put_many({"a": "{}"})
+    assert (connection.execute.call_count, connection.transaction.call_count) == (1, 0)
+
+
+@psycopg_available
+def test__put_many_locks_the_key(store: PostgresStore, connection: MagicMock) -> None:
+    store._put_many({"a": "{}"})
+    query, params = connection.execute.call_args.args
+    assert ("pg_advisory_xact_lock(hashtextextended" in text(query), params) == (
+        True,
+        {"space": SPACE, "table": '"store"', "key": "a", "value": "{}"},
+    )
+
+
+@psycopg_available
+def test__put_many_rejected_value(store: PostgresStore, connection: MagicMock) -> None:
+    with pytest.raises(ValueError, match=r"cannot keep a NUL character"):
+        store._put_many({"a": "{}", "b": f'{{"v": "{NUL_ESCAPE}"}}'})
+    assert connection.mock_calls == []
+
+
+@psycopg_available
+def test__update_writes_the_result_of_the_plan(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([("a", '{"x": 1}')])
+    store._update(["a"], build_plan({"a": '{"y": 2}'}, "merge", JsonCodec()))
+    assert connection.execute.call_args.args[1]["value"] == '{"x": 1, "y": 2}'
+
+
+@psycopg_available
+def test__update_locks_before_it_reads(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([])
+    store._update(["a"], lambda _existing: {})
+    table, lock, read = statements(connection)
+    assert (table, "pg_advisory_xact_lock" in lock, read) == (
+        'LOCK TABLE "store" IN ROW EXCLUSIVE MODE',
+        True,
+        'SELECT key, value::text FROM "store" WHERE key = %s',
+    )
+
+
+@psycopg_available
+def test__update_runs_in_a_transaction(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([])
+    store._update(["a"], lambda _existing: {})
+    assert connection.transaction.call_count == 1
+
+
+@psycopg_available
+def test__update_plan_error_writes_nothing(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([("a", "{}")])
+    connection.transaction.return_value.__exit__.return_value = False
+    with pytest.raises(KeyError, match=r"already exist"):
+        store._update(["a"], build_plan({"a": "{}"}, "raise", JsonCodec()))
+    assert not any("INSERT" in statement for statement in statements(connection))
+
+
+@psycopg_available
+def test__delete_many(store: PostgresStore, connection: MagicMock) -> None:
+    store._delete_many(["a", "b"])
+    _, lock, delete = connection.execute.call_args_list
+    assert (lock.args[1]["keys"], text(delete.args[0]), delete.args[1]) == (
+        ["a", "b"],
+        'DELETE FROM "store" WHERE key = ANY(%s)',
+        (["a", "b"],),
+    )
+
+
+@psycopg_available
+def test__clear_locks_the_table(store: PostgresStore, connection: MagicMock) -> None:
+    store._clear()
+    _, lock, delete = statements(connection)
+    assert ("pg_advisory_xact_lock(%(space)s" in lock, delete) == (True, 'DELETE FROM "store"')
+
+
+# --- iteration ---
+
+
+@psycopg_available
+def test__iter_batches_uses_the_last_key(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.side_effect = [cursor([("a", "1"), ("b", "2")]), cursor([("c", "3")])]
+    assert list(store._iter_batches(2)) == [{"a": "1", "b": "2"}, {"c": "3"}]
+    assert [call.args[1] for call in connection.execute.call_args_list] == [(2,), ("b", 2)]
+
+
+@psycopg_available
+def test__iter_batches_full_last_batch(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.side_effect = [cursor([("a", "1")]), cursor([])]
+    assert list(store._iter_batches(1)) == [{"a": "1"}]
+
+
+@psycopg_available
+def test__iter_batches_empty(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([])
+    assert list(store._iter_batches(2)) == []
+
+
+@psycopg_available
+def test__iter_key_batches(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.side_effect = [cursor([("a",), ("b",)]), cursor([("c",)])]
+    assert list(store._iter_key_batches(2)) == [["a", "b"], ["c"]]
+    assert [call.args[1] for call in connection.execute.call_args_list] == [(2,), ("b", 2)]
+
+
+@psycopg_available
+def test__iter_key_batches_empty(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([])
+    assert list(store._iter_key_batches(2)) == []
+
+
+# --- filter ---
+
+
+@psycopg_available
+def test__filter_candidates_json(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([("a", "{}")])
+    assert list(store._filter_candidates({"author": "Alice"})) == [{"a": "{}"}]
+    query, params = connection.execute.call_args.args
+    assert (text(query), params) == (
+        "SELECT key, value::text FROM \"store\" WHERE value->>'author' = %s::text",
+        ["Alice"],
+    )
+
+
+@psycopg_available
+def test__filter_candidates_pickle(connection: MagicMock) -> None:
+    connection.execute.return_value = cursor(PICKLE_COLUMNS)
+    with PostgresStore(URL, codec=PickleCodec()) as store:
+        connection.execute.return_value = cursor([("a", b"x")])
+        assert list(store._filter_candidates({"author": "Alice"})) == [{"a": b"x"}]
+        assert "WHERE" not in statements(connection)[-1]
+
+
+@psycopg_available
+def test__select_matches_no_match(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([])
+    assert list(store._select_matches({"a": 1})) == []
+
+
+@psycopg_available
+def test__filter_expr() -> None:
+    assert PostgresStore(URL)._filter_expr("author") == "value->>'author'"
+
+
+@psycopg_available
+def test__filter_expr_invalid_field() -> None:
+    with pytest.raises(ValueError, match=r"Invalid filter field name"):
+        PostgresStore(URL)._filter_expr("a'; DROP TABLE store; --")
+
+
+@psycopg_available
+def test__filter_statement_without_field() -> None:
+    query, params = PostgresStore(URL)._filter_statement({})
+    assert (text(query), params) == ('SELECT key, value::text FROM "store"', None)
+
+
+@psycopg_available
+def test__filter_statement_none_matches_null_and_absent_fields() -> None:
+    query, params = PostgresStore(URL)._filter_statement({"a": None, "b": 1})
+    expected = (
+        "SELECT key, value::text FROM \"store\" WHERE value->>'a' IS NULL AND "
+        "value->>'b' = %s::text"
+    )
+    assert (text(query), params) == (expected, [1])
+
+
+# --- async primitives ---
+
+
+@psycopg_available
+async def test__aget_many(astore: PostgresStore, aconnection: MagicMock) -> None:
+    aconnection.execute.return_value = acursor([("a", "{}")])
+    assert await astore._aget_many(["a"]) == {"a": "{}"}
+
+
+@psycopg_available
+async def test__acontains_many(astore: PostgresStore, aconnection: MagicMock) -> None:
+    aconnection.execute.return_value = acursor([("b",)])
+    assert await astore._acontains_many(["a", "b"]) == {"b"}
+
+
+@psycopg_available
+async def test__acount(astore: PostgresStore, aconnection: MagicMock) -> None:
+    aconnection.execute.return_value = acursor([(3,)])
+    assert await astore._acount() == 3
+
+
+@psycopg_available
+@pytest.mark.parametrize("key", [NUL, SURROGATE, "a" * (MAX_KEY_BYTES + 1)])
+@pytest.mark.parametrize("operation", ASYNC_KEY_PRIMITIVES)
+async def test_async_rejected_key_runs_no_statement(
+    astore: PostgresStore,
+    aconnection: MagicMock,
+    operation: Callable[[PostgresStore, str], Any],
+    key: str,
+) -> None:
+    with pytest.raises(ValueError, match=r"A key of PostgresStore"):
+        await operation(astore, key)
+    assert aconnection.execute.await_count == 0
+
+
+@psycopg_available
+async def test__aput_many(astore: PostgresStore, aconnection: MagicMock) -> None:
+    await astore._aput_many({"a": "{}"})
+    # The first statement sets the isolation level of the connection.
+    assert aconnection.execute.await_args.args[1] == {
+        "space": SPACE,
+        "table": '"store"',
+        "key": "a",
+        "value": "{}",
+    }
+
+
+@psycopg_available
+async def test__aput_many_rejected_value(astore: PostgresStore, aconnection: MagicMock) -> None:
+    with pytest.raises(ValueError, match=r"cannot keep a NUL character"):
+        await astore._aput_many({"a": f'{{"v": "{NUL_ESCAPE}"}}'})
+    assert aconnection.execute.await_count == 0
+
+
+@psycopg_available
+async def test__aupdate(astore: PostgresStore, aconnection: MagicMock) -> None:
+    aconnection.execute.return_value = acursor([("a", '{"x": 1}')])
+    await astore._aupdate(["a"], build_plan({"a": '{"y": 2}'}, "merge", JsonCodec()))
+    assert aconnection.execute.await_args.args[1]["value"] == '{"x": 1, "y": 2}'
+
+
+@psycopg_available
+async def test__aupdate_empty_plan(astore: PostgresStore, aconnection: MagicMock) -> None:
+    await astore._aupdate(["a"], lambda _existing: {})
+    assert not any("INSERT" in statement for statement in statements(aconnection))
+
+
+@psycopg_available
+async def test__adelete_many(astore: PostgresStore, aconnection: MagicMock) -> None:
+    await astore._adelete_many(["a", "b"])
+    lock, delete = aconnection.execute.await_args_list[-2:]
+    assert (lock.args[1]["keys"], text(delete.args[0])) == (
+        ["a", "b"],
+        'DELETE FROM "store" WHERE key = ANY(%s)',
+    )
+
+
+@psycopg_available
+async def test__aclear(astore: PostgresStore, aconnection: MagicMock) -> None:
+    await astore._aclear()
+    assert statements(aconnection)[-1] == 'DELETE FROM "store"'
+
+
+@psycopg_available
+async def test__aiter_batches(astore: PostgresStore, aconnection: MagicMock) -> None:
+    async with astore._async_connection():
+        pass
+    aconnection.execute.side_effect = [acursor([("a", "1"), ("b", "2")]), acursor([("c", "3")])]
+    assert [batch async for batch in astore._aiter_batches(2)] == [
+        {"a": "1", "b": "2"},
+        {"c": "3"},
+    ]
+
+
+@psycopg_available
+async def test__aiter_batches_full_last_batch(
+    astore: PostgresStore, aconnection: MagicMock
+) -> None:
+    async with astore._async_connection():
+        pass
+    aconnection.execute.side_effect = [acursor([("a", "1")]), acursor([])]
+    assert [batch async for batch in astore._aiter_batches(1)] == [{"a": "1"}]
+
+
+@psycopg_available
+async def test__aiter_batches_closed_store(astore: PostgresStore, aconnection: MagicMock) -> None:
+    aconnection.execute.return_value = acursor([("a", "1")])
+    batches = astore._aiter_batches(2)
+    await anext(batches)
+    await astore.aclose()
+    with pytest.raises(RuntimeError, match=r"PostgresStore is not open"):
+        await anext(batches)
+
+
+@psycopg_available
+async def test__aiter_key_batches(astore: PostgresStore, aconnection: MagicMock) -> None:
+    async with astore._async_connection():
+        pass
+    aconnection.execute.side_effect = [acursor([("a",), ("b",)]), acursor([])]
+    assert [batch async for batch in astore._aiter_key_batches(2)] == [["a", "b"]]
+
+
+@psycopg_available
+async def test__aiter_key_batches_short_batch(
+    astore: PostgresStore, aconnection: MagicMock
+) -> None:
+    aconnection.execute.return_value = acursor([("a",)])
+    assert [batch async for batch in astore._aiter_key_batches(2)] == [["a"]]
+
+
+@psycopg_available
+async def test__aiter_key_batches_closed_store(
+    astore: PostgresStore, aconnection: MagicMock
+) -> None:
+    aconnection.execute.return_value = acursor([("a",)])
+    batches = astore._aiter_key_batches(2)
+    await anext(batches)
+    await astore.aclose()
+    with pytest.raises(RuntimeError, match=r"PostgresStore is not open"):
+        await anext(batches)
+
+
+@psycopg_available
+async def test__afilter_candidates_json(astore: PostgresStore, aconnection: MagicMock) -> None:
+    aconnection.execute.return_value = acursor([("a", "{}")])
+    assert [batch async for batch in astore._afilter_candidates({"a": 1})] == [{"a": "{}"}]
+    assert "WHERE" in statements(aconnection)[-1]
+
+
+@psycopg_available
+async def test__afilter_candidates_pickle(connection: MagicMock, aconnection: MagicMock) -> None:
+    connection.execute.return_value = cursor(PICKLE_COLUMNS)
+    aconnection.execute.return_value = acursor([("a", b"x")])
+    async with PostgresStore(URL, codec=PickleCodec()) as store:
+        assert [batch async for batch in store._afilter_candidates({"a": 1})] == [{"a": b"x"}]
+    assert "WHERE" not in statements(aconnection)[-1]
+
+
+@psycopg_available
+async def test__aselect_matches_no_match(astore: PostgresStore) -> None:
+    assert [batch async for batch in astore._aselect_matches({"a": 1})] == []
+
+
+@psycopg_available
+async def test__aselect_matches_closed_store(astore: PostgresStore, aconnection: MagicMock) -> None:
+    aconnection.execute.return_value = acursor([("a", "{}")])
+    batches = astore._aselect_matches({"a": 1})
+    await anext(batches)
+    await astore.aclose()
+    with pytest.raises(RuntimeError, match=r"PostgresStore is not open"):
+        await anext(batches)
+
+
+# --- lifecycle of the async connections ---
+
+
+@psycopg_available
+async def test__aclose(astore: PostgresStore, aconnection: MagicMock) -> None:
+    async with astore._async_connection():
+        pass
+    await astore._aclose()
+    assert (astore.closed, aconnection.close.await_count, len(astore._aclients)) == (
+        False,
+        1,
+        0,
+    )
+
+
+@psycopg_available
+async def test__check_close_with_an_async_connection(astore: PostgresStore) -> None:
+    async with astore._async_connection():
+        pass
+    with pytest.raises(RuntimeError, match=r"An async client of PostgresStore is open"):
+        astore._check_close()
+
+
+@psycopg_available
+def test__check_close_without_async_connection(store: PostgresStore) -> None:
+    store._check_close()
+    assert not store.closed
+
+
+###########################################
+#     Tests for the template helpers      #
+###########################################
+
+
+@psycopg_available
+def test__query() -> None:
+    query = PostgresStore(URL, table="Docs")._query(
+        "SELECT {column} FROM {table}", column=psycopg.sql.SQL("key")
+    )
+    assert text(query) == 'SELECT key FROM "Docs"'
+
+
+# --- schema ---
+
+
+@psycopg_available
+def test__init_schema_existing_table(store: PostgresStore, connection: MagicMock) -> None:
+    store._init_schema()
+    assert (len(statements(connection)), connection.transaction.call_count) == (1, 0)
+
+
+@psycopg_available
+@pytest.mark.parametrize(
+    ("codec", "columns", "value_type"),
+    [
+        pytest.param(JsonCodec(), JSON_COLUMNS, "jsonb", id="json"),
+        pytest.param(PickleCodec(), PICKLE_COLUMNS, "bytea", id="pickle"),
+    ],
+)
+def test__init_schema_creates_the_table(
+    connection: MagicMock, codec: Any, columns: list[Any], value_type: str
+) -> None:
+    connection.execute.side_effect = [
+        cursor([]),  # SET
+        cursor([]),  # The table does not exist.
+        cursor([]),  # The lock.
+        cursor([]),  # CREATE TABLE
+        cursor(columns),
+    ]
+    with PostgresStore(URL, codec=codec):
+        assert statements(connection)[3] == (
+            'CREATE TABLE IF NOT EXISTS "store" '
+            f"(key TEXT PRIMARY KEY, value {value_type} NOT NULL)"
+        )
+
+
+@psycopg_available
+def test__init_schema_mismatch_hides_the_password(connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([("key", "text", True)])
+    with pytest.raises(ValueError, match=r"does not match the codec") as info:
+        PostgresStore("postgresql://u:s3cret@localhost/db").open()
+    assert "s3cret" not in str(info.value)
+
+
+@psycopg_available
+def test__table_columns(store: PostgresStore, connection: MagicMock) -> None:
+    assert store._table_columns() == JSON_COLUMNS
+    assert connection.execute.call_args.args[1] == ('"store"',)
+
+
+# --- statements ---
+
+
+@psycopg_available
+def test__fetch(store: PostgresStore, connection: MagicMock) -> None:
+    connection.execute.return_value = cursor([(1,)])
+    assert store._fetch("SELECT 1", ("a",)) == [(1,)]
+    connection.execute.assert_called_once_with("SELECT 1", ("a",))
+
+
+@psycopg_available
+async def test__afetch(astore: PostgresStore, aconnection: MagicMock) -> None:
+    aconnection.execute.return_value = acursor([(1,)])
+    assert await astore._afetch("SELECT 1", ("a",)) == [(1,)]
+
+
+@psycopg_available
+def test__read_statement_one_key() -> None:
+    query, params = PostgresStore(URL)._read_statement(["a"])
+    assert (text(query).endswith("WHERE key = %s"), params) == (True, ("a",))
+
+
+@psycopg_available
+def test__read_statement_several_keys() -> None:
+    query, params = PostgresStore(URL)._read_statement(["a", "b"])
+    assert (text(query).endswith("WHERE key = ANY(%s)"), params) == (True, (["a", "b"],))
+
+
+@psycopg_available
+def test__write_statement_one_pair() -> None:
+    query, params = PostgresStore(URL)._write_statement({"a": b"{}"})
+    assert (text(query).startswith('INSERT INTO "store"'), params) == (
+        True,
+        {"space": SPACE, "table": '"store"', "key": "a", "value": "{}"},
+    )
+
+
+@psycopg_available
+def test__write_statement_several_pairs() -> None:
+    query, params = PostgresStore(URL)._write_statement({"a": "{}", "b": '{"x": 1e+22}'})
+    assert ("unnest(%(keys)b::text[], %(values)b::text[])" in text(query), params) == (
+        True,
+        {
+            "space": SPACE,
+            "table": '"store"',
+            "keys": ["a", "b"],
+            "values": ["{}", '{"x": 10000000000000000000000.0}'],
+        },
+    )
+
+
+@psycopg_available
+def test__write_statement_many_pairs_lock_the_table() -> None:
+    items = {str(i): "{}" for i in range(65)}
+    query, params = PostgresStore(URL)._write_statement(items)
+    assert (
+        "pg_advisory_xact_lock_shared" in text(query),
+        len(params["keys"]),
+        len(params["values"]),
+    ) == (False, 65, 65)
+
+
+@psycopg_available
+def test__write_statement_pickle_keeps_the_bytes() -> None:
+    payload = NUL_ESCAPE.encode() + b"e+\xff"
+    query, params = PostgresStore(URL, codec=PickleCodec())._write_statement(
+        {"a": payload, "b": b"x"}
+    )
+    assert ("%(values)b::bytea[]" in text(query), params["values"]) == (True, [payload, b"x"])
+
+
+@psycopg_available
+def test__write_statement_does_not_modify_the_items() -> None:
+    items = {"a": '{"x": 1e+22}'}
+    PostgresStore(URL)._write_statement(items)
+    assert items == {"a": '{"x": 1e+22}'}
+
+
+@psycopg_available
+@pytest.mark.parametrize(
+    ("keys", "kind", "extra"),
+    [
+        pytest.param(None, "table", {}, id="every_key"),
+        pytest.param(["a"], "key", {"key": "a"}, id="one"),
+        pytest.param(["a", "b"], "keys", {"keys": ["a", "b"]}, id="two"),
+        pytest.param(
+            [str(i) for i in range(64)],
+            "keys",
+            {"keys": [str(i) for i in range(64)]},
+            id="64",
+        ),
+        pytest.param([str(i) for i in range(65)], "table", {}, id="65"),
+    ],
+)
+def test__lock_params(keys: list[str] | None, kind: str, extra: dict) -> None:
+    assert PostgresStore(URL)._lock_params(keys) == (
+        kind,
+        {"space": SPACE, "table": '"store"', **extra},
+    )
+
+
+@psycopg_available
+@pytest.mark.parametrize(
+    ("keys", "fragments"),
+    [
+        pytest.param(None, ["SELECT 1 FROM (SELECT pg_advisory_xact_lock("], id="table"),
+        pytest.param(["a"], ["pg_advisory_xact_lock_shared(", "hashtextextended("], id="key"),
+        pytest.param(["a", "b"], ["pg_advisory_xact_lock_shared(", "ORDER BY id"], id="keys"),
+    ],
+)
+def test__lock_statement(keys: list[str] | None, fragments: list[str]) -> None:
+    query, _ = PostgresStore(URL)._lock_statement(keys)
+    assert all(fragment in text(query) for fragment in fragments)
+
+
+# --- transactions ---
+
+
+@psycopg_available
+def test__locked_transaction(store: PostgresStore, connection: MagicMock) -> None:
+    with store._locked_transaction(["a"]) as used:
+        assert used is connection
+    assert [call[0] for call in connection.mock_calls[:3]] == [
+        "transaction",
+        "transaction().__enter__",
+        "pipeline",
+    ]
+
+
+@psycopg_available
+async def test__alocked_transaction(astore: PostgresStore, aconnection: MagicMock) -> None:
+    async with astore._alocked_transaction(["a"]) as used:
+        assert used is aconnection
+    assert (aconnection.transaction.call_count, aconnection.pipeline.call_count) == (1, 1)
+
+
+@psycopg_available
+async def test__async_connection(astore: PostgresStore, aconnection: MagicMock) -> None:
+    async with astore._async_connection() as used:
+        assert used is aconnection
+
+
+@psycopg_available
+async def test__async_connection_closed_store() -> None:
+    with pytest.raises(RuntimeError, match=r"PostgresStore is not open"):
+        async with PostgresStore(URL)._async_connection():
+            pass
+
+
+@psycopg_available
+async def test__async_connection_closed_while_waiting(astore: PostgresStore) -> None:
+    async def use() -> None:
+        async with astore._async_connection():
+            pass
+
+    async with astore._async_connection():
+        task = asyncio.ensure_future(use())
+        await asyncio.sleep(0)
+        # A sync close from another thread, which does not see the loop.
+        astore._closed = True
+    with pytest.raises(RuntimeError, match=r"PostgresStore is not open"):
+        await task
+    astore._closed = False
+
+
+@psycopg_available
+def test__create_async_connection() -> None:
+    store = PostgresStore(URL)
+
+    async def create() -> _AsyncConnection:
+        return store._create_async_connection()
+
+    assert asyncio.run(create())._connect == store._connect_async
+
+
+@psycopg_available
+async def test__connect_async(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = async_connection()
+    connect = AsyncMock(return_value=connection)
+    monkeypatch.setattr(f"{MODULE}.psycopg.AsyncConnection.connect", connect)
+    assert await PostgresStore(URL, connect_timeout=3)._connect_async() is connection
+    connect.assert_awaited_once_with(URL, autocommit=True, connect_timeout=3)
+    connection.set_isolation_level.assert_awaited_once_with(psycopg.IsolationLevel.READ_COMMITTED)
+
+
+@psycopg_available
+async def test__connect_async_setup_failure_closes_the_connection(
+    aconnection: MagicMock,
+) -> None:
+    aconnection.execute.side_effect = OSError("lost")
+    with pytest.raises(OSError, match=r"lost"):
+        await PostgresStore(URL)._connect_async()
+    assert aconnection.close.await_count == 1
+
+
+# --- repr ---
+
+
+@psycopg_available
+@pytest.mark.parametrize("operation", [repr, str])
+@pytest.mark.parametrize(
+    "conninfo",
+    [
+        "postgresql://admin:s3cret@localhost/db",
+        "postgresql://localhost/db?user=admin&password=s3cret",
+        "host=localhost user=admin password=s3cret",
+        "postgresql://admin:s3@cret@localhost/db",
+        "postgresql://admin:s3cret/x@localhost/db",
+        "host=localhost password=a s3cret",
+    ],
+)
+def test_repr_hides_the_credentials(operation: Callable[[Any], str], conninfo: str) -> None:
+    secrets = ["s3cret"]
+    result = operation(PostgresStore(conninfo, password=secrets[0]))
+    assert "cret" not in result
+
+
+@psycopg_available
+def test_repr_runs_no_query(store: PostgresStore, connection: MagicMock) -> None:
+    repr(store)
+    assert connection.mock_calls == []
+
+
+@psycopg_available
+def test__get_repr_kwargs() -> None:
+    secrets = ["s3cret", "other"]
+    store = PostgresStore(f"postgresql://u:{secrets[0]}@localhost/db", password=secrets[1])
+    assert store._get_repr_kwargs() == {
+        "conninfo": "postgresql://localhost/db",
+        "table": "store",
+        "closed": True,
+    }
+
+
+@psycopg_available
+def test__get_repr_kwargs_codec_and_open(connection: MagicMock) -> None:
+    connection.execute.return_value = cursor(PICKLE_COLUMNS)
+    codec = PickleCodec()
+    with PostgresStore(URL, codec=codec, table="t") as store:
+        assert store._get_repr_kwargs() == {
+            "conninfo": URL,
+            "table": "t",
+            "closed": False,
+            "codec": codec,
+        }
+
+
+#######################################
+#     Tests for _AsyncConnection      #
+#######################################
+
+
+@psycopg_available
+async def test_async_connection_exclusive_connects_once() -> None:
+    connect = AsyncMock(return_value=async_connection())
+    holder = _AsyncConnection(connect)
+    for _ in range(2):
+        async with holder.exclusive():
+            pass
+    assert connect.await_count == 1
+
+
+@psycopg_available
+async def test_async_connection_exclusive_one_user_at_a_time() -> None:
+    holder = _AsyncConnection(AsyncMock(return_value=async_connection()))
+    entered = asyncio.Event()
+
+    async def use() -> None:
+        async with holder.exclusive():
+            entered.set()
+
+    async with holder.exclusive():
+        task = asyncio.ensure_future(use())
+        await asyncio.sleep(0)
+        waiting = not entered.is_set()
+    await task
+    assert (waiting, entered.is_set()) == (True, True)
+
+
+@psycopg_available
+async def test_async_connection_exclusive_replaces_a_closed_connection() -> None:
+    first, second = async_connection(), async_connection()
+    holder = _AsyncConnection(AsyncMock(side_effect=[first, second]))
+    async with holder.exclusive():
+        pass
+    first.closed = True
+    async with holder.exclusive() as used:
+        assert used is second
+
+
+@psycopg_available
+@pytest.mark.parametrize("status", ["ACTIVE", "INTRANS", "INERROR", "UNKNOWN"])
+async def test_async_connection_exclusive_discards_a_busy_connection(status: str) -> None:
+    connection = async_connection()
+    holder = _AsyncConnection(AsyncMock(return_value=connection))
+    async with holder.exclusive():
+        connection.info.transaction_status = psycopg.pq.TransactionStatus[status]
+    assert (connection.close.await_count, holder._connection) == (1, None)
+
+
+@psycopg_available
+async def test_async_connection_exclusive_error_keeps_an_idle_connection() -> None:
+    connection = async_connection()
+    holder = _AsyncConnection(AsyncMock(return_value=connection))
+
+    async def fail() -> None:
+        async with holder.exclusive():
+            msg = "conflict"
+            raise KeyError(msg)
+
+    with pytest.raises(KeyError, match=r"conflict"):
+        await fail()
+    assert (connection.close.await_count, holder._connection) == (0, connection)
+
+
+@psycopg_available
+async def test_async_connection_exclusive_connection_failure() -> None:
+    connection = async_connection()
+    holder = _AsyncConnection(AsyncMock(side_effect=[OSError("no server"), connection]))
+    with pytest.raises(OSError, match=r"no server"):
+        async with holder.exclusive():
+            pass
+    async with holder.exclusive() as used:
+        assert used is connection
+
+
+@psycopg_available
+async def test_async_connection_aclose() -> None:
+    connection = async_connection()
+    holder = _AsyncConnection(AsyncMock(return_value=connection))
+    async with holder.exclusive():
+        pass
+    await holder.aclose()
+    await holder.aclose()
+    assert (connection.close.await_count, holder._connection) == (1, None)
+
+
+@psycopg_available
+async def test_async_connection_abandon() -> None:
+    connection = async_connection()
+    holder = _AsyncConnection(AsyncMock(return_value=connection))
+    async with holder.exclusive():
+        pass
+    holder.abandon()
+    holder.abandon()
+    assert (connection.pgconn.finish.call_count, holder._connection) == (1, None)
+
+
+###############################
+#     Tests for _pipeline     #
+###############################
+
+
+@psycopg_available
+def test__pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(f"{MODULE}.psycopg.Pipeline.is_supported", lambda: True)
+    connection = MagicMock()
+    assert _pipeline(connection) is connection.pipeline.return_value
+
+
+@psycopg_available
+def test__pipeline_not_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(f"{MODULE}.psycopg.Pipeline.is_supported", lambda: False)
+    assert isinstance(_pipeline(MagicMock()), contextlib.nullcontext)
+
+
+##################################
+#     Tests for _check_keys      #
+##################################
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["", "a", "é" * (MAX_KEY_BYTES // 2), "a" * MAX_KEY_BYTES, BACKSLASH + "0", "🎉"],
+)
+def test__check_keys(key: str) -> None:
+    keys = [key]
+    _check_keys(keys)
+    assert keys == [key]
+
+
+def test__check_keys_empty() -> None:
+    keys: list[str] = []
+    _check_keys(keys)
+    assert keys == []
+
+
+@pytest.mark.parametrize(
+    ("key", "match"),
+    [
+        pytest.param(NUL, r"cannot contain a NUL character", id="nul"),
+        pytest.param(f"a{NUL}b", r"cannot contain a NUL character", id="inner_nul"),
+        pytest.param(SURROGATE, r"lone surrogate", id="surrogate"),
+        pytest.param("a" * (MAX_KEY_BYTES + 1), r"has 2693 bytes", id="too_long"),
+        pytest.param("é" * (MAX_KEY_BYTES // 2 + 1), r"has 2694 bytes", id="too_long_utf8"),
+    ],
+)
+def test__check_keys_rejected(key: str, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        _check_keys(["a", key])
+
+
+#################################
+#     Tests for _to_jsonb       #
+#################################
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        pytest.param("{}", "{}", id="empty"),
+        pytest.param(b'{"a": "\xc3\xa9"}', '{"a": "é"}', id="bytes"),
+        pytest.param('{"a": 1e-07}', '{"a": 1e-07}', id="negative_exponent"),
+        pytest.param('{"a": 1e+16}', '{"a": 10000000000000000.0}', id="large"),
+        pytest.param(
+            '{"a": [-1.5e+22, 2e+16]}',
+            '{"a": [-15000000000000000000000.0, 20000000000000000.0]}',
+            id="several",
+        ),
+        pytest.param('{"1e+22": "2e+22"}', '{"1e+22": "2e+22"}', id="strings"),
+        pytest.param(
+            f'{{"a": "{BACKSLASH}"1e+22", "b": 1e+16}}',
+            f'{{"a": "{BACKSLASH}"1e+22", "b": 10000000000000000.0}}',
+            id="escaped_quote",
+        ),
+        pytest.param(
+            f'{{"a": "{BACKSLASH}{NUL_ESCAPE}"}}',
+            f'{{"a": "{BACKSLASH}{NUL_ESCAPE}"}}',
+            id="escaped_backslash_before_u0000",
+        ),
+    ],
+)
+def test__to_jsonb(payload: str | bytes, expected: str) -> None:
+    assert _to_jsonb(payload) == expected
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(f'{{"a": "{NUL_ESCAPE}"}}', id="value"),
+        pytest.param(f'{{"{NUL_ESCAPE}": 1}}', id="key"),
+        pytest.param(f'{{"a": "x{BACKSLASH}{BACKSLASH}{NUL_ESCAPE}"}}', id="after_backslash"),
+    ],
+)
+def test__to_jsonb_nul(payload: str) -> None:
+    with pytest.raises(ValueError, match=r"cannot keep a NUL character"):
+        _to_jsonb(payload)
+
+
+#####################################
+#     Tests for _expand_number      #
+#####################################
+
+
+@pytest.mark.parametrize(
+    ("document", "expected"),
+    [
+        pytest.param("1e+16", "10000000000000000.0", id="integer_mantissa"),
+        pytest.param("-1.25e+20", "-125000000000000000000.0", id="negative"),
+        pytest.param('"1e+16"', '"1e+16"', id="string"),
+    ],
+)
+def test__expand_number(document: str, expected: str) -> None:
+    assert _expand_number(_JSON_STRING_OR_LARGE_NUMBER.fullmatch(document)) == expected
+
+
+def test__expand_number_keeps_the_float() -> None:
+    document = repr(1.7976931348623157e308)
+    result = _expand_number(_JSON_STRING_OR_LARGE_NUMBER.fullmatch(document))
+    assert float(result) == 1.7976931348623157e308
+
+
+######################################
+#     Tests for _parse_location      #
+######################################
+
+
+@psycopg_available
+@pytest.mark.parametrize(
+    ("conninfo", "expected"),
+    [
+        pytest.param(URL, ("localhost", "5432", "db"), id="uri"),
+        pytest.param("host=h dbname=d", ("h", "", "d"), id="string"),
+        pytest.param("", ("", "", ""), id="empty"),
+        pytest.param("host=@abstract", ("@abstract", "", ""), id="abstract_socket"),
+        pytest.param("host=a,b port=1,2", ("a,b", "1,2", ""), id="several_servers"),
+    ],
+)
+def test__parse_location(conninfo: str, expected: tuple[str, str, str]) -> None:
+    assert _parse_location(conninfo, {}) == expected
+
+
+@psycopg_available
+def test__parse_location_kwargs_take_precedence() -> None:
+    kwargs = {"host": "other", "port": 1, "password": "s3cret"}
+    assert _parse_location(URL, kwargs) == ("other", "1", "db")
+
+
+@psycopg_available
+@pytest.mark.parametrize(
+    "conninfo",
+    [
+        pytest.param("host=h password=a b", id="unreadable"),
+        pytest.param("postgresql://u:%zz@h/db", id="bad_escape"),
+        pytest.param("postgresql://u:se@cret@h/db", id="at_in_password"),
+        pytest.param("postgresql://u:se/cret@h/db", id="slash_in_password"),
+        pytest.param("postgresql://u:12/cret@h/db", id="slash_after_digits"),
+    ],
+)
+def test__parse_location_invalid(conninfo: str) -> None:
+    assert _parse_location(conninfo, {}) is None
+
+
+######################################
+#     Tests for _check_conninfo      #
+######################################
+
+
+@psycopg_available
+def test__check_conninfo() -> None:
+    conninfo = "postgresql://u:p%40ss@localhost/db"
+    _check_conninfo(conninfo)
+    assert _parse_location(conninfo, {}) == ("localhost", "", "db")
+
+
+@psycopg_available
+@pytest.mark.parametrize(
+    "conninfo",
+    [
+        "host=h password=a s3cret",
+        "postgresql://u:s3cret@[h/db",
+        "postgresql://u:s3@cret@h/db",
+        "postgresql://u:1234/s3cret@h/db",
+        "postgresx://u:s3cret@h/db",
+    ],
+)
+def test__check_conninfo_invalid_hides_the_password(conninfo: str) -> None:
+    with pytest.raises(ValueError, match=r"Invalid PostgreSQL connection string") as info:
+        _check_conninfo(conninfo)
+    assert ("cret" in str(info.value), info.value.__suppress_context__) == (False, False)
+
+
+#######################################
+#     Tests for _redact_conninfo      #
+#######################################
+
+
+@psycopg_available
+@pytest.mark.parametrize(
+    ("conninfo", "expected"),
+    [
+        pytest.param("postgresql://u:p@localhost:5432/db", URL, id="uri"),
+        pytest.param("host=localhost dbname=db password=p", "postgresql://localhost/db", id="dsn"),
+        pytest.param("", "postgresql:///", id="empty"),
+        pytest.param("postgresql://u:se@cret@h/db", HIDDEN, id="at_in_password"),
+        pytest.param("dbname='postgresql://u:p@h/db'", HIDDEN, id="uri_as_dbname"),
+        pytest.param("dbname='password=p'", HIDDEN, id="string_as_dbname"),
+    ],
+)
+def test__redact_conninfo(conninfo: str, expected: str) -> None:
+    assert _redact_conninfo(conninfo, {}) == expected
+
+
+@psycopg_available
+def test__redact_conninfo_kwargs() -> None:
+    assert _redact_conninfo(URL, {"dbname": "other"}) == "postgresql://localhost:5432/other"
+
+
+######################################
+#     Tests for _conninfo_to_uri     #
+######################################
+
+
+@psycopg_available
+@pytest.mark.parametrize(
+    ("conninfo", "uri"),
+    [
+        pytest.param("dbname=db", "postgresql:///db", id="dbname"),
+        pytest.param(
+            "host=h port=1 dbname=d user=u password=p",
+            "postgresql://u:p@h:1/d",
+            id="all",
+        ),
+        pytest.param(
+            "host=h dbname=d user=u password='p@s:s/w?d#'",
+            "postgresql://u:p%40s%3As%2Fw%3Fd%23@h/d",
+            id="special_password",
+        ),
+        pytest.param("host=/var/run/pg dbname=d", "postgresql://%2Fvar%2Frun%2Fpg/d", id="socket"),
+        pytest.param("host=::1 dbname=d", "postgresql://[::1]/d", id="ipv6"),
+        pytest.param(
+            "host=a,b port=1,2 dbname=d",
+            "postgresql:///d?host=a%2Cb&port=1%2C2",
+            id="several_servers",
+        ),
+        pytest.param("host=h password=p", "postgresql://:p@h/", id="password_only"),
+        pytest.param(
+            "host=h options='-c a=b'",
+            "postgresql://h/?options=-c%20a%3Db",
+            id="option_with_space",
+        ),
+    ],
+)
+def test__conninfo_to_uri(conninfo: str, uri: str) -> None:
+    assert _conninfo_to_uri(conninfo) == uri
+
+
+@psycopg_available
+@pytest.mark.parametrize(
+    "conninfo",
+    [
+        "host=h dbname=d user=u password='p@s:s/w?d#%'",
+        "host=/var/run/pg dbname='a b' user='a@b'",
+        "host=::1 port=5432 dbname=d",
+        "host=a,b port=1,2 dbname=d",
+        "host=h password=p options='-c a=b'",
+    ],
+)
+def test__conninfo_to_uri_keeps_the_options(conninfo: str) -> None:
+    parse = psycopg.conninfo.conninfo_to_dict
+    assert parse(_conninfo_to_uri(conninfo)) == parse(conninfo)

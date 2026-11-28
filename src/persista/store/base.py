@@ -81,15 +81,11 @@ class BaseStore(ABC):
     :class:`~persista.store.JsonCodec`, a tuple is therefore read back as
     a list, and a value that would lose data raises.
 
-    .. note::
-        ``PostgresStore`` does not use the primitives below yet: it
-        implements the public methods itself (see
-        :class:`~persista.store.unmigrated.UnmigratedStore`), and it
-        does not take a codec.
-
     To implement a custom store, subclass :class:`BaseStore`, call
     ``super().__init__``, and implement :meth:`to_uri`,
-    :meth:`from_uri` and the primitives:
+    :meth:`from_uri` and the primitives. Do not override the other public
+    methods: they are written once, in this class, so that every store
+    behaves the same. The primitives are:
 
     - ``_open()`` and ``_close()``: connect to the backend and release it.
       ``_close`` is also called if ``_open`` raises, so it must accept a
@@ -112,8 +108,13 @@ class BaseStore(ABC):
 
     Each data primitive has an async twin (``_aget_many``, ...), which by
     default runs the sync one in a thread. A backend with a native async
-    driver replaces the async twins, and releases the resources that only
-    they use in ``_aclose()``.
+    driver replaces the async twins, releases the resources that only
+    they use in ``_aclose()``, and, if :meth:`close` cannot release them,
+    raises in ``_check_close()`` while they are open. :meth:`aclose` runs
+    :meth:`close` in a thread; a backend sets the class attribute
+    ``_close_in_event_loop`` to ``True`` to run it in the event loop instead.
+    :class:`~persista.store.loop_clients.LoopClients` keeps one async
+    client per event loop.
 
     A backend is assumed not to be thread-safe: the primitives run with
     one lock per instance, and the async calls run in a worker thread of
@@ -161,6 +162,8 @@ class BaseStore(ABC):
 
     #: Whether the primitives can be called by several threads at once.
     _thread_safe: ClassVar[bool] = False
+    #: Whether aclose() calls close() in the event loop, not in a thread.
+    _close_in_event_loop: ClassVar[bool] = False
 
     def __init__(self, *, codec: Codec | None = None) -> None:
         self._codec: Codec = codec if codec is not None else JsonCodec()
@@ -686,20 +689,41 @@ class BaseStore(ABC):
         Calling ``close()`` on a closed store does nothing, since
         :meth:`__exit__` calls it unconditionally and callers may also
         close a store manually before using it as a context manager.
+
+        Raises:
+            RuntimeError: If the store has a native async driver (Redis,
+                PostgreSQL) and an async client is open, i.e. an event
+                loop used an async method and has neither called
+                :meth:`aclose` nor shut down. The store stays open: call
+                ``await store.aclose()`` in that event loop.
         """
         with self._lock:
             if not self._closed:
+                self._check_close()
                 self._close()
                 self._closed = True
         self._shutdown_executor()
 
     async def aclose(self) -> None:
-        """Async equivalent of :meth:`close`."""
+        """Async equivalent of :meth:`close`.
+
+        A store with a native async driver first closes the async client
+        of the running event loop: the async calls of this loop that are
+        using the client end first, and the calls made in the meantime
+        raise ``RuntimeError``.
+
+        Raises:
+            RuntimeError: If the async client of another event loop is
+                open. The store stays open.
+        """
         if self.closed:
             self._shutdown_executor()
             return
         await self._aclose()
-        await self._run_in_thread(self.close)
+        if self._close_in_event_loop:
+            self.close()
+        else:
+            await self._run_in_thread(self.close)
 
     @property
     def closed(self) -> bool:
@@ -1009,7 +1033,20 @@ class BaseStore(ABC):
         r"""Release the resources that only the async primitives use.
 
         :meth:`aclose` calls it on an open store, before it closes the
-        store with :meth:`close` in a thread. The default does nothing.
+        store with :meth:`close`. The default does nothing.
+        """
+        return
+
+    def _check_close(self) -> None:
+        r"""Check that :meth:`close` can release the resources of the
+        store.
+
+        :meth:`close` calls it on an open store, before :meth:`_close`. It
+        is not called when a store failed to open. The default does
+        nothing.
+
+        Raises:
+            RuntimeError: If the store cannot be closed synchronously.
         """
         return
 

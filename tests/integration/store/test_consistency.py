@@ -38,11 +38,23 @@ from persista.store import (
     SQLiteStore,
 )
 from persista.testing.fixtures import duckdb_available, lmdb_available
-from tests.integration.store.postgres_helpers import get_postgres_conninfo
+from tests.integration.store.postgres_helpers import drop_tables, get_postgres_conninfo
 from tests.integration.store.redis_helpers import REDIS_URL, redis_server_reachable
 
 if TYPE_CHECKING:
     from persista.store import Codec
+
+
+# The prefix of the PostgreSQL tables of this run of the tests.
+POSTGRES_PREFIX = f"consistency_{uuid.uuid4().hex[:12]}_"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _postgres_cleanup() -> Generator[None, None, None]:
+    r"""Remove the tables of the PostgreSQL stores once the tests have
+    run."""
+    yield
+    drop_tables(POSTGRES_PREFIX)
 
 
 def redis_store(codec: Codec | None = None) -> RedisStore:
@@ -87,8 +99,17 @@ def _store_factories() -> list[pytest.mark.ParameterSet]:
         pytest.param(lambda: FileStore(tempfile.mkdtemp()), id="file"),
         pytest.param(lambda: FileStore(tempfile.mkdtemp(), codec=PickleCodec()), id="pickle_file"),
         pytest.param(
-            lambda: PostgresStore(postgres_conninfo, table=f"store_{uuid.uuid4().hex}"),
+            lambda: PostgresStore(postgres_conninfo, table=f"{POSTGRES_PREFIX}{uuid.uuid4().hex}"),
             id="postgres",
+            marks=postgres_skip,
+        ),
+        pytest.param(
+            lambda: PostgresStore(
+                postgres_conninfo,
+                codec=PickleCodec(),
+                table=f"{POSTGRES_PREFIX}{uuid.uuid4().hex}",
+            ),
+            id="pickle_postgres",
             marks=postgres_skip,
         ),
     ]

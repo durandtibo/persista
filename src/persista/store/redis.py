@@ -4,7 +4,6 @@ from __future__ import annotations
 
 __all__ = ["RedisStore"]
 
-import asyncio
 import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
@@ -14,6 +13,7 @@ from coola.display import MultilineDisplayMixin
 from coola.utils.batching import batchify
 
 from persista.store.base import BaseStore
+from persista.store.loop_clients import LoopClients
 from persista.store.validation import check_is_open, validate_namespace
 from persista.utils.imports import check_redis, is_redis_available
 
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from typing import Self
 
     from persista.store.codec import Codec
+    from persista.store.loop_clients import LoopClient
     from persista.store.types import Payload, Plan
 
 if TYPE_CHECKING or is_redis_available():  # pragma: no cover
@@ -157,6 +158,9 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
 
     # The clients of redis-py can be used by several threads at once.
     _thread_safe = True
+    # No other task of the loop can create a new async client between the
+    # moment aclose() closes it and the moment it closes the store.
+    _close_in_event_loop = True
 
     def __init__(
         self,
@@ -181,8 +185,9 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
         self._keys_set = f"{namespace}:keys".encode()
         self._kwargs = kwargs
         self._client: redis.Redis | None = None
-        # The async client of each event loop.
-        self._aclients: dict[asyncio.AbstractEventLoop, _LoopClient] = {}
+        self._aclients: LoopClients[aredis.Redis] = LoopClients(
+            self._create_async_client, owner=type(self).__name__
+        )
 
     @property
     def namespace(self) -> str:
@@ -204,43 +209,6 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
             msg = f"{type(self).__name__} is not open."
             raise RuntimeError(msg)
         return self._client
-
-    def close(self) -> None:
-        r"""Close the store and release its connections.
-
-        Calling ``close()`` on a closed store does nothing.
-
-        Raises:
-            RuntimeError: If an async client is open, i.e. an event loop
-                used an async method and has neither called
-                :meth:`aclose` nor shut down. The store stays open: call
-                ``await store.aclose()`` in that event loop.
-        """
-        with self._lock:
-            self._forget_closed_loops()
-            if self._aclients:
-                msg = (
-                    f"An async client of {type(self).__name__} is open: call "
-                    "`await store.aclose()` in the event loop that used it, instead of close()"
-                )
-                raise RuntimeError(msg)
-            super().close()
-
-    async def aclose(self) -> None:
-        r"""Close the async client of the running event loop, then the
-        store.
-
-        The async calls of this loop that are using the client end first;
-        the calls made in the meantime raise ``RuntimeError``.
-
-        Raises:
-            RuntimeError: If the async client of another event loop is
-                open. The store stays open.
-        """
-        await self._aclose()
-        # Not in a thread: no other task of this loop can create a new
-        # async client before the store is closed.
-        self.close()
 
     def to_uri(self) -> str:
         r"""Return the URL of the Redis server.
@@ -441,18 +409,10 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
             check_is_open(self)
 
     async def _aclose(self) -> None:
-        loop = asyncio.get_running_loop()
-        # A loop: another task can create a client while one is closing.
-        while (entry := self._aclients.get(loop)) is not None:
-            # No new call can use the client from now on.
-            entry.closing = True
-            try:
-                await entry.wait_until_idle()
-            except BaseException:
-                entry.closing = False
-                raise
-            if self._aclients.pop(loop, None) is not None:
-                await entry.guard.aclose()
+        await self._aclients.aclose()
+
+    def _check_close(self) -> None:
+        self._aclients.check_none_open()
 
     ###########################
     #     Template helpers    #
@@ -475,7 +435,7 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
         with await self._async_client() as client:
             return _encode_members(await client.smembers(self._keys_set))
 
-    async def _async_client(self) -> _LoopClient:
+    async def _async_client(self) -> LoopClient[aredis.Redis]:
         r"""Return the async client of the running event loop, creating
         it if needed.
 
@@ -492,57 +452,16 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
             RuntimeError: If the store is closed or being closed.
         """
         check_is_open(self)
-        loop = asyncio.get_running_loop()
-        if (entry := self._aclients.get(loop)) is not None:
-            if entry.closing:
-                msg = f"{type(self).__name__} is not open: it is being closed"
-                raise RuntimeError(msg)
-            return entry
-        self._forget_closed_loops()
-        client = aredis.Redis.from_url(self._url, **self._kwargs)
-        guard = self._close_with_loop(client, loop)
-        entry = self._aclients[loop] = _LoopClient(client, guard)
-        # Starting the generator registers it with the event loop, which
-        # closes it when it shuts down. This does not suspend the task.
-        await anext(guard)
-        return entry
+        return await self._aclients.get()
 
-    async def _close_with_loop(
-        self, client: aredis.Redis, loop: asyncio.AbstractEventLoop
-    ) -> AsyncGenerator[None]:
-        r"""Keep an async client until this generator is closed.
+    def _create_async_client(self) -> aredis.Redis:
+        r"""Create an async client of the server, which is not connected
+        yet.
 
-        An event loop closes the asynchronous generators that are still
-        running when it shuts down (``loop.shutdown_asyncgens()``, which
-        ``asyncio.run`` calls). This closes the client while its loop can
-        still do it.
-
-        Args:
-            client: The client to close.
-            loop: The event loop of the client.
-
-        Yields:
-            ``None``, once.
+        Returns:
+            A new client.
         """
-        try:
-            yield
-        finally:
-            self._aclients.pop(loop, None)
-            await client.aclose()
-
-    def _forget_closed_loops(self) -> None:
-        r"""Drop the async clients of the event loops that were closed
-        without shutting down their asynchronous generators.
-
-        Such a client cannot be closed anymore.
-        """
-        for loop in list(self._aclients):
-            if loop.is_closed() and self._aclients.pop(loop, None) is not None:
-                logger.warning(
-                    "An event loop was closed while the async Redis client of a %s was open. "
-                    "Call aclose() before closing the loop",
-                    type(self).__name__,
-                )
+        return aredis.Redis.from_url(self._url, **self._kwargs)
 
     def _value_names(self, raw_keys: Iterable[bytes]) -> list[bytes]:
         r"""Return the Redis keys of the values of some keys.
@@ -608,42 +527,6 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
         if self._codec.name != "json":
             kwargs["codec"] = self._codec
         return kwargs
-
-
-class _LoopClient:
-    r"""Hold the async client of one event loop, and count the calls that
-    use it.
-
-    Entering the context gives the client. It is only used by the tasks
-    of the event loop of the client.
-
-    Args:
-        client: The client.
-        guard: The async generator that closes the client.
-    """
-
-    def __init__(self, client: aredis.Redis, guard: AsyncGenerator[None]) -> None:
-        self.client = client
-        self.guard = guard
-        # Whether the client is being closed.
-        self.closing = False
-        self._calls = 0
-        self._idle = asyncio.Event()
-
-    def __enter__(self) -> aredis.Redis:
-        self._calls += 1
-        return self.client
-
-    def __exit__(self, *exc_info: object) -> None:
-        self._calls -= 1
-        if not self._calls:
-            self._idle.set()
-
-    async def wait_until_idle(self) -> None:
-        r"""Wait until no call uses the client."""
-        while self._calls:
-            self._idle.clear()
-            await self._idle.wait()
 
 
 def _encode_key(key: str) -> bytes:

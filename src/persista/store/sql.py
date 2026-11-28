@@ -8,6 +8,7 @@ key, and ``value``, whose type depends on the codec of the store.
 from __future__ import annotations
 
 __all__ = [
+    "SQLFilterStore",
     "SQLStore",
     "build_where",
     "check_sql_codec",
@@ -106,6 +107,8 @@ def check_table_layout(
     codec: Codec,
     key_type: str,
     database: Path | str,
+    table: str = "store",
+    column_types: Mapping[str, str] | None = None,
 ) -> None:
     r"""Check that an existing table can be used with a codec.
 
@@ -115,6 +118,11 @@ def check_table_layout(
         codec: The codec of the store.
         key_type: The expected type of the ``key`` column.
         database: The database of the table, used in the error message.
+            It must not contain credentials.
+        table: The name of the table, used in the error message.
+        column_types: The type of the ``value`` column for each codec name,
+            for a database whose types differ from those of
+            :func:`value_column_type`.
 
     Raises:
         ValueError: If the columns of the table are not exactly a
@@ -134,7 +142,11 @@ def check_table_layout(
 
         ```
     """
-    value_type = value_column_type(codec)
+    if column_types is None:
+        value_type = value_column_type(codec)
+    else:
+        check_sql_codec(codec)
+        value_type = column_types[codec.name]
     expected = [("key", key_type.upper(), True), ("value", value_type, False)]
     actual = sorted((name.lower(), dtype.upper(), bool(pk)) for name, dtype, pk in columns)
     if actual != expected:
@@ -142,7 +154,7 @@ def check_table_layout(
             f"{name} {dtype}{' PRIMARY KEY' if pk else ''}" for name, dtype, pk in columns
         )
         msg = (
-            f"The table 'store' of {str(database)!r} does not match the codec {codec.name!r}: "
+            f"The table {table!r} of {str(database)!r} does not match the codec {codec.name!r}: "
             f"expected the columns (key {key_type} PRIMARY KEY, value {value_type}), "
             f"found ({found})"
         )
@@ -150,7 +162,7 @@ def check_table_layout(
 
 
 def build_where(
-    fields: Mapping[str, Any], expression: Callable[[str], str]
+    fields: Mapping[str, Any], expression: Callable[[str], str], *, placeholder: str = "?"
 ) -> tuple[str, list[Any]]:
     r"""Build the ``WHERE`` clause that selects the rows whose fields are
     equal to some values.
@@ -161,6 +173,8 @@ def build_where(
         expression: A function that returns the SQL expression that
             reads a field. It must raise if the field name cannot be
             safely interpolated into SQL.
+        placeholder: The text that marks a parameter in the SQL of the
+            database.
 
     Returns:
         The condition, without ``WHERE`` (empty if ``fields`` is empty),
@@ -181,7 +195,7 @@ def build_where(
         if expected is None:
             conditions.append(f"{expr} IS NULL")
         else:
-            conditions.append(f"{expr} = ?")
+            conditions.append(f"{expr} = {placeholder}")
             params.append(expected)
     return " AND ".join(conditions), params
 
@@ -243,7 +257,108 @@ def decode_sql_uri(uri: str, *, scheme: str, codec: Codec | None = None) -> tupl
     )
 
 
-class SQLStore(BaseStore):
+class SQLFilterStore(BaseStore):
+    r"""Define the base class of the stores whose database can apply the
+    filters.
+
+    With a :class:`~persista.store.JsonCodec`, the candidates that a
+    subclass selects in ``_filter_candidates`` are the matches: the values
+    are compared by the database. With another codec, they are compared
+    in Python, as in the other stores.
+
+    This class also provides :meth:`filter_items`, which keeps the key of
+    each matching value.
+
+    Example:
+        ```pycon
+        >>> from persista.store import SQLiteStore
+        >>> from persista.store.sql import SQLFilterStore
+        >>> issubclass(SQLiteStore, SQLFilterStore)
+        True
+
+        ```
+    """
+
+    def filter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
+        r"""Like :meth:`filter`, but keyed by the keys of the matching
+        values.
+
+        This lets callers that need to know which key each matching
+        value belongs to (e.g. a record store layered on top) filter in
+        SQL instead of reading every value.
+
+        Args:
+            **field_filters: The value that each field must be equal to.
+                Calling with no arguments returns every pair.
+
+        Returns:
+            The matching values, keyed by their keys.
+
+        Raises:
+            RuntimeError: If the store is closed.
+            ValueError: If a field name cannot be used in SQL (JSON codec
+                only).
+        """
+        check_is_open(self)
+        matches: dict[str, dict[str, Any]] = {}
+        for batch in self._batches(self._filter_candidates, field_filters):
+            matches.update(self._matching_items(batch, field_filters))
+        return matches
+
+    async def afilter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
+        r"""Async equivalent of :meth:`filter_items`."""
+        check_is_open(self)
+        matches: dict[str, dict[str, Any]] = {}
+        async with contextlib.aclosing(self._afilter_candidates(field_filters)) as batches:
+            async for batch in batches:
+                matches.update(self._matching_items(batch, field_filters))
+        return matches
+
+    def _matching_values(
+        self, batch: Mapping[str, Payload], fields: Mapping[str, Any]
+    ) -> list[dict[str, Any]]:
+        if not self._filters_in_sql():
+            return super()._matching_values(batch, fields)
+        # The rows were already selected by the database.
+        decode = self._codec.decode
+        return [decode(payload) for payload in batch.values()]
+
+    ###########################
+    #     Template helpers    #
+    ###########################
+
+    def _filters_in_sql(self) -> bool:
+        r"""Indicate whether the database applies the filters.
+
+        Returns:
+            ``True`` if the codec is a
+            :class:`~persista.store.JsonCodec`, whose payloads the database
+            can read. Otherwise the filters are applied to the decoded
+            values.
+        """
+        return type(self._codec) is JsonCodec
+
+    def _matching_items(
+        self, batch: Mapping[str, Payload], fields: Mapping[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        r"""Decode a batch of candidates and keep the pairs that match a
+        filter.
+
+        Args:
+            batch: The payloads of the candidates, keyed by their key.
+            fields: The value that each field must be equal to.
+
+        Returns:
+            The matching values, keyed by their key.
+        """
+        decode = self._codec.decode
+        values = {key: decode(payload) for key, payload in batch.items()}
+        if self._filters_in_sql():
+            return values
+        return {key: value for key, value in values.items() if self._matches(value, fields)}
+
+
+class SQLStore(SQLFilterStore):
     r"""Define a base class for the stores that keep their values in a
     SQL table, through a connection with a ``qmark`` parameter style.
 
@@ -304,41 +419,6 @@ class SQLStore(BaseStore):
         # Held by every write, for a backend whose transactions alone do
         # not isolate the writers of one database.
         self._write_lock: contextlib.AbstractContextManager[Any] = contextlib.nullcontext()
-
-    def filter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
-        r"""Like :meth:`filter`, but keyed by the keys of the matching
-        values.
-
-        This lets callers that need to know which key each matching
-        value belongs to (e.g. a record store layered on top) filter in
-        SQL instead of reading every value.
-
-        Args:
-            **field_filters: The value that each field must be equal to.
-                Calling with no arguments returns every pair.
-
-        Returns:
-            The matching values, keyed by their keys.
-
-        Raises:
-            RuntimeError: If the store is closed.
-            ValueError: If a field name cannot be used in SQL (JSON codec
-                only).
-        """
-        check_is_open(self)
-        matches: dict[str, dict[str, Any]] = {}
-        for batch in self._batches(self._filter_candidates, field_filters):
-            matches.update(self._matching_items(batch, field_filters))
-        return matches
-
-    async def afilter_items(self, **field_filters: Any) -> dict[str, dict[str, Any]]:
-        r"""Async equivalent of :meth:`filter_items`."""
-        check_is_open(self)
-        matches: dict[str, dict[str, Any]] = {}
-        async with contextlib.aclosing(self._afilter_candidates(field_filters)) as batches:
-            async for batch in batches:
-                matches.update(self._matching_items(batch, field_filters))
-        return matches
 
     def to_uri(self) -> str:
         return encode_sql_uri(self._scheme, self._database, self._codec)
@@ -555,15 +635,6 @@ class SQLStore(BaseStore):
             return super()._filter_candidates(fields)
         return self._select_matches(fields)
 
-    def _matching_values(
-        self, batch: Mapping[str, Payload], fields: Mapping[str, Any]
-    ) -> list[dict[str, Any]]:
-        if not self._filters_in_sql():
-            return super()._matching_values(batch, fields)
-        # The rows were already selected by the database.
-        decode = self._codec.decode
-        return [decode(payload) for payload in batch.values()]
-
     ###########################
     #     Template helpers    #
     ###########################
@@ -592,17 +663,6 @@ class SQLStore(BaseStore):
         placeholders = ", ".join("?" * len(keys))
         self._execute(f"{_DELETE_ALL} WHERE key IN ({placeholders})", keys)
 
-    def _filters_in_sql(self) -> bool:
-        r"""Indicate whether the database applies the filters.
-
-        Returns:
-            ``True`` if the codec is a
-            :class:`~persista.store.JsonCodec`, whose payloads the database
-            can read. Otherwise the filters are applied to the decoded
-            values.
-        """
-        return type(self._codec) is JsonCodec
-
     def _select_matches(self, fields: Mapping[str, Any]) -> Iterator[dict[str, Payload]]:
         r"""Select with one query the rows that match a filter.
 
@@ -619,25 +679,6 @@ class SQLStore(BaseStore):
         sql = f"{_SELECT_ALL} WHERE {where}" if where else _SELECT_ALL
         if rows := self._fetch(sql, params):
             yield dict(rows)
-
-    def _matching_items(
-        self, batch: Mapping[str, Payload], fields: Mapping[str, Any]
-    ) -> dict[str, dict[str, Any]]:
-        r"""Decode a batch of candidates and keep the pairs that match a
-        filter.
-
-        Args:
-            batch: The payloads of the candidates, keyed by their key.
-            fields: The value that each field must be equal to.
-
-        Returns:
-            The matching values, keyed by their key.
-        """
-        decode = self._codec.decode
-        values = {key: decode(payload) for key, payload in batch.items()}
-        if self._filters_in_sql():
-            return values
-        return {key: value for key, value in values.items() if self._matches(value, fields)}
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"database": self._database, "closed": self.closed}
