@@ -2,12 +2,13 @@ r"""Record metadata statistics."""
 
 from __future__ import annotations
 
-__all__ = ["MetadataStats", "compute_metadata_stats"]
+__all__ = ["compute_metadata_stats"]
 
 from collections import Counter
-from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from persista.record.equality import encode_value
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -16,13 +17,16 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class MetadataStats:
+class _MetadataStats:
     """Streaming record metadata health/stats.
 
     Accumulates statistics one record at a time via ``update``, so it
     can be fed from a list, a generator, or any other iterable without
     requiring the full corpus to be held in memory at once. Call
     ``to_dict`` at the end to compute the final report.
+
+    Two values of a key are one value of its sample if they are equal as
+    defined by :mod:`persista.record.equality`.
 
     Note:
         Once a key's sample of unique values has reached
@@ -48,7 +52,7 @@ class MetadataStats:
     Attributes:
         n_sample_values: Max number of unique sample values retained
             per metadata key, or ``None`` to retain all unique values
-            for every key (no cap).
+            for every key (no cap). Must not be negative.
         count: Total number of records processed.
         missing_metadata_count: Number of records whose ``metadata``
             is empty or falsy.
@@ -60,6 +64,9 @@ class MetadataStats:
         max_keys: Number of metadata keys on the record with the
             most keys seen so far, or ``None`` if no records have
             been processed yet.
+
+    Raises:
+        ValueError: If ``n_sample_values`` is negative.
     """
 
     n_sample_values: int | None = 3
@@ -73,8 +80,14 @@ class MetadataStats:
     _key_counts: Counter[str] = field(default_factory=Counter)
     _key_none_counts: Counter[str] = field(default_factory=Counter)
     _key_types: dict[str, set[str]] = field(default_factory=dict)
-    _key_values: dict[str, set[Any]] = field(default_factory=dict)
+    # For each key, the sampled values by their encoding.
+    _key_values: dict[str, dict[bytes, Any]] = field(default_factory=dict)
     _key_values_truncated: dict[str, bool] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.n_sample_values is not None and self.n_sample_values < 0:
+            msg = f"'n_sample_values' must be non-negative or None, got {self.n_sample_values}"
+            raise ValueError(msg)
 
     def update(self, record: Record) -> None:
         """Fold a single record's metadata into the running statistics.
@@ -89,6 +102,11 @@ class MetadataStats:
                 expected to be a mapping; a falsy/empty mapping is
                 counted via ``missing_metadata_count`` and contributes
                 zero keys.
+
+        Raises:
+            TypeError: If a value contains an object that cannot be
+                compared (see :mod:`persista.record.equality`).
+            ValueError: If a value contains ``NaN`` or itself.
         """
         metadata = record.metadata
 
@@ -105,6 +123,9 @@ class MetadataStats:
             self.max_keys = n_keys
 
         for key, value in metadata.items():
+            # Every value is encoded, also when it cannot enter the sample,
+            # so that the errors do not depend on the order of the records.
+            encoding = encode_value(value)
             self._key_counts[key] += 1
             self._key_types.setdefault(key, set()).add(type(value).__name__)
 
@@ -116,19 +137,16 @@ class MetadataStats:
                 # so the retained sample stays deterministic (first values seen).
                 continue
 
-            values = self._key_values.setdefault(key, set())
-            if not isinstance(value, Hashable):
-                # Unhashable value (e.g. a list or dict) -> stop sampling this key.
-                self._key_values_truncated[key] = True
-            elif (
+            values = self._key_values.setdefault(key, {})
+            if (
                 self.n_sample_values is not None
                 and len(values) >= self.n_sample_values
-                and value not in values
+                and encoding not in values
             ):
                 # Sample is full and this is a new value -> cap it here.
                 self._key_values_truncated[key] = True
             else:
-                values.add(value)
+                values.setdefault(encoding, value)
 
     def to_dict(self) -> dict[str, Any]:
         """Compute the final statistics report from the accumulated
@@ -167,11 +185,9 @@ class MetadataStats:
                 ``None``). Reflects the first distinct values
                 encountered, in record order.
               - ``unique_values_sample_truncated``: ``True`` if not all
-                unique values for the key could be retained (either
-                because the sample cap was hit or because an
-                unhashable value was encountered). Always ``False``
-                when ``n_sample_values`` is ``None``, unless an
-                unhashable value was seen.
+                unique values for the key could be retained because
+                the sample cap was hit. Always ``False`` when
+                ``n_sample_values`` is ``None``.
 
             Percentages are intentionally omitted - compute them later
             from the raw counts (e.g. ``present_in_records / count``)
@@ -188,7 +204,7 @@ class MetadataStats:
                 "missing_in_records": n - present,
                 "value_types": sorted(self._key_types.get(key, set())),
                 "none_or_empty_count": self._key_none_counts.get(key, 0),
-                "unique_values_sample": sorted(self._key_values.get(key, set()), key=str),
+                "unique_values_sample": sorted(self._key_values.get(key, {}).values(), key=str),
                 "unique_values_sample_truncated": self._key_values_truncated.get(key, False),
             }
 
@@ -211,12 +227,17 @@ def compute_metadata_stats(
     Streaming health/stat check over a list, generator, or any iterable
     of Records. Records are consumed one at a time, so this works
     with iterators or generators whose full contents cannot fit in
-    memory — only per-key aggregates are retained (see
-    ``RecordMetadataStats`` for the memory profile).
+    memory: only per-key aggregates are retained. With a numeric
+    ``n_sample_values``, the memory usage does not grow with the number
+    of records.
+
+    The counts are exact. Two values of a key are one value of its
+    sample if they are equal as defined by
+    :mod:`persista.record.equality`.
 
     Args:
         records: A list, generator, or other iterable of
-            ``zenpyre.records.Record`` objects. Consumed exactly once;
+            ``persista.record.Record`` objects. Consumed exactly once;
             if a generator/iterator is passed in, it will be exhausted
             by this call.
         n_sample_values: Max number of unique sample values to retain
@@ -227,10 +248,35 @@ def compute_metadata_stats(
             to the number of distinct values per key.
 
     Returns:
-        A dict of statistics as described in
-        ``RecordMetadataStats.to_dict``. For an empty input, returns a
-        report with ``count`` of ``0`` and ``None``/``0``/empty values
-        for the remaining fields.
+        A dict with the following keys:
+
+        - ``count``: Total number of records processed.
+        - ``missing_metadata_count``: Number of records with empty
+          metadata.
+        - ``avg_keys``: Mean number of metadata keys per record, or ``0``
+          if there is no record.
+        - ``min_keys`` / ``max_keys``: Fewest/most metadata keys of a
+          record, or ``None`` if there is no record.
+        - ``distinct_keys_seen``: Number of distinct metadata keys.
+        - ``per_key``: A dict mapping each metadata key, in sorted order,
+          to a dict with:
+
+          - ``present_in_records``: Number of records with the key.
+          - ``missing_in_records``: Number of records without the key.
+          - ``value_types``: Sorted names of the types of the values.
+          - ``none_or_empty_count``: Number of records where the value is
+            ``None`` or the empty string.
+          - ``unique_values_sample``: The first distinct values, in record
+            order, at most ``n_sample_values``, sorted by their string
+            form. They are the objects of the records, not copies.
+          - ``unique_values_sample_truncated``: ``True`` if some distinct
+            values are not in the sample.
+
+    Raises:
+        TypeError: If a metadata value contains an object that cannot be
+            compared (see :mod:`persista.record.equality`).
+        ValueError: If ``n_sample_values`` is negative, or if a metadata
+            value contains ``NaN`` or itself.
 
     Example:
         ```pycon
@@ -246,7 +292,7 @@ def compute_metadata_stats(
 
         ```
     """
-    stats = MetadataStats(n_sample_values=n_sample_values)
+    stats = _MetadataStats(n_sample_values=n_sample_values)
     for record in records:
         stats.update(record)
     return stats.to_dict()

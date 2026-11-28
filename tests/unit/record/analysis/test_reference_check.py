@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
+import pytest
+
 from persista.record import Record
+from persista.record.analysis import find_orphan_references
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-from persista.record.analysis import find_orphan_references
 
-########################################
+############################################
 #     Tests for find_orphan_references     #
-########################################
+############################################
 
 
 def test_find_orphan_references_no_orphans() -> None:
@@ -68,3 +71,21 @@ def test_find_orphan_references_accepts_single_use_generator() -> None:
         yield Record(id="chunk1", metadata={"parent_id": "missing"})
 
     assert find_orphan_references(gen(), reference_key="parent_id") == ["chunk1"]
+
+
+@pytest.mark.parametrize("reference", [1, 1.0, True, b"1", ("1",), math.nan])
+def test_find_orphan_references_reference_of_another_type(reference: object) -> None:
+    records = [Record(id="1"), Record(id="b", metadata={"parent_id": reference})]
+    assert find_orphan_references(records, reference_key="parent_id") == ["b"]
+
+
+def test_find_orphan_references_unhashable_reference() -> None:
+    records = [Record(id="a", metadata={"parent_id": ["a"]})]
+    with pytest.raises(TypeError, match=r"unhashable type|as a set element"):
+        find_orphan_references(records, reference_key="parent_id")
+
+
+def test_find_orphan_references_does_not_modify_input() -> None:
+    records = [Record(id="a", metadata={"parent_id": "b"})]
+    find_orphan_references(records, reference_key="parent_id")
+    assert records == [Record(id="a", metadata={"parent_id": "b"})]

@@ -20,6 +20,8 @@ __all__ = [
     "redis_not_available",
     "requests_available",
     "requests_not_available",
+    "rich_available",
+    "rich_not_available",
     "urllib3_available",
     "urllib3_not_available",
 ]
@@ -34,6 +36,7 @@ from persista.utils.imports import (
     is_psycopg_available,
     is_redis_available,
     is_requests_available,
+    is_rich_available,
     is_urllib3_available,
 )
 
@@ -84,6 +87,13 @@ requests_available: pytest.MarkDecorator = pytest.mark.skipif(
 )
 requests_not_available: pytest.MarkDecorator = pytest.mark.skipif(
     is_requests_available(), reason="Skip if requests is available"
+)
+
+rich_available: pytest.MarkDecorator = pytest.mark.skipif(
+    not is_rich_available(), reason="Requires rich"
+)
+rich_not_available: pytest.MarkDecorator = pytest.mark.skipif(
+    is_rich_available(), reason="Skip if rich is available"
 )
 
 urllib3_available: pytest.MarkDecorator = pytest.mark.skipif(

@@ -20,6 +20,7 @@ from persista.testing.fixtures import (
     lmdb_available,
     psycopg_available,
     redis_available,
+    rich_available,
 )
 
 OPTIONAL_LIBRARIES = (
@@ -34,8 +35,8 @@ OPTIONAL_LIBRARIES = (
     "urllib3",
 )
 
-# persista.testing needs pytest. persista.record.analysis imports rich.
-EXCLUDED = {"persista.testing", "persista.record.analysis"}
+# persista.testing needs pytest.
+EXCLUDED = {"persista.testing"}
 
 SUBPACKAGES = sorted(
     module.name
@@ -71,7 +72,7 @@ async def imported_libraries(code: str) -> list[str]:
 
 
 def test_subpackages() -> None:
-    assert {"persista.store", "persista.http.httpx"} <= set(SUBPACKAGES)
+    assert {"persista.store", "persista.record.analysis", "persista.http.httpx"} <= set(SUBPACKAGES)
 
 
 @pytest.mark.parametrize("subpackage", SUBPACKAGES)
@@ -124,4 +125,31 @@ async def test_in_memory_and_sqlite_stores_import_no_optional_library() -> None:
 @redis_available
 async def test_repr_of_a_redis_store_does_not_import_the_driver() -> None:
     code = "from persista.store import RedisStore\nrepr(RedisStore())"
+    assert await imported_libraries(code) == []
+
+
+ANALYSES = """from persista.record import Record
+from persista.record.analysis import compute_metadata_stats, print_metadata_stats_report
+stats = compute_metadata_stats([Record(id="a", metadata={"x": "[bold]"})])
+"""
+
+
+async def test_analyses_import_no_optional_library() -> None:
+    assert await imported_libraries(ANALYSES) == []
+
+
+@rich_available
+async def test_print_metadata_stats_report_imports_rich() -> None:
+    code = f"""{ANALYSES}import io
+from contextlib import redirect_stdout
+with redirect_stdout(io.StringIO()):
+    print_metadata_stats_report(stats)"""
+    assert await imported_libraries(code) == ["rich"]
+
+
+async def test_analyses_work_without_rich() -> None:
+    # None in sys.modules makes the import of rich fail.
+    code = f"""import sys
+sys.modules["rich"] = None
+{ANALYSES}del sys.modules["rich"]"""
     assert await imported_libraries(code) == []

@@ -520,4 +520,4 @@ class RecordStore(MultilineDisplayMixin):
         Returns:
             The record, with a shallow copy of ``value`` as metadata.
         """
-        return Record(id=record_id, metadata=dict(value))
+        return Record(id=record_id, metadata=value)

@@ -7,28 +7,31 @@ __all__ = ["find_near_duplicate_record_ids"]
 import hashlib
 from typing import TYPE_CHECKING, Any
 
+from persista.record.equality import encode_value
+
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from persista.record import Record
 
 
-def _base_hash(item: str, seed: int) -> int:
-    """Hash a single metadata ``"key=value"`` item with a given seed."""
-    digest = hashlib.sha256(f"{seed}:{item}".encode()).digest()
+def _base_hash(item: bytes, seed: int) -> int:
+    """Hash the encoding of a ``(key, value)`` item of metadata with a
+    given seed."""
+    digest = hashlib.sha256(b"%d:%s" % (seed, item)).digest()
     return int.from_bytes(digest[:8], "big")
 
 
-def _minhash_signature(metadata: dict[str, Any], num_hashes: int) -> tuple[int, ...]:
+def _minhash_signature(metadata: Mapping[str, Any], num_hashes: int) -> tuple[int, ...]:
     """Compute a MinHash signature for a record's metadata.
 
-    Treats the metadata as a set of ``"key=value"`` string tokens and
-    computes ``num_hashes`` independent minimum hash values over that
-    set, approximating the Jaccard similarity between two records'
-    metadata sets by the fraction of signature positions on which they
-    agree.
+    Treats the metadata as a set of ``(key, value)`` tokens, encoded by
+    :func:`persista.record.equality.encode_value`, and computes
+    ``num_hashes`` independent minimum hash values over that set,
+    approximating the Jaccard similarity between two records' metadata
+    sets by the fraction of signature positions on which they agree.
     """
-    items = [f"{key}={value}" for key, value in sorted(metadata.items())]
+    items = [encode_value((key, value)) for key, value in metadata.items()]
     if not items:
         # Empty metadata: distinct sentinel per position, so two empty
         # records agree everywhere and match nothing else.
@@ -47,19 +50,24 @@ def find_near_duplicate_record_ids(
     banding.
 
     Unlike ``find_duplicate_record_ids`` (which only groups records
-    with byte-for-byte identical metadata), this catches records whose
+    with equal metadata), this catches records whose
     metadata overlaps substantially but not completely - e.g. the same
     document re-ingested with one extra or corrected field, or
     metadata differing only in a timestamp key.
 
-    Each record's metadata is treated as a set of ``"key=value"``
-    tokens. A ``num_hashes``-sized MinHash signature approximates the
-    Jaccard similarity between two records' token sets; signatures are
-    then split into ``num_bands`` bands, and any two records sharing
-    an identical band are considered candidate near-duplicates and
+    Each record's metadata is treated as a set of ``(key, value)``
+    tokens: two tokens are the same if their keys and their values are
+    equal as defined by :mod:`persista.record.equality`. A
+    ``num_hashes``-sized MinHash signature approximates the Jaccard
+    similarity between two records' token sets; signatures are then
+    split into ``num_bands`` bands, and any two records sharing an
+    identical band are considered candidate near-duplicates and
     merged into the same group (via union-find). More bands (with
     fewer rows each) increases recall (catches less similar pairs) at
     the cost of more false positives; fewer bands does the opposite.
+    The result is therefore approximate: records with equal metadata
+    are always grouped (unless the metadata are empty), but similar
+    records can be missed, and quite different ones can be grouped.
 
     Records are consumed one at a time, so this works with generators
     or other iterables whose full contents cannot fit in memory for
@@ -75,9 +83,10 @@ def find_near_duplicate_record_ids(
             if a generator/iterator is passed in, it will be exhausted
             by this call.
         num_hashes: Number of hash functions in each MinHash
-            signature. Must be evenly divisible by ``num_bands``.
+            signature. Must be positive and evenly divisible by
+            ``num_bands``.
         num_bands: Number of LSH bands the signature is split into.
-            Must evenly divide ``num_hashes``.
+            Must be positive and evenly divide ``num_hashes``.
 
     Returns:
         A list of groups of record ``id``s considered near-duplicates
@@ -87,8 +96,12 @@ def find_near_duplicate_record_ids(
         are never grouped with each other or with anything else.
 
     Raises:
-        ValueError: If ``num_hashes`` is not evenly divisible by
-            ``num_bands``.
+        ValueError: If ``num_hashes`` or ``num_bands`` is not positive, if
+            ``num_hashes`` is not evenly divisible by ``num_bands``, or if
+            the metadata of a record contains ``NaN`` or a value that
+            contains itself.
+        TypeError: If the metadata of a record contains an object that
+            cannot be compared (see :mod:`persista.record.equality`).
 
     Example:
         ```pycon
@@ -106,8 +119,11 @@ def find_near_duplicate_record_ids(
 
     See Also:
         ``find_duplicate_record_ids``: an exact variant that only
-        groups records with identical metadata.
+        groups records with equal metadata.
     """
+    if num_hashes <= 0 or num_bands <= 0:
+        msg = f"num_hashes ({num_hashes}) and num_bands ({num_bands}) must be positive"
+        raise ValueError(msg)
     if num_hashes % num_bands != 0:
         msg = f"num_hashes ({num_hashes}) must be evenly divisible by num_bands ({num_bands})"
         raise ValueError(msg)

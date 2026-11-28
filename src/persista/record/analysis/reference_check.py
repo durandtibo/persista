@@ -33,12 +33,17 @@ def find_orphan_references(records: Iterable[Record], reference_key: str) -> lis
             ``persista.record.Record`` objects.
         reference_key: The metadata key holding the referenced record
             id. Records missing this key, or whose value is ``None``,
-            are not considered orphans (there is nothing to check).
+            are not considered orphans (there is nothing to check). The
+            ids are strings, so a reference of another type, such as the
+            number ``1`` for the id ``"1"``, matches no record.
 
     Returns:
         A list of record ``id``s whose ``reference_key`` metadata
         value does not match any record id in the corpus, in the
         order their records were encountered.
+
+    Raises:
+        TypeError: If a reference cannot be hashed, such as a list.
 
     Example:
         ```pycon

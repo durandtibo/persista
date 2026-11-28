@@ -59,3 +59,14 @@ def test_compute_schema_shapes_first_seen_order() -> None:
         Record(id="c", metadata={"x": 2}),
     ]
     assert list(compute_schema_shapes(records).keys()) == [("x",), ("y",)]
+
+
+def test_compute_schema_shapes_values_that_cannot_be_compared_are_ignored() -> None:
+    records = [Record(id="a", metadata={"x": object()})]
+    assert compute_schema_shapes(records) == {("x",): ["a"]}
+
+
+def test_compute_schema_shapes_does_not_modify_input() -> None:
+    records = [Record(id="a", metadata={"b": 1, "a": 2})]
+    compute_schema_shapes(records)
+    assert repr(records) == "[Record(id='a', metadata={'b': 1, 'a': 2})]"

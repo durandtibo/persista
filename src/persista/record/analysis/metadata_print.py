@@ -4,13 +4,29 @@ from __future__ import annotations
 
 __all__ = ["print_metadata_stats_report"]
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from rich import get_console
-from rich.console import Console, Group
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
+from coola.utils.imports import lazy_import
+
+from persista.utils.imports import check_rich
+
+if TYPE_CHECKING:
+    import rich
+    from rich import (
+        console as rich_console,
+        markup as rich_markup,
+        panel as rich_panel,
+        table as rich_table,
+        text as rich_text,
+    )
+else:
+    # Imported when the first report is printed.
+    rich = lazy_import("rich")
+    rich_console = lazy_import("rich.console")
+    rich_markup = lazy_import("rich.markup")
+    rich_panel = lazy_import("rich.panel")
+    rich_table = lazy_import("rich.table")
+    rich_text = lazy_import("rich.text")
 
 
 def _format_count(count: int, total: int) -> str:
@@ -36,7 +52,7 @@ def _format_count(count: int, total: int) -> str:
     return f"{count} ({pct:.1f}%)"
 
 
-def _build_overview_line(stats: dict[str, Any], count: int) -> Text:
+def _build_overview_line(stats: dict[str, Any], count: int) -> rich_text.Text:
     """Build the "N records · N distinct keys" summary line shown at the
     top of the report.
 
@@ -56,14 +72,14 @@ def _build_overview_line(stats: dict[str, Any], count: int) -> Text:
         >>> text.plain
         '100 records  ·  2 distinct keys'
     """
-    overview = Text()
+    overview = rich_text.Text()
     overview.append(f"{count:,} records", style="bold")
     overview.append("  ·  ")
     overview.append(f"{stats.get('distinct_keys_seen', 0)} distinct keys", style="dim")
     return overview
 
 
-def _build_summary_table(stats: dict[str, Any], count: int) -> Table:
+def _build_summary_table(stats: dict[str, Any], count: int) -> rich_table.Table:
     """Build the "Metric" / "Value" summary table.
 
     Renders a "keys per record" section (average/min/max) and a "data
@@ -85,10 +101,10 @@ def _build_summary_table(stats: dict[str, Any], count: int) -> Table:
         ...     "missing_metadata_count": 0,
         ... }
         >>> table = _build_summary_table(stats, 100)
-        >>> isinstance(table, Table)
-        True
+        >>> table.row_count
+        6
     """
-    table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
+    table = rich_table.Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
     table.add_column("Metric")
     table.add_column("Value", justify="right")
 
@@ -152,7 +168,8 @@ def _build_key_sample(info: dict[str, Any]) -> str:
 
     Returns:
         A comma-joined string of sampled values, with a trailing
-        ``"…"`` appended if the sample was truncated.
+        ``"…"`` appended if the sample was truncated. The values are
+        escaped, so rich displays them as they are, not as markup.
 
     Examples:
         >>> _build_key_sample({
@@ -161,13 +178,13 @@ def _build_key_sample(info: dict[str, Any]) -> str:
         ... })
         'a, b, …'
     """
-    sample = ", ".join(str(v) for v in info["unique_values_sample"])
+    sample = rich_markup.escape(", ".join(str(v) for v in info["unique_values_sample"]))
     if info["unique_values_sample_truncated"]:
         sample = f"{sample}, …" if sample else "…"
     return sample
 
 
-def _build_per_key_table(per_key: dict[str, Any], count: int) -> Table:
+def _build_per_key_table(per_key: dict[str, Any], count: int) -> rich_table.Table:
     """Build the "Metadata Keys" table, one row per metadata key.
 
     Args:
@@ -190,10 +207,10 @@ def _build_per_key_table(per_key: dict[str, Any], count: int) -> Table:
         ...     }
         ... }
         >>> table = _build_per_key_table(per_key, 2)
-        >>> isinstance(table, Table)
-        True
+        >>> table.row_count
+        1
     """
-    table = Table(
+    table = rich_table.Table(
         show_header=True, header_style="bold", title="Metadata Keys", title_justify="left"
     )
     table.add_column("Key", style="cyan")
@@ -220,7 +237,7 @@ def print_metadata_stats_report(
     stats: dict[str, Any],
     *,
     title: str = "Metadata Report",
-    console: Console | None = None,
+    console: rich_console.Console | None = None,
 ) -> None:
     """Render a record-metadata-stats report (from
     ``compute_metadata_stats``) as an overview line, a summary table,
@@ -234,11 +251,11 @@ def print_metadata_stats_report(
     with sampled values and data-quality flags).
 
     Args:
-        stats: The dict returned by ``compute_metadata_stats`` (or
-            ``MetadataStats.to_dict``). Expected to contain a ``count``
-            key; all other keys are read defensively via ``[...]``/
-            ``.get(...)``, so a partial dict for an empty corpus (e.g.
-            ``count=0``) still renders correctly.
+        stats: The dict returned by ``compute_metadata_stats``.
+            Expected to contain a ``count`` key; all other keys are read
+            defensively via ``[...]``/``.get(...)``, so a partial dict
+            for an empty corpus (e.g. ``count=0``) still renders
+            correctly.
         title: Panel title shown above the report, at the top-left of
             the panel border.
         console: An existing ``rich.console.Console`` to print to.
@@ -246,6 +263,9 @@ def print_metadata_stats_report(
 
     Returns:
         None. Output is printed directly to ``console``.
+
+    Raises:
+        RuntimeError: If the optional ``rich`` library is not installed.
 
     Examples:
         >>> stats = {
@@ -263,7 +283,8 @@ def print_metadata_stats_report(
         ... }
         >>> print_metadata_stats_report(stats)  # doctest: +SKIP
     """
-    console = console or get_console()
+    check_rich()
+    console = console or rich.get_console()
 
     panel_title = f"[bold]{title}[/bold]"
     count = stats["count"]
@@ -271,16 +292,16 @@ def print_metadata_stats_report(
 
     renderables: list[Any] = [
         _build_overview_line(stats, count),
-        Text(),
+        rich_text.Text(),
         _build_summary_table(stats, count),
     ]
     if per_key:
-        renderables.append(Text())
+        renderables.append(rich_text.Text())
         renderables.append(_build_per_key_table(per_key, count))
 
     console.print(
-        Panel(
-            Group(*renderables),
+        rich_panel.Panel(
+            rich_console.Group(*renderables),
             title=panel_title,
             title_align="left",
             border_style="cyan",

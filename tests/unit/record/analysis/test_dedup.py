@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import math
+
+import pytest
+
 from persista.record import Record
 from persista.record.analysis import find_duplicate_record_ids
 
-########################################
+###############################################
 #     Tests for find_duplicate_record_ids     #
-########################################
+###############################################
 
 
 def test_find_duplicate_record_ids_no_duplicates() -> None:
@@ -85,33 +89,49 @@ def test_find_duplicate_record_ids_generator_consumed_only_once() -> None:
     assert list(g) == []
 
 
-def test_find_duplicate_record_ids_unhashable_value_does_not_raise() -> None:
-    # coola.hashing.hash_object(..., ignore_unhashable=True) tolerates values
-    # with no registered hasher instead of raising.
-    class Tag:
-        def __str__(self) -> str:
-            return "custom-tag"
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        pytest.param(1, "1", id="int-str"),
+        pytest.param(1, True, id="int-bool"),
+        pytest.param("1", True, id="str-bool"),
+        pytest.param([1, 2], (1, 2), id="list-tuple"),
+        pytest.param({"a": None}, {}, id="none-absent"),
+    ],
+)
+def test_find_duplicate_record_ids_different_values_not_grouped(
+    first: object, second: object
+) -> None:
+    records = [Record(id="a", metadata={"x": first}), Record(id="b", metadata={"x": second})]
+    assert find_duplicate_record_ids(records) == []
 
-    records = [
-        Record(id="a", metadata={"tag": Tag()}),
-        Record(id="b", metadata={"tag": Tag()}),
-    ]
+
+def test_find_duplicate_record_ids_equal_numbers_grouped() -> None:
+    records = [Record(id="a", metadata={"x": [1]}), Record(id="b", metadata={"x": [1.0]})]
     assert find_duplicate_record_ids(records) == [["a", "b"]]
 
 
-def test_find_duplicate_record_ids_unhashable_values_of_different_types_not_grouped() -> None:
-    # Two distinct types with no registered hasher must not collide just
-    # because they happen to stringify the same way.
-    class Foo:
-        def __str__(self) -> str:
-            return "x"
+@pytest.mark.parametrize(
+    ("value", "error", "message"),
+    [
+        pytest.param(object(), TypeError, r"Cannot encode an object of type", id="custom"),
+        pytest.param(
+            bytearray(b"a"), TypeError, r"Cannot encode an object of type", id="bytearray"
+        ),
+        pytest.param(math.nan, ValueError, r"Cannot encode NaN by value", id="nan"),
+    ],
+)
+def test_find_duplicate_record_ids_value_that_cannot_be_compared(
+    value: object, error: type[Exception], message: str
+) -> None:
+    records = [Record(id="a", metadata={"x": value})]
+    with pytest.raises(error, match=message):
+        find_duplicate_record_ids(records)
 
-    class Bar:
-        def __str__(self) -> str:
-            return "x"
 
-    records = [
-        Record(id="a", metadata={"tag": Foo()}),
-        Record(id="b", metadata={"tag": Bar()}),
-    ]
-    assert find_duplicate_record_ids(records) == []
+def test_find_duplicate_record_ids_does_not_modify_input() -> None:
+    records = [Record(id="a", metadata={"x": [1.0]}), Record(id="b", metadata={"x": [1]})]
+    find_duplicate_record_ids(records)
+    assert repr(records) == (
+        "[Record(id='a', metadata={'x': [1.0]}), Record(id='b', metadata={'x': [1]})]"
+    )

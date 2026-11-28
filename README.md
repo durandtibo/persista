@@ -132,16 +132,18 @@ Helpers to fetch HTTP responses with automatic retries, built on top of `request
 
 ### 🧾 **Records**
 
-A `Record` container (a stable UUID `id` plus a `metadata` dict) with helpers to filter, sort,
-persist, and analyze collections of records:
+A `Record` container (a stable UUID `id` plus a read-only `metadata` mapping, which can be hashed,
+pickled and copied) with helpers to filter, sort, persist, and analyze collections of records:
 
 - `filter_by_metadata`/`filter_by_metadata_range`/`filter_by_metadata_values`,
-  `sort_by_metadata`: filter and sort records by metadata
+  `sort_by_metadata`: filter and sort records by metadata, with the same equality as the filters of
+  the stores
 - `RecordStore`: persist records in any `persista.store` backend, with the method names of
   `BaseStore`
 - `persista.record.analysis`: exact/near-duplicate detection, id-collision detection, diffing two
   snapshots, orphan-reference checks, schema-shape clustering, value frequency/cardinality, and
-  metadata stats/reporting
+  metadata stats/reporting (the printed report requires the `rich` extra). They tell `1`, `"1"` and
+  `True` apart
 - `generate_fake_records` for synthetic test data (requires the `faker` extra)
 
 ```pycon

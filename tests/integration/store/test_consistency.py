@@ -17,6 +17,7 @@ The contract of the stores that implement the primitives of
 
 from __future__ import annotations
 
+import copy
 import tempfile
 import uuid
 from collections.abc import AsyncIterator, Generator, Iterator
@@ -24,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from persista.record import Record
+from persista.record import Record, filter_by_metadata
 from persista.record.store import RecordStore
 from persista.store import (
     BaseStore,
@@ -1117,6 +1118,30 @@ def test_record_store_filter_matches_store_filter(
     record_store.set_many(records)
     result = {record.id: dict(record.metadata) for record in record_store.filter(**field_filters)}
     assert result == record_store.store.filter(**field_filters)
+
+
+@pytest.mark.parametrize("value", [1, 1.0, "1", True, None, [1], [True], {"a": 1}])
+def test_record_store_filter_matches_filter_by_metadata(
+    record_store: RecordStore, value: object
+) -> None:
+    values = [1, 1.0, "1", True, None, [1], [True], {"a": 1.0}]
+    records = [Record(id=str(i), metadata={"v": v}) for i, v in enumerate(values)]
+    records.append(Record(id="absent"))
+    record_store.set_many(records)
+    expected = [record.id for record in filter_by_metadata(records, "v", value)]
+    assert sorted(record.id for record in record_store.filter(v=value)) == expected
+
+
+def test_record_store_returns_records_that_can_be_copied(record_store: RecordStore) -> None:
+    record_store.set(Record(id="1", metadata={"tags": ["a"]}))
+    record = record_store.get("1")
+    assert copy.deepcopy(record) == Record(id="1", metadata={"tags": ["a"]})
+
+
+def test_record_store_round_trip_keeps_derived_id(record_store: RecordStore) -> None:
+    record = Record.from_metadata({"source": "a.txt", "page": 1, "score": 0.5, "tags": ["a"]})
+    record_store.set(record)
+    assert Record.from_metadata(record_store.get(record.id).metadata).id == record.id
 
 
 def test_record_store_filter_returns_record_ids(

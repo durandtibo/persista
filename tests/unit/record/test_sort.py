@@ -36,6 +36,15 @@ def test_sort_by_metadata_returns_new_list(records: list[Record]) -> None:
     assert sort_by_metadata(records, "source") is not records
 
 
+def test_sort_by_metadata_generator_input(records: list[Record]) -> None:
+    assert [r.id for r in sort_by_metadata(iter(records), "source")] == ["a", "b", "c"]
+
+
+def test_sort_by_metadata_generator_input_keeps_missing(records: list[Record]) -> None:
+    result = sort_by_metadata(iter([Record(id="x"), *records]), "source")
+    assert [r.id for r in result] == ["a", "b", "c", "x"]
+
+
 # --- Sorting ---
 
 

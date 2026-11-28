@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from persista.record import (
@@ -8,6 +10,7 @@ from persista.record import (
     filter_by_metadata_range,
     filter_by_metadata_values,
 )
+from persista.record.filter import _index_values, _is_member
 
 
 @pytest.fixture
@@ -283,7 +286,7 @@ def test_filter_by_metadata_range_exact_match() -> None:
 
 def test_filter_by_metadata_range_incomparable_types_raises() -> None:
     records = [Record(id="a", metadata={"page": "not-a-number"})]
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match=r"not supported between instances"):
         filter_by_metadata_range(records, "page", lower=1)
 
 
@@ -292,7 +295,7 @@ def test_filter_by_metadata_range_explicit_none_value_raises() -> None:
     missing the key entirely) is not treated as "missing" and is
     compared against the bounds like any other value."""
     records = [Record(id="a", metadata={"page": None})]
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match=r"not supported between instances"):
         filter_by_metadata_range(records, "page", lower=1)
 
 
@@ -415,3 +418,120 @@ def test_filter_by_metadata_values_preserves_order(category_records: list[Record
         Record(id="b", metadata={"category": "Cooking", "page": 2}),
         Record(id="d", metadata={"category": "Science", "page": 4}),
     ]
+
+
+# --- One equality ---
+
+
+def typed_records() -> list[Record]:
+    return [
+        Record(id="int", metadata={"x": 1}),
+        Record(id="float", metadata={"x": 1.0}),
+        Record(id="bool", metadata={"x": True}),
+        Record(id="str", metadata={"x": "1"}),
+        Record(id="list", metadata={"x": [1]}),
+        Record(id="bool-list", metadata={"x": [True]}),
+        Record(id="tuple", metadata={"x": (1,)}),
+        Record(id="nan", metadata={"x": math.nan}),
+        Record(id="none", metadata={"x": None}),
+        Record(id="absent"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(1, ["int", "float"], id="int"),
+        pytest.param(True, ["bool"], id="bool"),
+        pytest.param("1", ["str"], id="str"),
+        pytest.param([1], ["list", "tuple"], id="list"),
+        pytest.param([True], ["bool-list"], id="bool-list"),
+        pytest.param(math.nan, [], id="nan"),
+        pytest.param(None, ["none", "absent"], id="none"),
+    ],
+)
+def test_filter_by_metadata_types(value: object, expected: list[str]) -> None:
+    assert [r.id for r in filter_by_metadata(typed_records(), "x", value)] == expected
+
+
+def test_filter_by_metadata_generator_input(records: list[Record]) -> None:
+    result = filter_by_metadata(iter(records), "category", "Cooking")
+    assert [r.id for r in result] == ["b"]
+
+
+def test_filter_by_metadata_range_generator_input(page_records: list[Record]) -> None:
+    result = filter_by_metadata_range(iter(page_records), "page", lower=10)
+    assert [r.id for r in result] == ["c", "d"]
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        pytest.param({1}, ["int", "float"], id="int"),
+        pytest.param({True}, ["bool"], id="bool"),
+        pytest.param([1, True], ["int", "float", "bool"], id="int-and-bool"),
+        pytest.param({"1"}, ["str"], id="str"),
+        pytest.param([[1]], ["list", "tuple"], id="list"),
+        pytest.param({(1,)}, ["list", "tuple"], id="tuple"),
+        pytest.param([math.nan], [], id="same-nan-object"),
+        pytest.param({None}, ["none", "absent"], id="none"),
+    ],
+)
+def test_filter_by_metadata_values_types(values: object, expected: list[str]) -> None:
+    records = typed_records()
+    assert [r.id for r in filter_by_metadata_values(records, "x", values)] == expected
+
+
+def test_filter_by_metadata_values_record_nan_object() -> None:
+    records = [Record(id="a", metadata={"x": math.nan})]
+    assert filter_by_metadata_values(records, "x", [math.nan]) == []
+
+
+def test_filter_by_metadata_values_unhashable_record_value() -> None:
+    records = [Record(id="a", metadata={"x": {"y": 1}}), Record(id="b", metadata={"x": 2})]
+    assert [r.id for r in filter_by_metadata_values(records, "x", [{"y": 1.0}])] == ["a"]
+
+
+def test_filter_by_metadata_values_generator_inputs(category_records: list[Record]) -> None:
+    result = filter_by_metadata_values(iter(category_records), "category", (v for v in ["Science"]))
+    assert [r.id for r in result] == ["a", "d"]
+
+
+def test_filter_by_metadata_values_does_not_mutate_values() -> None:
+    values = [[1], 2]
+    filter_by_metadata_values([Record(id="a", metadata={"x": [1]})], "x", values)
+    assert values == [[1], 2]
+
+
+###################################
+#     Tests for _index_values     #
+###################################
+
+
+def test_index_values_empty() -> None:
+    assert _index_values([]) == ({}, [])
+
+
+def test_index_values_groups_values_equal_in_python() -> None:
+    assert _index_values([1, True, "a", [2]]) == ({1: [1, True], "a": ["a"]}, [[2]])
+
+
+def test_index_values_consumes_iterator() -> None:
+    values = iter([1])
+    _index_values(values)
+    assert list(values) == []
+
+
+################################
+#     Tests for _is_member     #
+################################
+
+
+@pytest.mark.parametrize("value", [1, 1.0, True, "a", [2], (2,), (3,), [3]])
+def test_is_member_true(value: object) -> None:
+    assert _is_member(value, *_index_values([1, True, "a", [2], (3,)]))
+
+
+@pytest.mark.parametrize("value", [0, "1", None, [1], (True,)])
+def test_is_member_false(value: object) -> None:
+    assert not _is_member(value, *_index_values([1, "a", [2], (1.5,)]))
