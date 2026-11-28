@@ -489,7 +489,7 @@ the later steps change less code.
 | 10   | **Canonical encoding and the cache API.**                                                                                                                                  | C3-C7                      | yes                 | #378 |
 | 11   | **Records and analyses** on the canonical encoding.                                                                                                                        | R1-R6                      | yes                 | #379 |
 | 12   | **HTTP**: two `httpx` classes and one retry policy; delete the module functions; apply the retry properties to `requests`.                                                 | H4-H7                      | yes                 | #380 |
-| 13   | **Utils, extras, documentation**: one imports module, the Properties tables in the user guides, a migration page, section 3.5.                                             | 3.5                        | yes (imports)       |      |
+| 13   | **Utils, extras, documentation**: one imports module, the Properties tables in the user guides, a migration page, section 3.5.                                             | 3.5                        | yes (imports)       | #381 |
 
 During steps 4 to 7 the base keeps the public methods overridable, so that the backends move one
 at a time. Step 8 makes the template the only path.
