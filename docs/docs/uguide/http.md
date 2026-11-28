@@ -1,8 +1,8 @@
-# HTTP Fetch Utilities
+# HTTP Utilities
 
-:book: This page describes the HTTP helpers in `persista.http.requests` and
-`persista.http.httpx`, which fetch a URL with automatic retries on top of
-[`requests`](https://requests.readthedocs.io/) or [`httpx`](https://www.python-httpx.org/).
+:book: This page describes the HTTP helpers in `persista.http.httpx` and
+`persista.http.requests`, which send requests with automatic retries on top of
+[`httpx`](https://www.python-httpx.org/) or [`requests`](https://requests.readthedocs.io/).
 
 **Prerequisites:** You'll need to know a bit of Python. Depending on which helper you use, you
 need the `requests` extra (`persista[requests]`) or the `httpx` extra (`persista[httpx]`)
@@ -10,159 +10,131 @@ installed.
 
 ## Overview
 
-Fetching data from an HTTP API often needs retry logic for transient failures (rate limiting,
-server errors). `persista` provides two equivalent helpers so you can use whichever HTTP client
-your project already depends on:
+`persista` adds retries to the HTTP library that your project already uses:
 
-- `persista.http.requests.fetch_response`: synchronous, built on `requests`
-- `persista.http.httpx.get_response`/`post_response`/`put_response`/`patch_response`/
-  `delete_response`: synchronous, one function per HTTP method, built on `httpx`
-- `persista.http.httpx.get_response_async`/`post_response_async`/`put_response_async`/
-  `patch_response_async`/`delete_response_async`: asynchronous counterparts, built on `httpx`
-- `persista.http.httpx.send_request`/`send_request_async`: synchronous/asynchronous, any HTTP
-  method, built on `httpx`
-- `persista.http.httpx.HttpClient`/`AsyncHttpClient`: class-based wrappers around
-  `httpx.Client`/`httpx.AsyncClient` with the same retry behavior, plus optional response caching
+- `persista.http.httpx`: `HttpClient` and `AsyncHttpClient`, wrappers around `httpx.Client` and
+  `httpx.AsyncClient`, for any HTTP method, with an optional response cache;
+- `persista.http.requests`: `fetch_response` and `create_session`, built on `requests`, which
+  retry `GET` requests only and have no cache.
 
-Both retry on connection errors and on a configurable set of HTTP status codes (`429`, `500`,
-`502`, `503`, `504` by default), and raise an exception if the final attempt still fails.
+## Clients for `httpx`
 
-## Fetching with `requests`
-
-`fetch_response` (in `persista.http.requests`) fetches a URL and returns a
-`requests.Response`, retrying up to `max_retries` times with exponential backoff:
+`HttpClient` has the `get`, `post`, `put`, `patch`, and `delete` methods, and `request` for any
+other method. Without a client, the wrapper creates an `httpx.Client` with the default settings of
+`httpx` and closes it at the end of the `with` block (or with `close`):
 
 ```python
-from persista.http.requests import fetch_response
+from persista.http.httpx import HttpClient
 
-response = fetch_response(
-    "https://jsonplaceholder.typicode.com/todos/1",
-    timeout=10,
-    max_retries=5,
-)
-response.json()
+with HttpClient(max_retries=5) as client:
+    response = client.get("https://jsonplaceholder.typicode.com/todos/1", timeout=10)
+    response.json()
 ```
 
-`fetch_response` calls `response.raise_for_status()`, so a non-retryable error status raises a
-`requests.HTTPError`. Pass `headers` to set custom request headers, or `session` to reuse an
-existing `requests.Session` (otherwise a temporary session is created and closed automatically):
-
-```pycon
->>> from persista.http.requests import create_session
->>> session = create_session(max_retries=5)
-
-```
-
-`create_session` builds a `requests.Session` pre-configured with the retry policy used internally
-by `fetch_response`; use it directly if you need to issue several requests with the same retry
-behavior.
-
-## Fetching with `httpx`
-
-`get_response` (in `persista.http.httpx`) is the `httpx` equivalent for `GET` requests, returning
-an `httpx.Response`:
+To set a base URL, headers, authentication, a proxy, or a default timeout, give your own client.
+The wrapper does not close it:
 
 ```python
-from persista.http.httpx.method import get_response
+import httpx
 
-response = get_response(
-    "https://jsonplaceholder.typicode.com/todos/1",
-    timeout=10,
-    max_retries=5,
-)
-response.json()
+from persista.http.httpx import HttpClient
+
+with httpx.Client(base_url="https://jsonplaceholder.typicode.com", timeout=30) as httpx_client:
+    client = HttpClient(httpx_client)
+    response = client.post("/todos", json={"title": "example"})
+    response.json()
 ```
 
-If the server returns a `Retry-After` header, it is honored; otherwise the wait time doubles with
-each attempt (`2 ** (attempt - 1)` seconds).
+A request behaves as with the wrapped client: the arguments of a call (`timeout`, `headers`,
+`auth`, `follow_redirects`, ...) are passed to `httpx`, and the settings of the client apply to the
+others. The `timeout` applies to each attempt, not to the whole call. A 4xx or 5xx response raises
+`httpx.HTTPStatusError`; other responses are returned, including a redirect that is not followed.
 
-For other HTTP methods, use `send_request`, which takes the method as its first argument:
+### Async Client
 
-```python
-from persista.http.httpx.method import send_request
-
-response = send_request(
-    "POST",
-    "https://jsonplaceholder.typicode.com/todos",
-    json={"title": "example"},
-    timeout=10,
-    max_retries=5,
-)
-response.json()
-```
-
-`get_response` is in fact a thin wrapper around `send_request` for the `GET` case. `post_response`,
-`put_response`, `patch_response`, and `delete_response` are the equivalent wrappers for their
-respective methods.
-
-### Async Fetching
-
-`get_response_async` and `send_request_async` are the coroutine versions, for use with an
-`httpx.AsyncClient`:
+`AsyncHttpClient` is the async counterpart. It wraps an `httpx.AsyncClient`, is closed with
+`async with` (or `aclose`), and accesses the cache with its async (`a`-prefixed) methods:
 
 ```python
 import asyncio
 
-from persista.http.httpx.method import get_response_async, send_request_async
+from persista.http.httpx import AsyncHttpClient
 
 
 async def main():
-    response = await get_response_async(
-        "https://jsonplaceholder.typicode.com/todos/1",
-        timeout=10,
-        max_retries=5,
-    )
-    await send_request_async(
-        "POST",
-        "https://jsonplaceholder.typicode.com/todos",
-        json={"title": "example"},
-        timeout=10,
-        max_retries=5,
-    )
-    return response.json()
+    async with AsyncHttpClient() as client:
+        response = await client.get("https://jsonplaceholder.typicode.com/todos/1")
+        return response.json()
 
 
 asyncio.run(main())
 ```
 
-All these functions accept a `client` argument to reuse an existing
-`httpx.Client`/`httpx.AsyncClient`, and `retry_status_codes` to customize which status codes
-trigger a retry.
+## Retries
 
-## Class-Based Clients with Caching
+| Argument             | Default                                            | Meaning                                        |
+| -------------------- | -------------------------------------------------- | ---------------------------------------------- |
+| `max_retries`        | `3`                                                | retries per request; `0` disables them         |
+| `retry_status_codes` | `429`, `500`, `502`, `503`, `504`                  | statuses of the responses that are retried     |
+| `retry_methods`      | `DELETE`, `GET`, `HEAD`, `OPTIONS`, `PUT`, `TRACE` | methods that are retried                       |
+| `max_delay`          | `60.0`                                             | maximum delay between two attempts, in seconds |
 
-`HttpClient` and `AsyncHttpClient` wrap an `httpx.Client`/`httpx.AsyncClient` with the same retry
-behavior as `send_request`/`send_request_async`, exposed as `get`/`post`/`put`/`patch`/`delete`
-methods (plus `request` for an arbitrary method), and add optional response caching:
+They are arguments of the constructors; `max_retries` and `retry_status_codes` can also be
+overridden for one call. An invalid value raises `TypeError` or `ValueError`.
+
+### Which Requests Are Retried
+
+A request is sent again after:
+
+- a response whose status is in `retry_status_codes`;
+- a transport error (`httpx.TransportError`): a timeout, a network or proxy error, or an invalid
+  response of the server. `httpx.UnsupportedProtocol` and `httpx.LocalProtocolError` are not
+  retried, and neither are the other errors (for example `httpx.TooManyRedirects`).
+
+Only the methods in `retry_methods` are retried. By default these are the idempotent methods: a
+`POST` or `PATCH` request that failed may have been applied by the server, so it is sent once. Add
+them if your API accepts it (for example with an idempotency key):
 
 ```python
-import httpx
-
 from persista.http.httpx import HttpClient
+from persista.http.retry import IDEMPOTENT_METHODS
 
-with httpx.Client() as httpx_client:
-    client = HttpClient(client=httpx_client, timeout=10, max_retries=5)
-    response = client.get("https://jsonplaceholder.typicode.com/todos/1")
-    response.json()
+client = HttpClient(retry_methods=IDEMPOTENT_METHODS | {"POST"})
 ```
+
+A request whose body can only be read once is never retried: an iterator or a file passed as
+`content` or `data`, and any `files` upload. Pass `bytes`, `str`, `json`, or a form (`data` as a
+mapping) to allow retries.
+
+After the last attempt, its transport error is raised, or its response is handled like any
+response (`httpx.HTTPStatusError` for a 4xx or 5xx status).
+
+### Delay Between Attempts
+
+If the response has a `Retry-After` header, a number of seconds or an HTTP date, the client waits
+that long. Otherwise (no response, no header, or a value that cannot be read), it waits
+`2 ** (n - 1)` seconds before the retry `n`: 1, 2, 4, ... The delay is always between `0` and
+`max_delay`: a negative number or a date in the past gives no delay, and a longer delay is cut to
+`max_delay`.
+
+The rules are those of `persista.http.retry.RetryPolicy`.
+
+## Caching
 
 Pass an open `Cache` (see the [caching user guide](cache.md)) to cache successful responses.
 Caching is opt-in per HTTP method via `cacheable_methods`, which defaults to `{"GET"}`:
 
 ```python
-import httpx
-
 from persista.cache import Cache
 from persista.http.httpx import HttpClient
 
-with httpx.Client() as httpx_client, Cache(default_ttl=60) as cache:
-    client = HttpClient(client=httpx_client, cache=cache)
+with Cache(default_ttl=60) as cache, HttpClient(cache=cache) as client:
     client.get("https://jsonplaceholder.typicode.com/todos/1")  # fetched and cached
     client.get("https://jsonplaceholder.typicode.com/todos/1")  # served from the cache
 ```
 
-Only 2xx responses are cached. `timeout`, `max_retries`, and `retry_status_codes` can all be set
-once at construction and overridden per call.
+Only 2xx responses are cached. A client that is closed raises `RuntimeError`, even for a request
+whose response is in the cache.
 
 ### What Identifies a Cached Response
 
@@ -203,29 +175,58 @@ and `transfer-encoding` headers of the original are not kept, and `content-lengt
 the decoded content. Transport details are not kept either (for example `history`, `extensions`,
 and `elapsed`), and repeated headers are joined into one.
 
-`AsyncHttpClient` is the async counterpart, wrapping an `httpx.AsyncClient` and caching through
-the `Cache`'s async (`a`-prefixed) methods:
+## Fetching with `requests`
+
+`fetch_response` (in `persista.http.requests`) fetches a URL with a `GET` request and returns a
+`requests.Response`:
 
 ```python
-import asyncio
+from persista.http.requests import fetch_response
 
-import httpx
-
-from persista.http.httpx import AsyncHttpClient
-
-
-async def main():
-    async with httpx.AsyncClient() as httpx_client:
-        client = AsyncHttpClient(client=httpx_client)
-        response = await client.get("https://jsonplaceholder.typicode.com/todos/1")
-        return response.json()
-
-
-asyncio.run(main())
+response = fetch_response(
+    "https://jsonplaceholder.typicode.com/todos/1",
+    timeout=10,
+    max_retries=5,
+)
+response.json()
 ```
 
-Both classes leave the wrapped `httpx.Client`/`httpx.AsyncClient`'s lifecycle to the caller --
-they don't create or close it themselves.
+`fetch_response` calls `response.raise_for_status()`, so a 4xx or 5xx response raises a
+`requests.HTTPError`. Pass `headers` to set custom request headers, or `session` to reuse an
+existing `requests.Session` (otherwise a temporary session is created and closed automatically).
+With a `session`, its retry settings apply and the retry arguments of the call are ignored.
+
+`create_session` builds the `requests.Session` that `fetch_response` uses; use it directly if you
+need to issue several requests with the same retry behavior:
+
+```pycon
+>>> from persista.http.requests import create_session
+>>> session = create_session(max_retries=5, max_delay=30)
+
+```
+
+The retries differ from those of the `httpx` clients in these points:
+
+- only `GET` requests are retried, and this cannot be changed;
+- the errors that are retried are the connection and read errors of `urllib3`;
+- there is no delay before the first retry without a `Retry-After` header, then
+  `backoff_factor * (2 ** (n - 1))` seconds before the retry `n`;
+- `urllib3` does not know if a streamed body can be read again: do not send a generator as the body
+  of a `GET` request;
+- there is no cache.
+
+As for `httpx`, the default status codes are `429`, `500`, `502`, `503`, and `504`, a
+`Retry-After` header is a number of seconds or an HTTP date, and the delay is between `0` and
+`max_delay` (60 seconds by default).
+
+## Credentials in Errors and Logs
+
+The log messages of `persista` show a URL without its username and password; the query string is
+kept. The errors of `httpx` and `requests` are not rewritten: their messages (and the `request`
+and `response` objects that they carry) can contain the credentials of a URL, and the request
+headers. The loggers of these libraries can show URLs too (`httpx` logs each request at the
+`INFO` level). Prefer the `auth` argument to credentials in a URL, and take care when you log an
+error.
 
 ## API Reference
 

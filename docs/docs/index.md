@@ -125,13 +125,11 @@ Time-to-live caching for functions and values, with sync and async variants:
 
 ### 🌐 **HTTP Utilities**
 
-Helpers to fetch HTTP responses with automatic retries, built on top of `requests` or `httpx`:
+Automatic retries on top of `httpx` or `requests`:
 
-- `fetch_response` (sync, `requests`); `get_response`/`post_response`/`put_response`/
-  `patch_response`/`delete_response`/`send_request` (sync, `httpx`) and their `_async`
-  counterparts (async, `httpx`)
-- `HttpClient`/`AsyncHttpClient`: class-based wrappers around `httpx.Client`/`httpx.AsyncClient`
-  with the same retries, plus optional response caching via a `Cache`
+- `HttpClient`/`AsyncHttpClient`: wrappers around `httpx.Client`/`httpx.AsyncClient` that retry
+  idempotent requests with a bounded delay, with optional response caching via a `Cache`
+- `fetch_response`/`create_session` (`requests`): the same for `GET` requests, without a cache
 
 [Learn more →](uguide/http.md)
 
