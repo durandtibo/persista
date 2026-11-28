@@ -73,9 +73,11 @@ class RedisStore(BaseStore, MultilineDisplayMixin):
     ``on_conflict`` set to ``"raise"``, ``"skip"`` or ``"merge"`` watches the
     keys (``WATCH``/``MULTI``) and starts again if another client changes one
     of them before the write, so it is atomic against every other writer,
-    including other processes. :meth:`clear` removes, in one transaction,
-    every key that exists when it starts: a key that another client
-    creates during the call is kept.
+    including other processes. :meth:`clear` is not atomic against
+    concurrent writes: it reads the keys of the namespace, then removes
+    them in one transaction. A key that another client creates in between
+    is kept, and a value that it writes in between to one of the keys
+    read is removed.
 
     An iteration reads the list of the keys when it starts, then their
     values in batches. It skips the keys deleted in the meantime and does

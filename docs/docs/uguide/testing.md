@@ -19,6 +19,28 @@ exposes, for each of these, a pair of `pytest` markers:
 For example, `lmdb_available` and `lmdb_not_available` are available for the `lmdb` package, and
 similarly for the other optional dependencies.
 
+## Properties
+
+| Property               | Guarantee                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Utilities are a leaf   | `persista.utils` holds the helpers of the other sub-packages and imports none of them.                                         |
+| Optional dependencies  | `persista.utils.imports` has `is_<name>_available` and `check_<name>` for every optional library. Neither imports the library. |
+| Testing stays in tests | `persista.testing` needs `pytest`, and no library code imports it.                                                             |
+
+A mark tells whether a library is installed, not whether a server that it talks to is reachable.
+
+## Checking for an Optional Dependency
+
+`is_<name>_available` returns whether a library is installed, and `check_<name>` raises
+`RuntimeError`, with the command that installs it, if it is not:
+
+```pycon
+>>> from persista.utils.imports import check_lmdb, is_lmdb_available
+>>> if is_lmdb_available():
+...     check_lmdb()
+
+```
+
 ## Skipping Tests Based on Optional Dependencies
 
 Use `<dep>_available` to only run a test when the corresponding package is installed, for example

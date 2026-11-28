@@ -360,7 +360,7 @@ def test_print_metadata_stats_report_prints_title(stats: dict) -> None:
 
 def test_print_metadata_stats_report_without_rich(stats: dict) -> None:
     with (
-        patch("persista.utils.imports.rich.is_rich_available", lambda: False),
+        patch("persista.utils.imports.is_rich_available", lambda: False),
         pytest.raises(RuntimeError, match=r"'rich' package is required but not installed."),
     ):
         print_metadata_stats_report(stats)

@@ -37,8 +37,50 @@ Both modes expose the same set of operations:
 
 Because every store implements the same interface, application code written against `BaseStore`
 can be moved between backends — for example using `InMemoryStore` in unit tests and
-`PostgresStore` in production — without changes, and can freely mix sync and async calls on the
-same store instance.
+`PostgresStore` in production — without changes (within the [limits](#limits-of-the-backends) of
+each backend), and can freely mix sync and async calls on the same store instance.
+
+## Properties
+
+What every store guarantees, and where each guarantee stops. The
+[properties of the package](package.md) apply too.
+
+| Property             | Guarantee                                                                                                                                                                | Limits                                                                                                                                                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Key domain           | A key is a `str`, compared exactly (case-sensitive). A backend that accepts fewer keys raises `ValueError` before it writes; its limit applies to it only.               | See [key limits](#key-limits).                                                                                                                                                                                                                            |
+| Value domain         | A value is a `dict` that the codec of the store can encode (`JsonCodec` by default, `PickleCodec` on request).                                                           | `PostgresStore` with a `JsonCodec` rejects a NUL character in a string. The libraries limit the size of a value.                                                                                                                                          |
+| Round trip           | `get(key)` returns `codec.decode(codec.encode(value))`, the same on every backend that uses the same codec. A value that would lose data raises.                         | `JsonCodec` reads a tuple back as a list, and a subclass of a built-in type as that type. `PostgresStore` with a `JsonCodec` reads `-0.0` back as `0.0` and does not keep the order of the keys of a `dict`.                                              |
+| Isolation            | Mutating a value that was passed to a store or returned by it never changes the stored value.                                                                            | None.                                                                                                                                                                                                                                                     |
+| Atomic conflicts     | `raise`, `skip` and `merge` are atomic against the other writers of the same data: threads, tasks, instances and processes. With `raise`, a conflict writes nothing.     | `FileStore`: one instance only. SQL stores and `PostgresStore`: not against all the writes made without a store (see [concurrent writes](#concurrent-writes)). `set_batches` is atomic per batch.                                                         |
+| One filter semantics | `filter` matches the equality of top-level fields with the types of JSON (`True` is not `1`, `1` is `1.0`); `None` matches a null or absent field. Any field name works. | A list and a tuple are equal. A PostgreSQL integer filter does not select a number that [another program wrote](#indexing-a-filtered-field) with more digits than a float keeps.                                                                          |
+| Stable iteration     | A key present during a whole iteration is yielded exactly once, even if other keys are written or deleted. An iteration holds at most `batch_size` values.               | Some backends keep [all the keys](#iterating-over-a-store) in memory. `filter` is not an iteration: it returns all the matches. `FileStore`: if another instance or process writes while the directory is listed, the file system decides what is listed. |
+| Durable              | No TTL: a value stays until it is deleted or the store is cleared.                                                                                                       | `InMemoryStore` and `NullStore` are not persistent. A Redis server can evict or lose keys, depending on its configuration. `FileStore` does not flush its files to the disk (`fsync`), so a power failure can lose recent writes.                         |
+| Owned data           | A store only reads, counts and clears the data under its own path, table or namespace.                                                                                   | Two stores with the same location share their data. A SQL database file always uses the table `store`.                                                                                                                                                    |
+| Small extension      | A new backend implements the primitives (about ten methods) and its two URI methods, and inherits validation, codec, conflicts, filtering and the async twins.           | A backend that is shared between instances must make `_update` atomic itself (see [writing a custom store](#writing-a-custom-store)).                                                                                                                     |
+
+## Limits of the Backends
+
+These limits apply to their backend only.
+
+| Backend         | Limits                                                                                                                                                                                                                |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FileStore`     | [key length](#key-limits); writes of several keys are atomic per file only; `raise`, `skip` and `merge` are atomic within one instance only                                                                           |
+| `SQLiteStore`   | no lone surrogate in a key; a writer gives up after `timeout` seconds; a value nested about 1000 levels deep makes `filter` read every row                                                                            |
+| `DuckDBStore`   | no lone surrogate in a key; one process can write to a database                                                                                                                                                       |
+| `LmdbStore`     | a key has 1 to 511 UTF-8 bytes; the data is at most `map_size` bytes (`lmdb.MapFullError` beyond); one open store per path in a process                                                                               |
+| `RedisStore`    | no lone surrogate in a key; a limited number of connections; `clear` is [not atomic](#concurrency) against the writes of new keys                                                                                     |
+| `PostgresStore` | no NUL character and at most 2692 UTF-8 bytes in a key; with a `JsonCodec`, no NUL character in a string, `-0.0` read back as `0.0` and no key order; [only its own writes](#postgresql-concurrent-writes) are locked |
+| `NullStore`     | keeps nothing                                                                                                                                                                                                         |
+
+## Not Guaranteed
+
+- **Transactions** across several calls.
+- **Cancellation**: cancelling an async call that runs in a thread does not stop the operation.
+- **Iteration order**, and whether a key written during an iteration is yielded.
+- **URIs** do not describe a whole store (see [limitations of the URIs](#limitations-of-the-uris)).
+- **Library errors** are not rewritten.
+- **`pickle`**: decoding a payload can execute arbitrary code. Only use `PickleCodec` with trusted
+  data.
 
 ## Getting Started
 
@@ -136,7 +178,8 @@ from trusted sources.
 
 All the stores take a codec (`NullStore` always uses `JsonCodec`, to check the values it discards).
 `PostgresStore` with a `JsonCodec` also rejects a string with a NUL character, which `JSONB` cannot
-keep (see [PostgreSQL](#postgresql)).
+keep. `JSONB` also reads `-0.0` back as `0.0` and does not keep the order of the keys of a `dict`
+(see [PostgreSQL](#postgresql)).
 
 ### Setting Multiple Values
 
@@ -213,10 +256,11 @@ The same predicate is available as `persista.store.predicate.matches_filter(valu
 
 #### Performance
 
-`filter` reads and decodes every value, except for the SQL stores (`SQLiteStore`, `DuckDBStore`,
-`PostgresStore`) with the `JsonCodec`. Their database first selects the rows that may match, and the
-predicate is then applied to these rows, so this never changes the result. A condition is applied by
-the database if:
+`filter` returns all the matches in one `dict`, so they must fit in memory. It reads and decodes
+every value, in batches, except for the SQL stores (`SQLiteStore`, `DuckDBStore`,
+`PostgresStore`) with the `JsonCodec`. Their database first selects the rows that may match, with one
+query whose rows are all loaded, and the predicate is then applied to these rows, so this never
+changes the result. A condition is applied by the database if:
 
 - the field name is an identifier (ASCII letters, digits and underscores, not starting with a
   digit); and
@@ -248,6 +292,20 @@ key already exists:
 ...     print(store.get("1"))
 {'title': 'Intro to Python', 'views': 11}
 {'title': 'Intro to Python', 'views': 11}
+
+```
+
+`set_batches` applies `on_conflict` to one batch at a time, against the content of the store: with
+`"raise"`, the batches written before a conflict are kept. Each batch is first collected in a
+`dict`, so if two pairs of **one batch** have the same key, the last one wins whatever
+`on_conflict` is, and `"raise"` does not raise. Pass pairs with distinct keys.
+
+```pycon
+>>> from persista.store import InMemoryStore
+>>> with InMemoryStore() as store:
+...     store.set_batches([("1", {"v": 1}), ("1", {"v": 2})], on_conflict="raise")
+...     print(store.get("1"))
+{'v': 2}
 
 ```
 
@@ -291,16 +349,21 @@ RuntimeError: InMemoryStore is not open; call open()/aopen() or use it as a cont
 
 ### Key Limits
 
-A key is a `str`, compared exactly: `"a"` and `"A"` are two keys. Some backends cannot keep every
+A key is a `str`, compared exactly: `"a"` and `"A"` are two keys (an instance of a subclass of
+`str` is converted to a plain `str`). Some backends cannot keep every
 string. Their limits apply to them only, and every method that takes a key (reads and deletes
 included) raises `ValueError` for a key outside them, before anything is read or written:
 
 | Store           | Limit                                                                                                            |
 | --------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `SQLiteStore`   | no lone surrogate (the error is a `UnicodeEncodeError`, a subclass of `ValueError`)                              |
+| `DuckDBStore`   | no lone surrogate                                                                                                |
 | `LmdbStore`     | 1 to 511 UTF-8 bytes, so not the empty string; no lone surrogate                                                 |
 | `FileStore`     | the file name, with its extension, has at most 255 characters (see [File Store](#file-store)); no lone surrogate |
 | `RedisStore`    | no lone surrogate                                                                                                |
 | `PostgresStore` | no NUL character and no lone surrogate; at most 2692 UTF-8 bytes (see below)                                     |
+
+`InMemoryStore` and `NullStore` accept every string.
 
 The limit of `PostgresStore` is the largest key that the index of its primary key accepts, whatever
 the content of the key, with the default page size of the server. PostgreSQL compresses long index
@@ -535,7 +598,8 @@ transactions of concurrent calls cannot nest. It follows the same rules as the a
 `RedisStore` (see [event loops and closing](#event-loops-and-closing)): another event loop gets its
 own connection, `aclose` closes it, and `close` raises `RuntimeError` while it is open. A connection
 that the network or the server closed fails the current call, and the next call opens a new one. The
-sync connection is not reopened: close and open the store again.
+sync connection is not reopened by itself: close the store and open it again, which connects it
+anew.
 
 #### PostgreSQL Changes from Earlier Versions
 
@@ -597,6 +661,10 @@ The containment operator compares the numbers by their value, so every way of wr
 (`7`, `7.0`, `7.00`) is selected. :warning: It does not select a number that another program wrote
 with more digits than a float keeps, such as `6.99999999999999999999` (which `get` reads as
 `7.0`). `PostgresStore` never writes such a number.
+
+:warning: An entry of the first kind of index (a B-tree) is limited in size: once it exists,
+PostgreSQL rejects the write of a value whose field is a long string (a few thousand bytes that do
+not compress) with `psycopg.errors.ProgramLimitExceeded`. Index only a field with short strings.
 
 Note the double parentheses of the first index, and replace `store` with the name of your table:
 
@@ -737,8 +805,9 @@ Do not modify these keys with other programs, and do not use a server that evict
 - `on_conflict="raise"`, `"skip"` and `"merge"` are atomic against every other writer, including
   other processes: the store watches the keys (`WATCH`/`MULTI`) and starts again if one of them
   changes before the write. Many writers of the same key therefore slow each other down.
-- `clear` removes, in one transaction, every key that exists when it starts. A key that another
-  client creates during the call is kept.
+- `clear` is not atomic against concurrent writes. It reads the keys of the namespace, then
+  removes them in one transaction: a key that another client creates in between is kept, and a value
+  that another client writes in between to one of the keys read is removed.
 - A client has a limited number of connections (100 by default with `redis-py` 8). A call that needs
   one more raises `redis.exceptions.MaxConnectionsError`, for example with several hundred `aset`
   calls in one `asyncio.gather`: pass a larger `max_connections`, or limit the concurrency.
@@ -866,8 +935,8 @@ Two comprehensions turn those flags into the keys that are present and the missi
 
 ## Iterating Over a Store
 
-`keys`, `values`, and `iter_batches` iterate over a store's content without loading everything
-into memory at once:
+`keys`, `values`, and `iter_batches` iterate over a store's content in batches, without loading
+all the values into memory at once (some stores load all the keys, see below):
 
 ```pycon
 >>> from persista.store import InMemoryStore
@@ -896,8 +965,9 @@ With every store, a key that is present during a whole iteration is yielded exac
 write or delete keys during the iteration (for example, you can delete each batch after processing
 it). The SQL stores and `PostgresStore` read the keys in order and start each batch after the last key
 of the previous one (keyset pagination). `InMemoryStore`, `FileStore`, `LmdbStore` and `RedisStore`
-take a snapshot of the keys when the iteration starts, so a batch can be smaller than `batch_size`
-(`keys` of `RedisStore` can also yield a key deleted during the iteration). `keys` and `akeys` do not
+take a snapshot of all the keys when the iteration starts, which they keep in memory, so a batch can
+be smaller than `batch_size` (`keys` of `RedisStore` can also yield a key deleted during the
+iteration). `keys` and `akeys` do not
 read the values of the stores that keep data outside the process. A custom store must give the same
 guarantee in `_iter_batches`. Closing a store during an iteration raises `RuntimeError`.
 

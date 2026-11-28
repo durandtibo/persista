@@ -75,13 +75,13 @@ source .venv/bin/activate
 Then, you should install the required packages to use `persista` with the following command:
 
 ```shell
-inv install --docs-deps
+inv env.install
 ```
 
-This command will install all the required packages. You can also use this command to update the
-required packages. This command will check if there is a more recent package available and will
-install it. Finally, you can test the installation with the following command:
+This command installs the package in editable mode, with all its optional dependencies and the
+development and documentation tools. Use `inv env.update` to update the dependencies. Finally, you
+can test the installation with the following command:
 
 ```shell
-inv unit-test --cov
+inv test.unit --cov
 ```

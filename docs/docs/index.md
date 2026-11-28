@@ -41,8 +41,9 @@ APIs, plus TTL caching and HTTP fetch utilities.
 
 **Quick Links:**
 
-- [User Guide](uguide/store.md)
+- [User Guide](uguide/package.md)
 - [Installation](get_started.md)
+- [Migration Guide](migration.md)
 - [Features](#features)
 - [Contributing](#contributing)
 
@@ -154,13 +155,8 @@ pickled and copied) with helpers to filter, sort, persist, and analyze collectio
 ## Contributing
 
 Contributions are welcome! We appreciate bug fixes, feature additions, documentation improvements,
-and more. Please check
-the [contributing guidelines](https://github.com/durandtibo/persista/blob/main/CONTRIBUTING.md) for
-details on:
-
-- Setting up the development environment
-- Code style and testing requirements
-- Submitting pull requests
+and more. To set up the development environment and run the tests, see
+[installing from source](get_started.md#installing-from-source).
 
 Whether you're fixing a bug or proposing a new feature, please open an issue first to discuss
 your changes.
@@ -169,7 +165,8 @@ your changes.
 
 :warning: **Important**: As `persista` is under active development, its API is not yet stable and may
 change between releases. We recommend pinning a specific version in your project’s dependencies to
-ensure consistent behavior.
+ensure consistent behavior. The [migration guide](migration.md) lists the breaking changes since
+`persista` 0.0.4a3.
 
 ## License
 

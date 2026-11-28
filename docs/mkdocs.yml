@@ -25,11 +25,13 @@ nav:
   - Home: index.md
   - get_started.md
   - User Guide:
+      - uguide/package.md
       - uguide/store.md
       - uguide/cache.md
       - uguide/http.md
       - uguide/record.md
       - uguide/testing.md
+  - migration.md
   - Reference:
       - refs/cache.md
       - refs/http.md

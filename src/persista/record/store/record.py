@@ -153,7 +153,8 @@ class RecordStore(MultilineDisplayMixin):
 
         This is the streaming equivalent of :meth:`set_many`: it
         consumes ``records`` lazily and writes at most ``batch_size``
-        records at a time.
+        records at a time. Records of one batch that share an ``id`` are
+        resolved as by :meth:`set_many`.
 
         Args:
             records: The records to add.
@@ -169,6 +170,8 @@ class RecordStore(MultilineDisplayMixin):
         Raises:
             KeyError: If ``on_conflict`` is ``"raise"`` and an
                 ``id`` already exists.
+            RuntimeError: If the store is closed, also with an empty
+                input.
             ValueError: If ``batch_size`` or ``on_conflict`` is
                 invalid.
 
@@ -185,7 +188,9 @@ class RecordStore(MultilineDisplayMixin):
 
             ```
         """
+        check_is_open(self._store)
         validate_batch_size(batch_size)
+        on_conflict = normalize_on_conflict(on_conflict)
         for batch in batchify(records, size=batch_size):
             self.set_many(list(batch), on_conflict=on_conflict)
 
@@ -197,7 +202,9 @@ class RecordStore(MultilineDisplayMixin):
         on_conflict: OnConflict = "overwrite",
     ) -> None:
         r"""Async equivalent of :meth:`set_batches`."""
+        check_is_open(self._store)
         validate_batch_size(batch_size)
+        on_conflict = normalize_on_conflict(on_conflict)
         for batch in batchify(records, size=batch_size):
             await self.aset_many(list(batch), on_conflict=on_conflict)
 

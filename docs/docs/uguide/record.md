@@ -22,6 +22,21 @@ The `persista.record` package provides:
 - `persista.record.analysis`: functions to check a corpus of records for exact/near duplicates,
   id collisions, orphan references, schema drift, and other data-quality issues
 
+## Properties
+
+What the records guarantee, and where each guarantee stops. The
+[properties of the package](package.md) apply too.
+
+| Property        | Guarantee                                                                                                                           | Limits                                                                                                                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plain value     | A `Record` is an id and a read-only metadata mapping. It can be compared, hashed, pickled and copied.                               | The copy of the metadata is shallow, pickling needs metadata that can be pickled, `==` compares like two `dict` (`1` equals `True`), and `dataclasses.asdict` is not supported.                     |
+| Thin layer      | `RecordStore` converts records and delegates to a `BaseStore`: same method names, conflict strategies, filter semantics and errors. | `filter` returns a list, there is no `to_uri`/`from_uri`, `get_many` needs a list of ids, and records of one list or batch that share an id are resolved by `on_conflict`.                          |
+| One equality    | Filters, id derivation and duplicate analyses agree that `1`, `"1"` and `True` differ, and that `1` and `1.0` are equal.            | They [differ](#when-are-two-values-equal) for a list and a tuple, `NaN` and other types. `filter_by_metadata_range`, `sort_by_metadata` and `find_orphan_references` use the comparisons of Python. |
+| Honest analyses | An analysis that is approximate says so in its name or docstring.                                                                   | `count_approx_duplicate_records` can overcount, and `find_near_duplicate_record_ids` can miss or wrongly group records.                                                                             |
+| No side effect  | The filter, sort and analysis functions do not modify their input, and accept any iterable of records, consumed once.               | Some keep every record or every distinct value in memory.                                                                                                                                           |
+
+The limits of the [backing store](store.md#limits-of-the-backends) apply to a `RecordStore`.
+
 ## The `Record` Container
 
 A `Record` pairs an `id` with a `metadata` mapping. Use `Record.from_metadata` to derive a stable

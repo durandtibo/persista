@@ -657,6 +657,23 @@ def test_set_batches_closed_store_raises() -> None:
         RecordStore(InMemoryStore()).set_batches([Record(id="1")])
 
 
+def test_set_batches_empty_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        RecordStore(InMemoryStore()).set_batches([])
+
+
+def test_set_batches_closed_store_does_not_consume_records(records: list[Record]) -> None:
+    iterator = iter(records)
+    with pytest.raises(RuntimeError, match=r"not open"):
+        RecordStore(InMemoryStore()).set_batches(iterator)
+    assert list(iterator) == records
+
+
+def test_set_batches_empty_invalid_on_conflict_raises(store: RecordStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        store.set_batches([], on_conflict="bogus")
+
+
 async def test_aset_batches_writes_all_records(store: RecordStore, records: list[Record]) -> None:
     await store.aset_batches(records, batch_size=3)
     assert list(store.values()) == records
@@ -725,6 +742,23 @@ async def test_aset_batches_on_conflict_is_keyword_only(store: RecordStore) -> N
 async def test_aset_batches_closed_store_raises() -> None:
     with pytest.raises(RuntimeError, match=r"not open"):
         await RecordStore(InMemoryStore()).aset_batches([Record(id="1")])
+
+
+async def test_aset_batches_empty_closed_store_raises() -> None:
+    with pytest.raises(RuntimeError, match=r"not open"):
+        await RecordStore(InMemoryStore()).aset_batches([])
+
+
+async def test_aset_batches_closed_store_does_not_consume_records(records: list[Record]) -> None:
+    iterator = iter(records)
+    with pytest.raises(RuntimeError, match=r"not open"):
+        await RecordStore(InMemoryStore()).aset_batches(iterator)
+    assert list(iterator) == records
+
+
+async def test_aset_batches_empty_invalid_on_conflict_raises(store: RecordStore) -> None:
+    with pytest.raises(ValueError, match=r"Invalid on_conflict value"):
+        await store.aset_batches([], on_conflict="bogus")
 
 
 # --- delete / delete_many ---

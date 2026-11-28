@@ -159,39 +159,39 @@ class _MetadataStats:
         Returns:
             A dict with the following keys:
 
-            - ``count``: Total number of records processed.
-            - ``missing_metadata_count``: Number of records with
-              empty/missing metadata.
-            - ``avg_keys``: Mean number of metadata keys per record,
-              or ``0`` if no records were processed.
-            - ``min_keys`` / ``max_keys``: Fewest/most metadata keys
-              seen on any single record, or ``None`` if empty.
-            - ``distinct_keys_seen``: Number of distinct metadata keys
-              observed across all records.
-            - ``per_key``: A dict mapping each metadata key to a dict
-              with:
+                - ``count``: Total number of records processed.
+                - ``missing_metadata_count``: Number of records with
+                  empty/missing metadata.
+                - ``avg_keys``: Mean number of metadata keys per record,
+                  or ``0`` if no records were processed.
+                - ``min_keys`` / ``max_keys``: Fewest/most metadata keys
+                  seen on any single record, or ``None`` if empty.
+                - ``distinct_keys_seen``: Number of distinct metadata keys
+                  observed across all records.
+                - ``per_key``: A dict mapping each metadata key to a dict
+                  with:
 
-              - ``present_in_records``: Number of records containing
-                the key.
-              - ``missing_in_records``: Number of records not
-                containing the key.
-              - ``value_types``: Sorted list of ``type(value).__name__``
-                seen for the key.
-              - ``none_or_empty_count``: Number of records where the
-                key's value is ``None`` or the empty string.
-              - ``unique_values_sample``: Sorted sample of unique
-                values seen for the key, capped at ``n_sample_values``
-                entries (or all of them, if ``n_sample_values`` is
-                ``None``). Reflects the first distinct values
-                encountered, in record order.
-              - ``unique_values_sample_truncated``: ``True`` if not all
-                unique values for the key could be retained because
-                the sample cap was hit. Always ``False`` when
-                ``n_sample_values`` is ``None``.
+                  - ``present_in_records``: Number of records containing
+                    the key.
+                  - ``missing_in_records``: Number of records not
+                    containing the key.
+                  - ``value_types``: Sorted list of ``type(value).__name__``
+                    seen for the key.
+                  - ``none_or_empty_count``: Number of records where the
+                    key's value is ``None`` or the empty string.
+                  - ``unique_values_sample``: Sorted sample of unique
+                    values seen for the key, capped at ``n_sample_values``
+                    entries (or all of them, if ``n_sample_values`` is
+                    ``None``). Reflects the first distinct values
+                    encountered, in record order.
+                  - ``unique_values_sample_truncated``: ``True`` if not all
+                    unique values for the key could be retained because
+                    the sample cap was hit. Always ``False`` when
+                    ``n_sample_values`` is ``None``.
 
-            Percentages are intentionally omitted - compute them later
-            from the raw counts (e.g. ``present_in_records / count``)
-            since they are trivially derived from this report.
+                Percentages are intentionally omitted - compute them later
+                from the raw counts (e.g. ``present_in_records / count``)
+                since they are trivially derived from this report.
         """
         n = self.count
         avg_keys = self.total_keys / n if n else 0
@@ -250,27 +250,27 @@ def compute_metadata_stats(
     Returns:
         A dict with the following keys:
 
-        - ``count``: Total number of records processed.
-        - ``missing_metadata_count``: Number of records with empty
-          metadata.
-        - ``avg_keys``: Mean number of metadata keys per record, or ``0``
-          if there is no record.
-        - ``min_keys`` / ``max_keys``: Fewest/most metadata keys of a
-          record, or ``None`` if there is no record.
-        - ``distinct_keys_seen``: Number of distinct metadata keys.
-        - ``per_key``: A dict mapping each metadata key, in sorted order,
-          to a dict with:
+            - ``count``: Total number of records processed.
+            - ``missing_metadata_count``: Number of records with empty
+              metadata.
+            - ``avg_keys``: Mean number of metadata keys per record, or ``0``
+              if there is no record.
+            - ``min_keys`` / ``max_keys``: Fewest/most metadata keys of a
+              record, or ``None`` if there is no record.
+            - ``distinct_keys_seen``: Number of distinct metadata keys.
+            - ``per_key``: A dict mapping each metadata key, in sorted order,
+              to a dict with:
 
-          - ``present_in_records``: Number of records with the key.
-          - ``missing_in_records``: Number of records without the key.
-          - ``value_types``: Sorted names of the types of the values.
-          - ``none_or_empty_count``: Number of records where the value is
-            ``None`` or the empty string.
-          - ``unique_values_sample``: The first distinct values, in record
-            order, at most ``n_sample_values``, sorted by their string
-            form. They are the objects of the records, not copies.
-          - ``unique_values_sample_truncated``: ``True`` if some distinct
-            values are not in the sample.
+              - ``present_in_records``: Number of records with the key.
+              - ``missing_in_records``: Number of records without the key.
+              - ``value_types``: Sorted names of the types of the values.
+              - ``none_or_empty_count``: Number of records where the value is
+                ``None`` or the empty string.
+              - ``unique_values_sample``: The first distinct values, in record
+                order, at most ``n_sample_values``, sorted by their string
+                form. They are the objects of the records, not copies.
+              - ``unique_values_sample_truncated``: ``True`` if some distinct
+                values are not in the sample.
 
     Raises:
         TypeError: If a metadata value contains an object that cannot be

@@ -49,12 +49,12 @@ def compute_value_frequency(
     Returns:
         A dict mapping each metadata key to a dict with:
 
-        - ``top_values``: A list of ``(value, count)`` tuples for the
-          ``top_k`` most common values, most common first (values with
-          the same count are in the order they were first encountered).
-          Each value is the first one encountered among the equal ones.
-          It is the object of the record, not a copy.
-        - ``distinct_count``: The number of distinct values of the key.
+            - ``top_values``: A list of ``(value, count)`` tuples for the
+              ``top_k`` most common values, most common first (values with
+              the same count are in the order they were first encountered).
+              Each value is the first one encountered among the equal ones.
+              It is the object of the record, not a copy.
+            - ``distinct_count``: The number of distinct values of the key.
 
     Raises:
         TypeError: If a metadata value contains an object that cannot be

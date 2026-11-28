@@ -367,7 +367,9 @@ class BaseStore(ABC):
                 exist in the store. See :meth:`set` for the meaning
                 of each option. Applied independently per batch, so
                 with ``"raise"`` a conflict is only detected once the
-                offending batch is written, not upfront.
+                offending batch is written, not upfront. Two pairs of
+                one batch with the same key are not a conflict: a batch
+                is collected in a ``dict``, so the last pair wins.
 
         Raises:
             KeyError: If ``on_conflict`` is ``"raise"`` and any key

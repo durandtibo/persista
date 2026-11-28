@@ -70,6 +70,10 @@ class DuckDBStore(SQLStore, MultilineDisplayMixin):
     Opening the store creates the database file, its parent directories
     and the table if they do not exist (unless ``read_only``).
 
+    A key must be valid Unicode: every method that takes a key raises
+    ``ValueError`` for a key with a lone surrogate, and nothing is
+    written.
+
     Args:
         database: Path to the DuckDB file, or ``":memory:"`` for a private
             in-memory database. Matches the ``database`` argument name
@@ -174,13 +178,26 @@ class DuckDBStore(SQLStore, MultilineDisplayMixin):
         self._write_lock = contextlib.nullcontext()
 
     def _fetch(self, sql: str, params: Sequence[Any] = ()) -> list[tuple[Any, ...]]:
-        return self.connection.execute(sql, params).fetchall()
+        try:
+            return self.connection.execute(sql, params).fetchall()
+        except duckdb.InvalidInputException:
+            _check_unicode_keys(params)
+            raise
 
     def _execute(self, sql: str, params: Sequence[Any] = ()) -> None:
-        self.connection.execute(sql, params)
+        try:
+            self.connection.execute(sql, params)
+        except duckdb.InvalidInputException:
+            _check_unicode_keys(params)
+            raise
 
     def _executemany(self, sql: str, rows: Sequence[Sequence[Any]]) -> None:
-        self.connection.executemany(sql, rows)
+        try:
+            self.connection.executemany(sql, rows)
+        except duckdb.InvalidInputException:
+            # The key is the first parameter of each row.
+            _check_unicode_keys([row[0] for row in rows])
+            raise
 
     @contextlib.contextmanager
     def _transaction(self) -> Generator[None, None, None]:
@@ -217,6 +234,32 @@ class DuckDBStore(SQLStore, MultilineDisplayMixin):
             # decimals is rounded, and is then excluded by the filter.
             return f"TRY_CAST({text} AS BIGINT) = ?", [value]
         return f"{text} = ?", [value]
+
+
+def _check_unicode_keys(params: Sequence[Any]) -> None:
+    r"""Check that the keys of a statement that failed are valid Unicode.
+
+    DuckDB rejects a string with a lone surrogate with its own exception,
+    which is not a ``ValueError``. Only a key can have one here: the
+    codecs and the filters never pass such a string.
+
+    Args:
+        params: The parameters of the statement. The ones that are not
+            strings are ignored.
+
+    Raises:
+        ValueError: If a string has a lone surrogate.
+    """
+    for param in params:
+        if isinstance(param, str):
+            try:
+                param.encode()
+            except UnicodeEncodeError as exc:
+                msg = (
+                    "A key of DuckDBStore must be valid Unicode, but it has a lone surrogate: "
+                    f"{param!r}"
+                )
+                raise ValueError(msg) from exc
 
 
 def _get_database_lock(database: Path) -> threading.RLock:
