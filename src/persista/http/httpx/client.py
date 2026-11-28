@@ -11,12 +11,12 @@ from typing import TYPE_CHECKING, Any
 
 from coola.utils.imports import lazy_import
 
-from persista.cache.utils import make_key
 from persista.http.httpx.method import (
     DEFAULT_RETRY_STATUS_CODES,
     send_request,
     send_request_async,
 )
+from persista.utils.canonical import hash_canonical
 from persista.utils.imports import check_httpx
 
 if TYPE_CHECKING:
@@ -104,16 +104,16 @@ def _cache_key(request: httpx.Request, *, follow_redirects: bool) -> str:
     Raises:
         httpx.RequestNotRead: If the body of the request is streamed.
     """
-    # latin-1 maps every byte to one character, so no information is lost.
-    headers = [
-        (name.lower().decode("latin-1"), value.decode("latin-1"))
-        for name, value in request.headers.raw
-    ]
-    body = base64.b64encode(request.content).decode("ascii")
-    return make_key(
-        "persista.http.httpx",
-        (request.method, str(request.url), headers, body, follow_redirects),
-        {},
+    headers = [(name.lower(), value) for name, value in request.headers.raw]
+    return hash_canonical(
+        (
+            "persista.http.httpx",
+            request.method,
+            str(request.url),
+            headers,
+            request.content,
+            follow_redirects,
+        )
     )
 
 

@@ -16,6 +16,7 @@ from persista.http.httpx.client import (
     _prepare_cache_lookup,
     _response_to_entry,
 )
+from persista.utils.canonical import hash_canonical
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
@@ -777,6 +778,20 @@ def test_prepare_cache_lookup_invalid_argument() -> None:
 
 def _request(method: str = "GET", url: str = "https://example.com", **kwargs: Any) -> httpx.Request:
     return httpx.Request(method, url, **kwargs)
+
+
+def test_cache_key_value() -> None:
+    request = httpx.Request("POST", "https://example.com", content=b"body")
+    assert _cache_key(request, follow_redirects=True) == hash_canonical(
+        (
+            "persista.http.httpx",
+            "POST",
+            "https://example.com",
+            [(b"host", b"example.com"), (b"content-length", b"4")],
+            b"body",
+            True,
+        )
+    )
 
 
 def test_cache_key_same_request() -> None:
