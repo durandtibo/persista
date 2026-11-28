@@ -4,29 +4,31 @@ from __future__ import annotations
 
 __all__ = ["MISSING", "Cache"]
 
-import functools
 import inspect
 import logging
+import math
 import time
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 from coola.display import MultilineDisplayMixin
 
-from persista.cache.utils import make_call_key
+from persista.cache.memoize import memoize_with
+from persista.cache.ttl import DEFAULT, validate_ttl
 from persista.store.codec import PickleCodec
 from persista.store.in_memory import InMemoryStore
+from persista.store.validation import validate_keys
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Collection, Mapping
     from typing import Self
 
     from persista.store.base import BaseStore
 
+P = ParamSpec("P")
+R = TypeVar("R")
 T = TypeVar("T")
 
 logger: logging.Logger = logging.getLogger(__name__)
-
-_UNSET: Any = object()
 
 MISSING: Any = object()
 """Sentinel usable as the ``default`` argument to :meth:`Cache.get` /
@@ -38,16 +40,13 @@ class Cache(MultilineDisplayMixin):
     """Cache with per-entry expiry, backed by any
     :class:`~persista.store.BaseStore`.
 
-    Most methods have both a sync form (``get``, ``try_get``, ``set``,
-    ``contains``, ``get_many``, ``try_get_many``, ``set_many``,
-    ``contains_many``, ``delete``, ``delete_many``, ``get_or_compute``,
-    ``memoize``, ``clear``) and an async counterpart prefixed with
-    ``a`` (``aget``, ``atry_get``, ``aset``, ``acontains``,
-    ``aget_many``, ``atry_get_many``, ``aset_many``,
-    ``acontains_many``, ``adelete``, ``adelete_many``,
-    ``aget_or_compute``, ``amemoize``, ``aclear``), so the same cache
-    instance can be used from sync and async code, provided the
-    backing store supports the interface being used.
+    Every method that accesses the store has a sync form (``get``,
+    ``get_many``, ``contains``, ``set``, ``set_many``, ``delete``,
+    ``delete_many``, ``clear``, ``get_or_compute``) and an async counterpart
+    prefixed with ``a`` (``aget``, ``aget_many``, ...), so the same cache
+    instance can be used from sync and async code, provided the backing
+    store supports the interface being used. :meth:`memoize` decorates
+    both kinds of functions.
 
     Each entry is wrapped as ``{"value": value, "expires_at":
     expires_at}`` before being written to the store, since
@@ -62,20 +61,33 @@ class Cache(MultilineDisplayMixin):
       and returns a tuple as a list;
     - the other stores serialize values as described in their
       documentation (for example, a SQLite-backed store needs
-      JSON-serializable values).
+      JSON-serializable values by default).
+
+    A time-to-live (``ttl``, or ``default_ttl`` when it is not given) is
+    ``None`` (the entry never expires), ``0`` (the entry is deleted instead
+    of written) or a positive number of seconds. A negative or ``NaN``
+    value raises ``ValueError``.
 
     ``expires_at`` is a Unix timestamp (``time.time()``), not a
     monotonic clock reading, because entries may be read back by a
-    different process or after a restart of this one. Expiry is
-    checked lazily on :meth:`get`: an expired entry is only evicted
-    the next time it is looked up, not proactively at its expiry
-    time.
+    different process or after a restart of this one. Expiry is checked
+    when an entry is read: an expired entry is a miss, and it **stays in
+    the store until its key is read again** (or deleted, overwritten, or
+    the cache cleared). There is no background eviction and no size
+    limit, so a cache that writes many keys that are never read again
+    grows until :meth:`clear`.
+
+    Concurrent misses on the same key can compute the value several
+    times.
+
+    The cache owns its store: :meth:`clear` clears the whole store, so do
+    not give a cache a store that holds other data.
 
     Like :class:`~persista.store.BaseStore`, constructing a
     :class:`Cache` does not connect to the underlying backing store:
-    this is deferred to :meth:`open`/:meth:`aopen`, so every other
-    method raises until the cache has been opened, either explicitly
-    or via use as a sync context manager (``with Cache(...) as
+    this is deferred to :meth:`open`/:meth:`aopen`, so every method that
+    accesses the store raises until the cache has been opened, either
+    explicitly or via use as a sync context manager (``with Cache(...) as
     cache: ...``, calling :meth:`open` on entry and :meth:`close` on
     exit) or an async context manager (``async with Cache(...) as
     cache: ...``, calling :meth:`aopen` on entry and :meth:`aclose`
@@ -85,14 +97,12 @@ class Cache(MultilineDisplayMixin):
         store: The backing store. Defaults to a new
             :class:`~persista.store.in_memory.InMemoryStore` with the
             :class:`~persista.store.PickleCodec`.
-        default_ttl: The default time-to-live, in seconds, applied to
-            entries whose ``ttl`` is not explicitly set on
-            :meth:`set` / :meth:`get_or_compute` / :meth:`memoize`.
-            ``None`` (the default) means entries never expire unless
-            an explicit ``ttl`` is given. Must be non-negative.
+        default_ttl: The time-to-live, in seconds, of the entries written
+            without an explicit ``ttl``. ``None`` (the default) means that
+            they never expire.
 
     Raises:
-        ValueError: If ``default_ttl`` is negative.
+        ValueError: If ``default_ttl`` is negative or ``NaN``.
 
     Example:
         ```pycon
@@ -109,19 +119,17 @@ class Cache(MultilineDisplayMixin):
     def __init__(
         self,
         store: BaseStore | None = None,
+        *,
         default_ttl: float | None = None,
     ) -> None:
-        if default_ttl is not None and default_ttl < 0:
-            msg = f"default_ttl must be non-negative, got {default_ttl}"
-            raise ValueError(msg)
+        validate_ttl(default_ttl, name="default_ttl")
         self._store: BaseStore = store if store is not None else InMemoryStore(codec=PickleCodec())
         self._default_ttl = default_ttl
 
     @property
     def default_ttl(self) -> float | None:
-        """The default time-to-live, in seconds, applied to entries
-        whose ``ttl`` is not explicitly set on :meth:`set` /
-        :meth:`get_or_compute` / :meth:`memoize`."""
+        """The time-to-live, in seconds, of the entries written without
+        an explicit ``ttl``."""
         return self._default_ttl
 
     @property
@@ -181,9 +189,8 @@ class Cache(MultilineDisplayMixin):
     def get(self, key: str, default: Any = None) -> Any:
         """Retrieve a value by its key.
 
-        If the entry has expired, it is evicted from the backing
-        store as a side effect of this call, before ``default`` is
-        returned.
+        If the entry has expired, it is deleted from the backing store
+        before ``default`` is returned.
 
         Args:
             key: The key to look up.
@@ -195,9 +202,13 @@ class Cache(MultilineDisplayMixin):
         Returns:
             The cached value, or ``default`` on a miss.
 
+        Raises:
+            RuntimeError: If the cache is closed.
+            TypeError: If ``key`` is not a ``str``.
+
         Example:
             ```pycon
-            >>> from persista.cache.cache import MISSING, Cache
+            >>> from persista.cache import MISSING, Cache
             >>> with Cache() as cache:
             ...     cache.set("greeting", "hello")
             ...     cache.get("greeting")
@@ -213,247 +224,67 @@ class Cache(MultilineDisplayMixin):
 
             ```
         """
-        hit, value = self._get(key)
-        return value if hit else default
-
-    def try_get(self, key: str) -> tuple[bool, Any]:
-        """Look up a key, returning both hit/miss and the value.
-
-        Unlike :meth:`get`, this distinguishes a cache miss from a
-        cached ``None`` without needing the :data:`MISSING` sentinel.
-
-        Args:
-            key: The key to look up.
-
-        Returns:
-            A ``(hit, value)`` tuple. ``hit`` is ``True`` only when
-            ``key`` exists in the store and has not expired.
-            ``value`` is ``None`` when ``hit`` is ``False``.
-
-        Example:
-            ```pycon
-            >>> from persista.cache.cache import Cache
-            >>> with Cache() as cache:
-            ...     cache.set("key", None)
-            ...     cache.try_get("key")
-            ...     cache.try_get("missing")
-            ...
-            (True, None)
-            (False, None)
-
-            ```
-        """
-        return self._get(key)
-
-    def _get(self, key: str) -> tuple[bool, Any]:
-        """Look up a key, returning both hit/miss and the value.
-
-        Args:
-            key: The key to look up.
-
-        Returns:
-            A ``(hit, value)`` tuple. ``hit`` is ``True`` only when
-            ``key`` exists in the store and has not expired.
-        """
         entry = self._store.get(key)
         if entry is None:
-            return False, None
-        expires_at = entry["expires_at"]
-        if expires_at is not None and time.time() > expires_at:
-            self._store.delete(key)  # expired, evict
-            return False, None
-        value = entry["value"]
-        logger.debug("Cache hit: %s", key)
-        return True, value
-
-    def _resolve_ttl(self, ttl: float | None) -> float | None:
-        """Resolve a ``ttl`` argument against ``self._default_ttl``.
-
-        Args:
-            ttl: The ``ttl`` passed to :meth:`set` / :meth:`aset`, or
-                ``_UNSET`` to fall back to ``self._default_ttl``.
-
-        Returns:
-            The resolved ttl.
-
-        Raises:
-            ValueError: If the resolved ttl is negative.
-        """
-        resolved_ttl = self._default_ttl if ttl is _UNSET else ttl
-        if resolved_ttl is not None and resolved_ttl < 0:
-            msg = f"ttl must be non-negative, got {resolved_ttl}"
-            raise ValueError(msg)
-        return resolved_ttl
-
-    def set(self, key: str, value: Any, ttl: float | None = _UNSET) -> None:
-        """Add a value to the cache.
-
-        Calling this again with an existing key overwrites the
-        previous value and resets its expiry.
-
-        Args:
-            key: The key to set.
-            value: The value to cache. The codec of the backing
-                store must accept it (see the class docstring).
-            ttl: The time-to-live, in seconds, before the entry
-                expires. Defaults to ``self._default_ttl`` when not
-                given. ``None`` means the entry never expires. ``0``
-                means the value is not written to the store at all,
-                evicting any existing entry for ``key`` instead. Must
-                be non-negative.
-
-        Raises:
-            ValueError: If ``ttl`` is negative.
-
-        Example:
-            ```pycon
-            >>> from persista.cache.cache import Cache
-            >>> with Cache() as cache:
-            ...     cache.set("greeting", "hello")
-            ...     cache.get("greeting")
-            ...     cache.set("greeting", "bonjour")
-            ...     cache.get("greeting")
-            ...     cache.set("short-lived", "value", ttl=30)
-            ...
-            'hello'
-            'bonjour'
-
-            ```
-        """
-        resolved_ttl = self._resolve_ttl(ttl)
-        if resolved_ttl == 0:
+            return default
+        if self._is_expired(entry, time.time()):
             self._store.delete(key)
-            return
-        expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
-        self._store.set(key, {"value": value, "expires_at": expires_at})
+            return default
+        logger.debug("Cache hit: %s", key)
+        return entry["value"]
 
     async def aget(self, key: str, default: Any = None) -> Any:
-        """Retrieve a value by its key.
-
-        This is the async counterpart of :meth:`get`, for use with an
-        async backing store.
-
-        Args:
-            key: The key to look up.
-            default: The value to return if the key is missing or its
-                entry has expired. Pass the
-                :data:`~persista.cache.cache.MISSING` sentinel here
-                to distinguish a cache miss from a cached ``None``.
-
-        Returns:
-            The cached value, or ``default`` on a miss.
-
-        Example:
-            ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         await cache.aset("greeting", "hello")
-            ...         print(await cache.aget("greeting"))
-            ...
-            >>> asyncio.run(main())
-            hello
-
-            ```
-        """
-        hit, value = await self._aget(key)
-        return value if hit else default
-
-    async def atry_get(self, key: str) -> tuple[bool, Any]:
-        """Look up a key, returning both hit/miss and the value.
-
-        This is the async counterpart of :meth:`try_get`.
-
-        Args:
-            key: The key to look up.
-
-        Returns:
-            A ``(hit, value)`` tuple. ``hit`` is ``True`` only when
-            ``key`` exists in the store and has not expired.
-            ``value`` is ``None`` when ``hit`` is ``False``.
-
-        Example:
-            ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         await cache.aset("key", None)
-            ...         print(await cache.atry_get("key"))
-            ...         print(await cache.atry_get("missing"))
-            ...
-            >>> asyncio.run(main())
-            (True, None)
-            (False, None)
-
-            ```
-        """
-        return await self._aget(key)
-
-    async def _aget(self, key: str) -> tuple[bool, Any]:
-        """Look up a key, returning both hit/miss and the value.
-
-        This is the async counterpart of :meth:`_get`.
-
-        Args:
-            key: The key to look up.
-
-        Returns:
-            A ``(hit, value)`` tuple. ``hit`` is ``True`` only when
-            ``key`` exists in the store and has not expired.
-        """
+        """Async equivalent of :meth:`get`."""
         entry = await self._store.aget(key)
         if entry is None:
-            return False, None
-        expires_at = entry["expires_at"]
-        if expires_at is not None and time.time() > expires_at:
-            await self._store.adelete(key)  # expired, evict
-            return False, None
-        value = entry["value"]
+            return default
+        if self._is_expired(entry, time.time()):
+            await self._store.adelete(key)
+            return default
         logger.debug("Cache hit: %s", key)
-        return True, value
+        return entry["value"]
 
-    async def aset(self, key: str, value: Any, ttl: float | None = _UNSET) -> None:
-        """Add a value to the cache.
-
-        This is the async counterpart of :meth:`set`, for use with an
-        async backing store.
+    def get_many(self, keys: list[str]) -> dict[str, Any]:
+        """Retrieve the values of several keys with one read of the
+        store.
 
         Args:
-            key: The key to set.
-            value: The value to cache. The codec of the backing
-                store must accept it (see the class docstring).
-            ttl: The time-to-live, in seconds, before the entry
-                expires. Defaults to ``self._default_ttl`` when not
-                given. ``None`` means the entry never expires. ``0``
-                means the value is not written to the store at all,
-                evicting any existing entry for ``key`` instead. Must
-                be non-negative.
+            keys: The keys to look up.
+
+        Returns:
+            The cached value of each key that is a hit, keyed by the key.
+            A missing or expired key is not in the result, so a cached
+            ``None`` is distinguished from a miss with ``in``. The expired
+            entries are deleted from the backing store.
 
         Raises:
-            ValueError: If ``ttl`` is negative.
+            RuntimeError: If the cache is closed.
+            TypeError: If a key is not a ``str``.
 
         Example:
             ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         await cache.aset("greeting", "hello")
-            ...         print(await cache.aget("greeting"))
+            >>> from persista.cache import Cache
+            >>> with Cache() as cache:
+            ...     cache.set_many({"a": "hello", "b": None})
+            ...     cache.get_many(["a", "b", "missing"])
             ...
-            >>> asyncio.run(main())
-            hello
+            {'a': 'hello', 'b': None}
 
             ```
         """
-        resolved_ttl = self._resolve_ttl(ttl)
-        if resolved_ttl == 0:
-            await self._store.adelete(key)
-            return
-        expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
-        await self._store.aset(key, {"value": value, "expires_at": expires_at})
+        keys = validate_keys(keys)
+        hits, expired = self._split_entries(keys, self._store.get_many(keys))
+        if expired:
+            self._store.delete_many(expired)
+        return hits
+
+    async def aget_many(self, keys: list[str]) -> dict[str, Any]:
+        """Async equivalent of :meth:`get_many`."""
+        keys = validate_keys(keys)
+        hits, expired = self._split_entries(keys, await self._store.aget_many(keys))
+        if expired:
+            await self._store.adelete_many(expired)
+        return hits
 
     def contains(self, key: str) -> bool:
         """Indicate whether a key is present and unexpired.
@@ -462,14 +293,17 @@ class Cache(MultilineDisplayMixin):
             key: The key to check.
 
         Returns:
-            ``True`` if ``key`` has an entry in the cache that has not
-            expired, otherwise ``False``. If the entry has expired,
-            it is evicted from the backing store as a side effect of
-            this call, as in :meth:`get`.
+            ``True`` if ``key`` has an entry that has not expired,
+            otherwise ``False``. An expired entry is deleted from the
+            backing store.
+
+        Raises:
+            RuntimeError: If the cache is closed.
+            TypeError: If ``key`` is not a ``str``.
 
         Example:
             ```pycon
-            >>> from persista.cache.cache import Cache
+            >>> from persista.cache import Cache
             >>> with Cache() as cache:
             ...     cache.set("greeting", "hello")
             ...     cache.contains("greeting")
@@ -480,409 +314,146 @@ class Cache(MultilineDisplayMixin):
 
             ```
         """
-        hit, _ = self._get(key)
-        return hit
+        return self.get(key, MISSING) is not MISSING
 
     async def acontains(self, key: str) -> bool:
-        """Indicate whether a key is present and unexpired.
+        """Async equivalent of :meth:`contains`."""
+        return await self.aget(key, MISSING) is not MISSING
 
-        This is the async counterpart of :meth:`contains`, for use
-        with an async backing store.
+    def set(self, key: str, value: Any, *, ttl: float | None = DEFAULT) -> None:
+        """Add a value to the cache.
+
+        Calling this again with an existing key overwrites the
+        previous value and resets its expiry.
 
         Args:
-            key: The key to check.
+            key: The key to set.
+            value: The value to cache. The codec of the backing
+                store must accept it (see the class docstring).
+            ttl: The time-to-live, in seconds, before the entry
+                expires. Defaults to ``default_ttl`` when not given.
+                ``None`` means that the entry never expires. ``0`` means
+                that the value is not written, and that an existing entry
+                of ``key`` is deleted.
 
-        Returns:
-            ``True`` if ``key`` has an entry in the cache that has not
-            expired, otherwise ``False``. If the entry has expired,
-            it is evicted from the backing store as a side effect of
-            this call, as in :meth:`aget`.
+        Raises:
+            RuntimeError: If the cache is closed.
+            TypeError: If ``key`` is not a ``str``, or if the codec of the
+                store cannot encode ``value``.
+            ValueError: If ``ttl`` is negative or ``NaN``, or if ``value``
+                cannot be encoded without losing data.
 
         Example:
             ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         await cache.aset("greeting", "hello")
-            ...         print(await cache.acontains("greeting"))
-            ...         print(await cache.acontains("missing"))
+            >>> from persista.cache import Cache
+            >>> with Cache() as cache:
+            ...     cache.set("greeting", "hello")
+            ...     cache.get("greeting")
+            ...     cache.set("greeting", "bonjour", ttl=30)
+            ...     cache.get("greeting")
+            ...     cache.set("greeting", "salut", ttl=0)
+            ...     cache.contains("greeting")
             ...
-            >>> asyncio.run(main())
-            True
+            'hello'
+            'bonjour'
             False
 
             ```
         """
-        hit, _ = await self._aget(key)
-        return hit
+        self.set_many({key: value}, ttl=ttl)
 
-    def get_many(self, keys: list[str], default: Any = None) -> dict[str, Any]:
-        """Retrieve multiple values in a single batched store lookup.
+    async def aset(self, key: str, value: Any, *, ttl: float | None = DEFAULT) -> None:
+        """Async equivalent of :meth:`set`."""
+        await self.aset_many({key: value}, ttl=ttl)
 
-        Unlike calling :meth:`get` (or :meth:`contains` followed by
-        :meth:`get`) once per key, this issues one
-        ``self._store.get_many`` call for the whole batch, which
-        matters for stores where each lookup is a network round trip
-        (e.g. Redis, Postgres).
+    def set_many(self, items: Mapping[str, Any], *, ttl: float | None = DEFAULT) -> None:
+        """Add several values to the cache with one write to the store.
 
         Args:
-            keys: The keys to look up.
-            default: The value to map a key to if it is missing or its
-                entry has expired. Pass the
-                :data:`~persista.cache.cache.MISSING` sentinel here
-                to distinguish a cache miss from a cached ``None``.
-
-        Returns:
-            A dict mapping every key in ``keys`` to its cached value
-            on a hit, or to ``default`` on a miss. Expired entries are
-            evicted from the backing store as a side effect of this
-            call, as in :meth:`get`.
-
-        Example:
-            ```pycon
-            >>> from persista.cache.cache import Cache
-            >>> with Cache() as cache:
-            ...     cache.set("a", "hello")
-            ...     cache.set("b", "world")
-            ...     sorted(cache.get_many(["a", "b", "missing"]).items())
-            ...
-            [('a', 'hello'), ('b', 'world'), ('missing', None)]
-
-            ```
-        """
-        if not keys:
-            return {}
-        hits = self.try_get_many(keys)
-        return {key: hits.get(key, default) for key in keys}
-
-    async def aget_many(self, keys: list[str], default: Any = None) -> dict[str, Any]:
-        """Retrieve multiple values in a single batched store lookup.
-
-        This is the async counterpart of :meth:`get_many`, for use
-        with an async backing store.
-
-        Args:
-            keys: The keys to look up.
-            default: The value to map a key to if it is missing or its
-                entry has expired. Pass the
-                :data:`~persista.cache.cache.MISSING` sentinel here
-                to distinguish a cache miss from a cached ``None``.
-
-        Returns:
-            A dict mapping every key in ``keys`` to its cached value.
-            See :meth:`get_many` for the exact hit/miss semantics.
-
-        Example:
-            ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         await cache.aset("a", "hello")
-            ...         await cache.aset("b", "world")
-            ...         print(sorted((await cache.aget_many(["a", "b", "missing"])).items()))
-            ...
-            >>> asyncio.run(main())
-            [('a', 'hello'), ('b', 'world'), ('missing', None)]
-
-            ```
-        """
-        if not keys:
-            return {}
-        hits = await self.atry_get_many(keys)
-        return {key: hits.get(key, default) for key in keys}
-
-    def try_get_many(self, keys: list[str]) -> dict[str, Any]:
-        """Look up multiple keys in a single batched store lookup.
-
-        Unlike :meth:`get_many`, this distinguishes a cache miss from
-        a cached ``None`` without needing the :data:`MISSING`
-        sentinel, by omitting missed keys entirely.
-
-        Args:
-            keys: The keys to look up.
-
-        Returns:
-            A dict mapping each key that is a hit -- present and
-            unexpired -- to its cached value. Keys that are missing
-            or expired are omitted entirely rather than mapped to
-            ``None``, so a hit can always be distinguished from a
-            miss with ``in``. Expired entries are evicted from the
-            backing store as a side effect of this call, as in
-            :meth:`try_get`.
-
-        Example:
-            ```pycon
-            >>> from persista.cache.cache import Cache
-            >>> with Cache() as cache:
-            ...     cache.set("a", "hello")
-            ...     cache.set("b", "world")
-            ...     sorted(cache.try_get_many(["a", "b", "missing"]).items())
-            ...
-            [('a', 'hello'), ('b', 'world')]
-
-            ```
-        """
-        if not keys:
-            return {}
-        entries = self._store.get_many(keys)
-        results, expired_keys = self._split_many(keys, entries)
-        if expired_keys:
-            self._store.delete_many(expired_keys)
-        return results
-
-    async def atry_get_many(self, keys: list[str]) -> dict[str, Any]:
-        """Look up multiple keys in a single batched store lookup.
-
-        This is the async counterpart of :meth:`try_get_many`, for
-        use with an async backing store.
-
-        Args:
-            keys: The keys to look up.
-
-        Returns:
-            A dict mapping each key that is a hit to its cached value.
-            See :meth:`try_get_many` for the exact hit/miss semantics.
-
-        Example:
-            ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         await cache.aset("a", "hello")
-            ...         await cache.aset("b", "world")
-            ...         print(sorted((await cache.atry_get_many(["a", "b", "missing"])).items()))
-            ...
-            >>> asyncio.run(main())
-            [('a', 'hello'), ('b', 'world')]
-
-            ```
-        """
-        if not keys:
-            return {}
-        entries = await self._store.aget_many(keys)
-        results, expired_keys = self._split_many(keys, entries)
-        if expired_keys:
-            await self._store.adelete_many(expired_keys)
-        return results
-
-    def _split_many(
-        self, keys: list[str], entries: list[dict[str, Any] | None]
-    ) -> tuple[dict[str, Any], list[str]]:
-        """Split a batch of raw store entries into hits and expired
-        keys.
-
-        Args:
-            keys: The keys that were looked up.
-            entries: The raw store entries for ``keys``, in the same
-                order, with ``None`` for keys that were missing.
-
-        Returns:
-            A ``(hits, expired_keys)`` tuple. ``hits`` maps each key
-            that is a hit to its cached value. ``expired_keys`` lists
-            the keys whose entry has expired and should be evicted.
-        """
-        now = time.time()
-        hits: dict[str, Any] = {}
-        expired_keys: list[str] = []
-        for key, entry in zip(keys, entries, strict=True):
-            if entry is None:
-                continue
-            expires_at = entry["expires_at"]
-            if expires_at is not None and now > expires_at:
-                expired_keys.append(key)
-                continue
-            hits[key] = entry["value"]
-        return hits, expired_keys
-
-    def set_many(self, items: dict[str, Any], ttl: float | None = _UNSET) -> None:
-        """Add multiple values in a single batched store write.
-
-        Unlike calling :meth:`set` once per item, this issues one
-        ``self._store.set_many`` call for the whole batch, which
-        matters for stores where each write is a network round trip
-        (e.g. Redis, Postgres). A single ``ttl`` applies to every
-        item in the batch.
-
-        Args:
-            items: A dict mapping each key to the value to cache
-                under it. The codec of the backing store must accept
-                the values (see the class docstring).
-            ttl: The time-to-live, in seconds, before the entries
-                expire. See :meth:`set`.
+            items: The values to cache, keyed by their keys. The codec of
+                the backing store must accept them (see the class
+                docstring).
+            ttl: The time-to-live, in seconds, of every entry. See
+                :meth:`set`.
 
         Raises:
-            ValueError: If ``ttl`` is negative.
+            RuntimeError: If the cache is closed.
+            TypeError: If a key is not a ``str``, or if the codec of the
+                store cannot encode a value.
+            ValueError: If ``ttl`` is negative or ``NaN``, or if a value
+                cannot be encoded without losing data.
 
         Example:
             ```pycon
-            >>> from persista.cache.cache import Cache
+            >>> from persista.cache import Cache
             >>> with Cache() as cache:
-            ...     cache.set_many({"a": "hello", "b": "world"})
-            ...     sorted(cache.get_many(["a", "b"]).items())
+            ...     cache.set_many({"a": "hello", "b": "world"}, ttl=60)
+            ...     cache.get_many(["a", "b"])
             ...
-            [('a', 'hello'), ('b', 'world')]
+            {'a': 'hello', 'b': 'world'}
 
             ```
         """
-        if not items:
+        ttl = self._resolve_ttl(ttl)
+        if ttl == 0:
+            self._store.delete_many(list(items))
             return
-        resolved_ttl = self._resolve_ttl(ttl)
-        if resolved_ttl == 0:
-            self._store.delete_many(list(items.keys()))
+        self._store.set_many(self._make_entries(items, ttl))
+
+    async def aset_many(self, items: Mapping[str, Any], *, ttl: float | None = DEFAULT) -> None:
+        """Async equivalent of :meth:`set_many`."""
+        ttl = self._resolve_ttl(ttl)
+        if ttl == 0:
+            await self._store.adelete_many(list(items))
             return
-        expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
-        self._store.set_many(
-            {key: {"value": value, "expires_at": expires_at} for key, value in items.items()}
-        )
-
-    async def aset_many(self, items: dict[str, Any], ttl: float | None = _UNSET) -> None:
-        """Add multiple values in a single batched store write.
-
-        This is the async counterpart of :meth:`set_many`, for use
-        with an async backing store.
-
-        Args:
-            items: A dict mapping each key to the value to cache
-                under it. The codec of the backing store must accept
-                the values (see the class docstring).
-            ttl: The time-to-live, in seconds, before the entries
-                expire. See :meth:`aset`.
-
-        Raises:
-            ValueError: If ``ttl`` is negative.
-
-        Example:
-            ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         await cache.aset_many({"a": "hello", "b": "world"})
-            ...         print(sorted((await cache.aget_many(["a", "b"])).items()))
-            ...
-            >>> asyncio.run(main())
-            [('a', 'hello'), ('b', 'world')]
-
-            ```
-        """
-        if not items:
-            return
-        resolved_ttl = self._resolve_ttl(ttl)
-        if resolved_ttl == 0:
-            await self._store.adelete_many(list(items.keys()))
-            return
-        expires_at = None if resolved_ttl is None else time.time() + resolved_ttl
-        await self._store.aset_many(
-            {key: {"value": value, "expires_at": expires_at} for key, value in items.items()}
-        )
-
-    def contains_many(self, keys: list[str]) -> list[bool]:
-        """Check presence of multiple keys in a single batched store
-        lookup.
-
-        Unlike calling :meth:`contains` once per key, this issues one
-        ``self._store.get_many`` call for the whole batch, which
-        matters for stores where each lookup is a network round trip
-        (e.g. Redis, Postgres).
-
-        Args:
-            keys: The keys to check.
-
-        Returns:
-            A list of booleans, in the same order as ``keys``, where
-            each entry is ``True`` if the corresponding key is a hit
-            -- present and unexpired -- and ``False`` otherwise.
-            Expired entries are evicted from the backing store as a
-            side effect of this call, as in :meth:`get_many`.
-
-        Example:
-            ```pycon
-            >>> from persista.cache.cache import Cache
-            >>> with Cache() as cache:
-            ...     cache.set("a", "hello")
-            ...     cache.contains_many(["a", "b"])
-            ...
-            [True, False]
-
-            ```
-        """
-        hits = self.try_get_many(keys)
-        return [key in hits for key in keys]
-
-    async def acontains_many(self, keys: list[str]) -> list[bool]:
-        """Check presence of multiple keys in a single batched store
-        lookup.
-
-        This is the async counterpart of :meth:`contains_many`, for
-        use with an async backing store.
-
-        Args:
-            keys: The keys to check.
-
-        Returns:
-            A list of booleans, in the same order as ``keys``, where
-            each entry is ``True`` if the corresponding key is a hit
-            -- present and unexpired -- and ``False`` otherwise.
-            Expired entries are evicted from the backing store as a
-            side effect of this call, as in :meth:`aget_many`.
-
-        Example:
-            ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         await cache.aset("a", "hello")
-            ...         print(await cache.acontains_many(["a", "b"]))
-            ...
-            >>> asyncio.run(main())
-            [True, False]
-
-            ```
-        """
-        hits = await self.atry_get_many(keys)
-        return [key in hits for key in keys]
+        await self._store.aset_many(self._make_entries(items, ttl))
 
     def delete(self, key: str) -> None:
         """Remove a single entry from the cache, if present.
 
-        Unlike :meth:`set` with ``ttl=0``, this does not require a
-        value to be given.
-
         Args:
             key: The key to remove.
 
+        Raises:
+            RuntimeError: If the cache is closed.
+            TypeError: If ``key`` is not a ``str``.
+
         Example:
             ```pycon
-            >>> from persista.cache.cache import Cache
+            >>> from persista.cache import Cache
             >>> with Cache() as cache:
             ...     cache.set("greeting", "hello")
             ...     cache.delete("greeting")
-            ...     cache.get("greeting") is None
+            ...     cache.contains("greeting")
             ...
-            True
+            False
 
             ```
         """
         self._store.delete(key)
 
+    async def adelete(self, key: str) -> None:
+        """Async equivalent of :meth:`delete`."""
+        await self._store.adelete(key)
+
     def delete_many(self, keys: list[str]) -> None:
-        """Remove multiple entries from the cache in a single batched
-        store write, if present.
+        """Remove several entries from the cache with one write to the
+        store, if present.
 
         Args:
             keys: The keys to remove.
 
+        Raises:
+            RuntimeError: If the cache is closed.
+            TypeError: If a key is not a ``str``.
+
         Example:
             ```pycon
-            >>> from persista.cache.cache import Cache
+            >>> from persista.cache import Cache
             >>> with Cache() as cache:
             ...     cache.set_many({"a": "hello", "b": "world"})
             ...     cache.delete_many(["a", "b"])
-            ...     cache.try_get_many(["a", "b"])
+            ...     cache.get_many(["a", "b"])
             ...
             {}
 
@@ -891,361 +462,20 @@ class Cache(MultilineDisplayMixin):
         self._store.delete_many(keys)
 
     async def adelete_many(self, keys: list[str]) -> None:
-        """Remove multiple entries from the cache in a single batched
-        store write, if present.
-
-        This is the async counterpart of :meth:`delete_many`, for use
-        with an async backing store.
-
-        Args:
-            keys: The keys to remove.
-
-        Example:
-            ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         await cache.aset_many({"a": "hello", "b": "world"})
-            ...         await cache.adelete_many(["a", "b"])
-            ...         print(await cache.atry_get_many(["a", "b"]))
-            ...
-            >>> asyncio.run(main())
-            {}
-
-            ```
-        """
+        """Async equivalent of :meth:`delete_many`."""
         await self._store.adelete_many(keys)
-
-    async def adelete(self, key: str) -> None:
-        """Remove a single entry from the cache, if present.
-
-        This is the async counterpart of :meth:`delete`, for use with
-        an async backing store.
-
-        Args:
-            key: The key to remove.
-
-        Example:
-            ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         await cache.aset("greeting", "hello")
-            ...         await cache.adelete("greeting")
-            ...         print(await cache.aget("greeting"))
-            ...
-            >>> asyncio.run(main())
-            None
-
-            ```
-        """
-        await self._store.adelete(key)
-
-    def get_or_compute(
-        self,
-        key: str,
-        fn: Callable[..., T],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-        ttl: float | None = _UNSET,
-    ) -> T:
-        """Return the cached value for ``key``, computing and storing it
-        on a cache miss.
-
-        Args:
-            key: The key to look up and, on a miss, store the result
-                under.
-            fn: The function to call to compute the value when
-                ``key`` is not in the cache.
-            args: Positional arguments passed to ``fn`` on a miss.
-            kwargs: Keyword arguments passed to ``fn`` on a miss.
-            ttl: The time-to-live, in seconds, applied when storing a
-                freshly computed value. See :meth:`set`.
-
-        Returns:
-            The cached value on a hit, otherwise the value returned by
-            ``fn(*args, **kwargs)``.
-
-        Example:
-            ```pycon
-            >>> from persista.cache.cache import Cache
-            >>> calls = []
-            >>> def compute(x):
-            ...     calls.append(x)
-            ...     return x * 2
-            ...
-            >>> with Cache() as cache:
-            ...     cache.get_or_compute("key", compute, (4,), {})
-            ...     cache.get_or_compute("key", compute, (4,), {})  # served from the cache
-            ...
-            8
-            8
-            >>> calls
-            [4]
-
-            ```
-        """
-        hit, value = self._get(key)
-        if hit:
-            return value
-        value = fn(*args, **kwargs)
-        self.set(key, value, ttl=ttl)
-        return value
-
-    async def aget_or_compute(
-        self,
-        key: str,
-        fn: Callable[..., T] | Callable[..., Awaitable[T]],
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-        ttl: float | None = _UNSET,
-    ) -> T:
-        """Return the cached value for ``key``, computing and storing it
-        on a cache miss.
-
-        This is the async counterpart of :meth:`get_or_compute`, for
-        use with an async backing store. ``fn`` may be a regular sync
-        function or an ``async def`` function; either way, the backing
-        store is always accessed through ``await``.
-
-        Args:
-            key: The key to look up and, on a miss, store the result
-                under.
-            fn: The sync or async function to call to compute the
-                value when ``key`` is not in the cache.
-            args: Positional arguments passed to ``fn`` on a miss.
-            kwargs: Keyword arguments passed to ``fn`` on a miss.
-            ttl: The time-to-live, in seconds, applied when storing a
-                freshly computed value. See :meth:`aset`.
-
-        Returns:
-            The cached value on a hit, otherwise the value returned by
-            ``fn(*args, **kwargs)`` (awaited if ``fn`` is async).
-
-        Example:
-            ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> calls = []
-            >>> async def compute(x):
-            ...     calls.append(x)
-            ...     return x * 2
-            ...
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         print(await cache.aget_or_compute("key", compute, (4,), {}))
-            ...         print(await cache.aget_or_compute("key", compute, (4,), {}))  # cached
-            ...
-            >>> asyncio.run(main())
-            8
-            8
-            >>> calls
-            [4]
-
-            ```
-        """
-        hit, value = await self._aget(key)
-        if hit:
-            return value
-        # Whether the result is awaitable is only known at runtime.
-        result: Any = fn(*args, **kwargs)
-        value = await result if inspect.isawaitable(result) else result
-        await self.aset(key, value, ttl=ttl)
-        return value
-
-    def memoize(
-        self,
-        ttl: float | None = _UNSET,
-        strategy: str = "json",
-        ignore_non_serializable: bool = False,
-    ) -> Callable[[Callable[..., T]], Callable[..., T]]:
-        """Decorate a function so its return values are cached.
-
-        Works on both sync and async functions (``async def``).
-
-        The cache key is derived from the decorated function's module
-        and qualified name (``__module__`` and ``__qualname__``) and
-        call arguments, via
-        :func:`~persista.cache.utils.make_call_key`, so calls with
-        equal arguments share a cached result. Call arguments must be
-        serializable with ``strategy`` (see
-        ``ignore_non_serializable`` for the only exception); the
-        codec of the backing store must additionally accept the return
-        value (see the class docstring).
-        Because the key is based on names rather than object
-        identity, two distinct functions defined with the same module
-        and qualified name (e.g. two calls to the same factory
-        returning a closure) share their cache entries.
-
-        Args:
-            ttl: The time-to-live, in seconds, applied to cached
-                results. See :meth:`set`.
-            strategy: The serialization strategy used to compute the
-                cache key. Either ``"json"`` or ``"pickle"``. See
-                :func:`~persista.cache.utils.make_key`.
-            ignore_non_serializable: If ``True``, the values of keyword
-                arguments that are not serializable with
-                ``strategy`` are left out of the key, instead of
-                raising an error. Positional arguments are never left
-                out: a call with a positional argument that cannot be
-                serialized (such as ``self`` of a method) raises.
-
-        Returns:
-            A decorator that wraps a function with caching.
-
-        Raises:
-            ValueError: If ``ttl`` is negative.
-
-        Example:
-            ```pycon
-            >>> from persista.cache.cache import Cache
-            >>> calls = []
-            >>> with Cache() as cache:
-            ...     @cache.memoize()
-            ...     def square(x):
-            ...         calls.append(x)
-            ...         return x * x
-            ...     square(4)
-            ...     square(4)  # served from the cache, not re-computed
-            ...
-            16
-            16
-            >>> calls
-            [4]
-
-            ```
-        """
-
-        def decorator(func: Callable[..., T]) -> Callable[..., T]:
-            if inspect.iscoroutinefunction(func):
-
-                @functools.wraps(func)
-                async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                    key = make_call_key(
-                        func,
-                        args,
-                        kwargs,
-                        strategy=strategy,
-                        ignore_non_serializable=ignore_non_serializable,
-                    )
-                    return await self.aget_or_compute(
-                        key=key, fn=func, args=args, kwargs=kwargs, ttl=ttl
-                    )
-
-                return cast("Callable[..., T]", async_wrapper)
-
-            @functools.wraps(func)
-            def wrapper(*args: Any, **kwargs: Any) -> T:
-                key = make_call_key(
-                    func,
-                    args,
-                    kwargs,
-                    strategy=strategy,
-                    ignore_non_serializable=ignore_non_serializable,
-                )
-                return self.get_or_compute(key=key, fn=func, args=args, kwargs=kwargs, ttl=ttl)
-
-            return wrapper
-
-        return decorator
-
-    def amemoize(
-        self,
-        ttl: float | None = _UNSET,
-        strategy: str = "json",
-        ignore_non_serializable: bool = False,
-    ) -> Callable[[Callable[..., T] | Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
-        """Decorate a function so its return values are cached.
-
-        This is the async counterpart of :meth:`memoize`, for use
-        with an async backing store. Works on both sync and async
-        functions (``async def``); the wrapped function is always a
-        coroutine function, since the backing store is only
-        accessible through ``await``.
-
-        The cache key is derived from the decorated function's module
-        and qualified name (``__module__`` and ``__qualname__``) and
-        call arguments, via
-        :func:`~persista.cache.utils.make_call_key`, so calls with
-        equal arguments share a cached result. Call arguments must be
-        serializable with ``strategy`` (see
-        ``ignore_non_serializable`` for the only exception); the
-        codec of the backing store must additionally accept the return
-        value (see the class docstring).
-        Because the key is based on names rather than object
-        identity, two distinct functions defined with the same module
-        and qualified name (e.g. two calls to the same factory
-        returning a closure) share their cache entries.
-
-        Args:
-            ttl: The time-to-live, in seconds, applied to cached
-                results. See :meth:`aset`.
-            strategy: The serialization strategy used to compute the
-                cache key. Either ``"json"`` or ``"pickle"``. See
-                :func:`~persista.cache.utils.make_key`.
-            ignore_non_serializable: If ``True``, the values of keyword
-                arguments that are not serializable with
-                ``strategy`` are left out of the key, instead of
-                raising an error. Positional arguments are never left
-                out: a call with a positional argument that cannot be
-                serialized (such as ``self`` of a method) raises.
-
-        Returns:
-            A decorator that wraps a sync or async function with
-            caching, always returning a coroutine function.
-
-        Raises:
-            ValueError: If ``ttl`` is negative.
-
-        Example:
-            ```pycon
-            >>> import asyncio
-            >>> from persista.cache.cache import Cache
-            >>> calls = []
-            >>> async def main():
-            ...     async with Cache() as cache:
-            ...         @cache.amemoize()
-            ...         async def square(x):
-            ...             calls.append(x)
-            ...             return x * x
-            ...         print(await square(4))
-            ...         print(await square(4))  # served from the cache, not re-computed
-            ...
-            >>> asyncio.run(main())
-            16
-            16
-            >>> calls
-            [4]
-
-            ```
-        """
-
-        def decorator(
-            func: Callable[..., T] | Callable[..., Awaitable[T]],
-        ) -> Callable[..., Awaitable[T]]:
-            @functools.wraps(func)
-            async def wrapper(*args: Any, **kwargs: Any) -> Any:
-                key = make_call_key(
-                    func,
-                    args,
-                    kwargs,
-                    strategy=strategy,
-                    ignore_non_serializable=ignore_non_serializable,
-                )
-                return await self.aget_or_compute(key, func, args, kwargs, ttl=ttl)
-
-            return wrapper
-
-        return decorator
 
     def clear(self) -> None:
         """Remove every entry from the cache, expired or not.
 
+        This clears the whole backing store.
+
+        Raises:
+            RuntimeError: If the cache is closed.
+
         Example:
             ```pycon
-            >>> from persista.cache.cache import Cache
+            >>> from persista.cache import Cache
             >>> with Cache() as cache:
             ...     cache.set("greeting", "hello")
             ...     cache.clear()
@@ -1258,27 +488,276 @@ class Cache(MultilineDisplayMixin):
         self._store.clear()
 
     async def aclear(self) -> None:
-        """Remove every entry from the cache, expired or not.
+        """Async equivalent of :meth:`clear`."""
+        await self._store.aclear()
 
-        This is the async counterpart of :meth:`clear`, for use with
-        an async backing store.
+    def get_or_compute(self, key: str, fn: Callable[[], T], *, ttl: float | None = DEFAULT) -> T:
+        """Return the cached value for ``key``, computing and storing it
+        on a cache miss.
+
+        Concurrent misses on the same key can call ``fn`` several times.
+
+        Args:
+            key: The key to look up and, on a miss, store the result
+                under.
+            fn: The function without arguments that computes the value
+                on a miss, such as a ``lambda`` or a
+                ``functools.partial``.
+            ttl: The time-to-live, in seconds, of a freshly computed
+                value. See :meth:`set`. It does not change an entry that
+                is a hit.
+
+        Returns:
+            The cached value on a hit, as the codec of the store reads it
+            back, otherwise the value returned by ``fn()``.
+
+        Raises:
+            RuntimeError: If the cache is closed.
+            TypeError: If ``key`` is not a ``str``, or if the codec of the
+                store cannot encode the computed value.
+            ValueError: If ``ttl`` is negative or ``NaN`` (``fn`` is not
+                called), or if the computed value cannot be encoded
+                without losing data.
+
+        Example:
+            ```pycon
+            >>> from persista.cache import Cache
+            >>> calls = []
+            >>> def compute():
+            ...     calls.append(1)
+            ...     return 8
+            ...
+            >>> with Cache() as cache:
+            ...     cache.get_or_compute("key", compute)
+            ...     cache.get_or_compute("key", compute)  # served from the cache
+            ...
+            8
+            8
+            >>> calls
+            [1]
+
+            ```
+        """
+        # Checked here too, so that an invalid ttl raises on a hit, and
+        # before fn is called.
+        self._resolve_ttl(ttl)
+        value = self.get(key, MISSING)
+        if value is MISSING:
+            value = fn()
+            self.set(key, value, ttl=ttl)
+        return value
+
+    async def aget_or_compute(
+        self,
+        key: str,
+        fn: Callable[[], T] | Callable[[], Awaitable[T]],
+        *,
+        ttl: float | None = DEFAULT,
+    ) -> T:
+        """Async equivalent of :meth:`get_or_compute`.
+
+        ``fn`` may be a regular function or an ``async def`` function: what
+        it returns is awaited if it is awaitable. The store is accessed
+        with its async methods.
 
         Example:
             ```pycon
             >>> import asyncio
-            >>> from persista.cache.cache import Cache
+            >>> from persista.cache import Cache
+            >>> async def compute():
+            ...     return 8
+            ...
             >>> async def main():
             ...     async with Cache() as cache:
-            ...         await cache.aset("greeting", "hello")
-            ...         await cache.aclear()
-            ...         print(await cache.aget("greeting"))
+            ...         print(await cache.aget_or_compute("key", compute))
             ...
             >>> asyncio.run(main())
-            None
+            8
 
             ```
         """
-        await self._store.aclear()
+        self._resolve_ttl(ttl)
+        value = await self.aget(key, MISSING)
+        if value is MISSING:
+            # Whether the result is awaitable is only known at runtime.
+            result: Any = fn()
+            value = await result if inspect.isawaitable(result) else result
+            await self.aset(key, value, ttl=ttl)
+        return value
+
+    def memoize(
+        self,
+        *,
+        ttl: float | None = DEFAULT,
+        ignore: Collection[str] = (),
+        key: Callable[..., str] | None = None,
+    ) -> Callable[[Callable[P, R]], Callable[P, R]]:
+        """Decorate a function so its return values are cached.
+
+        Works on both sync and ``async def`` functions: the decorated
+        function is of the same kind. The store of an ``async def``
+        function is accessed with its async methods.
+
+        The key of a call is the hash of the canonical encoding (see
+        :func:`~persista.utils.canonical.encode_canonical`) of the module
+        of the function, its qualified name (``__module__`` and
+        ``__qualname__``), and its arguments bound to its parameters, with
+        the default values:
+
+        - ``f(1)`` and ``f(a=1)`` are the same call, and so is
+          ``f(1, b=2)`` if ``2`` is the default of ``b``. The order of keyword
+          arguments, also those collected by ``**kwargs``, and the order
+          of the items of a ``dict`` do not matter;
+        - arguments of different types are different calls: ``1``, ``1.0``,
+          ``True`` and ``"1"``, or a list and a tuple, do not share a result;
+        - the arguments, including the default values, must be built from
+          ``None``, ``bool``, ``int``, ``float``, ``str``, ``bytes``, ``list``,
+          ``tuple``, ``dict``, ``set`` and ``frozenset``. Any other argument,
+          including an instance of a subclass of these types, raises
+          ``TypeError``, unless its parameter is named in ``ignore`` or
+          ``key`` is given.
+
+        A method needs ``ignore`` or ``key``, because its first argument
+        (``self`` or ``cls``) cannot be encoded. With ``ignore=("self",)``, all
+        the instances share the results, so use it only if the result does
+        not depend on the instance.
+
+        Functions are told apart by their names only: two functions with
+        the same module and qualified name, such as two closures returned
+        by the same function, or two lambdas defined in the same scope,
+        share their results. Give them a ``key`` if they differ.
+
+        A hit returns the result as the codec of the store reads it back
+        (see the class docstring). Concurrent misses on the same call can
+        run the function several times.
+
+        Args:
+            ttl: The time-to-live, in seconds, of the cached results. See
+                :meth:`set`.
+            ignore: The names of the parameters whose arguments are left
+                out of the key, such as a client or a logger: calls that
+                only differ in these arguments share a result.
+            key: A function that is called with the arguments of each call
+                and returns its key. The key is used as is, so it must
+                differ between functions that share the cache. It cannot be
+                used together with ``ignore``.
+
+        Returns:
+            A decorator that wraps a function with caching.
+
+        Raises:
+            TypeError: If ``ignore`` is a ``str``. The decorator raises it for
+                a callable without a ``__qualname__`` or a built-in method
+                bound to an object, unless ``key`` is given. A call raises
+                it if its arguments do not match the signature, or cannot
+                be encoded.
+            ValueError: If ``ttl`` is negative or ``NaN``, or if ``ignore`` and
+                ``key`` are both given. The decorator raises it if ``ignore``
+                names a parameter that the function does not have. A call
+                raises it if an argument contains itself.
+            RuntimeError: A call raises it if the cache is closed.
+
+        Example:
+            ```pycon
+            >>> from persista.cache import Cache
+            >>> calls = []
+            >>> with Cache() as cache:
+            ...     @cache.memoize(ignore=("verbose",))
+            ...     def square(x, verbose=False):
+            ...         calls.append(x)
+            ...         return x * x
+            ...     square(4)
+            ...     square(x=4, verbose=True)  # served from the cache
+            ...
+            16
+            16
+            >>> calls
+            [4]
+
+            ```
+        """
+        return memoize_with(lambda: self, ttl=ttl, ignore=ignore, key=key)
+
+    def _resolve_ttl(self, ttl: float | None) -> float | None:
+        """Resolve a ``ttl`` argument against ``self._default_ttl``.
+
+        Args:
+            ttl: The ``ttl`` of a call, or
+                :data:`~persista.cache.ttl.DEFAULT` to use
+                ``self._default_ttl``.
+
+        Returns:
+            The resolved ttl.
+
+        Raises:
+            ValueError: If ``ttl`` is negative or ``NaN``.
+        """
+        if ttl is DEFAULT:
+            # Checked by the constructor.
+            return self._default_ttl
+        validate_ttl(ttl)
+        return ttl
+
+    @staticmethod
+    def _make_entries(items: Mapping[str, Any], ttl: float | None) -> dict[str, dict[str, Any]]:
+        """Wrap values in the entries that are written to the store.
+
+        Args:
+            items: The values, keyed by their keys. It is not modified.
+            ttl: The resolved time-to-live of the entries: ``None`` or a
+                positive number.
+
+        Returns:
+            The entry of each key. An infinite ``ttl`` gives entries that
+            never expire.
+        """
+        expires_at = None
+        # JSON cannot represent infinity.
+        if ttl is not None and ttl != math.inf:
+            expires_at = time.time() + ttl
+        return {key: {"value": value, "expires_at": expires_at} for key, value in items.items()}
+
+    @staticmethod
+    def _is_expired(entry: dict[str, Any], now: float) -> bool:
+        """Indicate whether an entry of the store has expired.
+
+        Args:
+            entry: The entry.
+            now: The current Unix timestamp.
+
+        Returns:
+            ``True`` if the expiry of the entry is before ``now``.
+        """
+        expires_at = entry["expires_at"]
+        return expires_at is not None and now > expires_at
+
+    def _split_entries(
+        self, keys: list[str], entries: list[dict[str, Any] | None]
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Split a batch of entries of the store into hits and expired
+        keys.
+
+        Args:
+            keys: The keys that were looked up.
+            entries: The entries of ``keys``, in the same order, with
+                ``None`` for the missing keys.
+
+        Returns:
+            A ``(hits, expired_keys)`` tuple. ``hits`` maps each key that is
+            a hit to its cached value. ``expired_keys`` lists the keys whose
+            entry has expired and should be deleted.
+        """
+        now = time.time()
+        hits: dict[str, Any] = {}
+        expired_keys: list[str] = []
+        for key, entry in zip(keys, entries, strict=True):
+            if entry is None:
+                continue
+            if self._is_expired(entry, now):
+                expired_keys.append(key)
+            else:
+                hits[key] = entry["value"]
+        return hits, expired_keys
 
     def _get_repr_kwargs(self) -> dict[str, Any]:
         return {

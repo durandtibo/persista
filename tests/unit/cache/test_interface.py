@@ -1,485 +1,257 @@
 from __future__ import annotations
 
-import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 
 from persista.cache.cache import Cache
-from persista.cache.interface import (
-    _make_default_cache,
-    async_cached,
-    cached,
-    get_cache,
-    set_cache,
-)
-from persista.cache.utils import make_key
+from persista.cache.interface import _make_default_cache, _state, cached, get_cache, set_cache
+from persista.cache.memoize import build_key_function
+from persista.store.codec import PickleCodec
+from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine, Iterator
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-def _make_cache(**kwargs: Any) -> Cache:
-    cache = Cache(**kwargs)
-    cache.open()
-    return cache
+    from collections.abc import Iterator
 
 
 @pytest.fixture(autouse=True)
-def _reset_default_cache() -> Iterator[None]:
-    # Isolate tests from each other and from any cache installed by
-    # a previous test via `set_cache`.
-    original = get_cache()
-    set_cache(_make_cache(default_ttl=300))
+def _isolate_default_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    # Each test starts without a default cache, and the one it creates is
+    # forgotten afterwards.
+    monkeypatch.delitem(_state, "cache", raising=False)
     yield
-    set_cache(original)
-
-
-#########################################
-#     Tests for _make_default_cache      #
-#########################################
-
-
-def test_make_default_cache_returns_open_cache() -> None:
-    cache = _make_default_cache()
-    try:
-        assert isinstance(cache, Cache)
-        assert cache.closed is False
-    finally:
+    if (cache := _state.get("cache")) is not None:
         cache.close()
 
 
-#################################
-#     Tests for get_cache       #
-#################################
+@pytest.fixture
+def cache() -> Iterator[Cache]:
+    with Cache() as cache:
+        set_cache(cache)
+        yield cache
 
 
-def test_get_cache_returns_cache() -> None:
-    assert isinstance(get_cache(), Cache)
+#########################################
+#     Tests for _make_default_cache     #
+#########################################
+
+
+def test_make_default_cache_is_open() -> None:
+    cache = _make_default_cache()
+    assert not cache.closed
+    cache.close()
+
+
+def test_make_default_cache_ttl() -> None:
+    assert _make_default_cache().default_ttl == 300
+
+
+def test_make_default_cache_store() -> None:
+    assert isinstance(_make_default_cache()._store, InMemoryStore)
+
+
+def test_make_default_cache_codec() -> None:
+    assert isinstance(_make_default_cache()._store._codec, PickleCodec)
+
+
+def test_make_default_cache_new_instance() -> None:
+    assert _make_default_cache() is not _make_default_cache()
+
+
+###############################
+#     Tests for get_cache     #
+###############################
+
+
+def test_get_cache_creates_cache_on_first_call() -> None:
+    cache = get_cache()
+    assert _state == {"cache": cache}
+
+
+def test_get_cache_returns_open_cache() -> None:
+    assert not get_cache().closed
 
 
 def test_get_cache_returns_same_instance() -> None:
     assert get_cache() is get_cache()
 
 
-#################################
-#     Tests for set_cache       #
-#################################
-
-
-def test_set_cache_replaces_instance() -> None:
-    cache = _make_cache()
-    set_cache(cache)
+def test_get_cache_returns_installed_cache(cache: Cache) -> None:
     assert get_cache() is cache
 
 
-def test_set_cache_reflected_by_previously_decorated_function() -> None:
+def test_get_cache_creates_one_default_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def make() -> Cache:
+        calls.append(1)
+        return _make_default_cache()
+
+    monkeypatch.setattr("persista.cache.interface._make_default_cache", make)
+    get_cache()
+    get_cache()
+    assert calls == [1]
+
+
+class SetCacheOnEnter:
+    r"""A lock during whose acquisition another thread installs a
+    cache."""
+
+    def __init__(self, cache: Cache) -> None:
+        self.cache = cache
+
+    def __enter__(self) -> None:
+        _state["cache"] = self.cache
+
+    def __exit__(self, *exc_info: object) -> None:
+        pass
+
+
+def test_get_cache_set_while_waiting_for_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache = Cache()
+    monkeypatch.setattr("persista.cache.interface._lock", SetCacheOnEnter(cache))
+    assert get_cache() is cache
+
+
+###############################
+#     Tests for set_cache     #
+###############################
+
+
+def test_set_cache_before_get_cache_creates_no_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setattr("persista.cache.interface._make_default_cache", lambda: calls.append(1))
+    set_cache(Cache())
+    get_cache()
+    assert calls == []
+
+
+def test_set_cache_replaces_instance(cache: Cache) -> None:
+    other = Cache()
+    set_cache(other)
+    assert get_cache() is not cache
+
+
+def test_set_cache_does_not_open_cache() -> None:
+    cache = Cache()
+    set_cache(cache)
+    assert cache.closed
+
+
+############################
+#     Tests for cached     #
+############################
+
+
+def test_cached() -> None:
     calls = []
 
     @cached()
-    def func(x: int) -> int:
+    def double(x: int) -> int:
         calls.append(x)
         return x * 2
 
-    func(1)
-    assert calls == [1]
+    assert (double(1), double(x=1), double(2), calls) == (2, 2, 4, [1, 2])
 
-    # Swapping the shared cache should make `func` start with a clean slate.
-    set_cache(_make_cache())
-    func(1)
+
+async def test_cached_async() -> None:
+    calls = []
+
+    @cached()
+    async def double(x: int) -> int:
+        calls.append(x)
+        return x * 2
+
+    results = [await double(1), await double(x=1)]
+    assert (results, calls) == ([2, 2], [1])
+
+
+def test_cached_creates_no_cache_at_decoration() -> None:
+    @cached()
+    def func() -> None:
+        pass
+
+    assert _state == {}
+
+
+def test_cached_uses_default_cache(cache: Cache) -> None:
+    def double(x: int) -> int:
+        return x * 2
+
+    cached()(double)(1)
+    assert cache.get(build_key_function(double)((1,), {})) == 2
+
+
+def test_cached_uses_cache_installed_at_call_time() -> None:
+    calls = []
+    func = cached()(lambda: calls.append(1))
+    with Cache() as first, Cache() as second:
+        set_cache(first)
+        func()
+        set_cache(second)
+        func()
     assert calls == [1, 1]
 
 
-################################
-#     Tests for cached         #
-################################
-
-
-def test_cached_caches_result() -> None:
+def test_cached_shares_entries_with_memoize(cache: Cache) -> None:
     calls = []
 
-    @cached()
-    def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
+    def func() -> None:
+        calls.append(1)
 
-    assert func(1) == 2
-    assert func(1) == 2
+    cache.memoize()(func)()
+    cached()(func)()
     assert calls == [1]
 
 
-def test_cached_different_args_not_shared() -> None:
-    calls = []
-
-    @cached()
-    def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
-
-    func(1)
-    func(2)
-    assert calls == [1, 2]
-
-
-def test_cached_preserves_function_metadata() -> None:
-    @cached()
-    def func(x: int) -> int:
-        """Double x."""
-        return x * 2
-
-    assert func.__name__ == "func"
-    assert func.__doc__ == "Double x."
-
-
-def test_cached_uses_shared_default_cache() -> None:
-    @cached()
-    def func(x: int) -> int:
-        return x * 2
-
-    func(1)
-    key = make_key(f"{__name__}:{func.__qualname__}", (1,), {}, strategy="json")
-    assert get_cache().contains(key)
-
-
-def test_cached_respects_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("cache")
+def test_cached_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = [1_000_000.0]
     monkeypatch.setattr("persista.cache.cache.time.time", lambda: clock[0])
     calls = []
-
-    @cached(ttl=10)
-    def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
-
-    func(1)
+    func = cached(ttl=10)(lambda: calls.append(1))
+    func()
     clock[0] += 11
-    func(1)
+    func()
     assert calls == [1, 1]
 
 
-def test_cached_ttl_zero_recomputes_every_call() -> None:
+@pytest.mark.usefixtures("cache")
+def test_cached_ignore() -> None:
     calls = []
 
-    @cached(ttl=0)
-    def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
+    @cached(ignore=("client",))
+    def func(client: object) -> None:
+        del client
+        calls.append(1)
 
-    func(1)
-    func(1)
-    assert calls == [1, 1]
-
-
-async def test_cached_caches_result_async() -> None:
-    calls = []
-
-    @cached()
-    async def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
-
-    assert await func(1) == 2
-    assert await func(1) == 2
+    func(object())
+    func(object())
     assert calls == [1]
 
 
-def test_cached_strategy_json() -> None:
-    calls = []
+def test_cached_key(cache: Cache) -> None:
+    cached(key=lambda: "my-key")(lambda: 1)()
+    assert cache.get("my-key") == 1
 
-    @cached(strategy="json")
-    def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
 
-    assert func(1) == 2
-    assert func(1) == 2
-    assert calls == [1]
+@pytest.mark.parametrize("ttl", [-1, float("nan")])
+def test_cached_ttl_invalid(ttl: float) -> None:
+    with pytest.raises(ValueError, match=r"ttl must be None, 0 or positive"):
+        cached(ttl=ttl)
 
 
-def test_cached_strategy_json_rejects_non_serializable() -> None:
-    @cached(strategy="json")
-    def func(x: object) -> object:
-        return x
+def test_cached_ignore_and_key() -> None:
+    with pytest.raises(ValueError, match=r"ignore and key cannot be used together"):
+        cached(ignore=["x"], key=str)
 
-    with pytest.raises(TypeError):
-        func(object())
 
+def test_cached_unknown_ignore_name() -> None:
+    decorator = cached(ignore=["z"])
+    with pytest.raises(ValueError, match=r"does not have: \['z'\]"):
+        decorator(lambda x: x)
 
-def test_cached_default_strategy_rejects_non_serializable() -> None:
-    @cached()
-    def func(x: object) -> object:
-        return x
 
-    with pytest.raises(TypeError):
-        func(threading.Lock())
-
-
-def test_cached_ignore_non_serializable() -> None:
-    calls = []
-
-    @cached(strategy="json", ignore_non_serializable=True)
-    def func(x: int, _obj: object = None) -> int:
-        calls.append(x)
-        return x * 2
-
-    assert func(1, _obj=object()) == 2
-    assert func(1, _obj=object()) == 2  # different object, but shares the cache entry
-    assert calls == [1]
-
-
-def test_cached_ignore_non_serializable_positional_argument_raises() -> None:
-    @cached(ignore_non_serializable=True)
-    def func(first: object, second: object) -> str:
-        return f"{type(first).__name__}-{type(second).__name__}"
-
-    with pytest.raises(TypeError, match=r"not JSON serializable"):
-        func(threading.Lock(), 1)
-
-
-def test_cached_ignore_non_serializable_self_raises() -> None:
-    class Loader:
-        @cached(ignore_non_serializable=True)
-        def load(self, x: int) -> int:
-            return x
-
-    with pytest.raises(TypeError, match=r"not JSON serializable"):
-        Loader().load(1)
-
-
-def test_cached_same_qualname_different_modules() -> None:
-    def make_func(module: str) -> Callable[[int], str]:
-        def load(_x: int) -> str:
-            return module
-
-        load.__module__ = module
-        return cached()(load)
-
-    first = make_func("first")
-    second = make_func("second")
-    first(1)
-    assert second(1) == "second"
-
-
-async def test_cached_ignore_non_serializable_async() -> None:
-    calls = []
-
-    @cached(strategy="json", ignore_non_serializable=True)
-    async def func(x: int, _obj: object = None) -> int:
-        calls.append(x)
-        return x * 2
-
-    assert await func(1, _obj=object()) == 2
-    assert await func(1, _obj=object()) == 2  # different object, but shares the cache entry
-    assert calls == [1]
-
-
-async def test_cached_ignore_non_serializable_positional_argument_raises_async() -> None:
-    @cached(ignore_non_serializable=True)
-    async def func(first: object, second: object) -> str:
-        return f"{type(first).__name__}-{type(second).__name__}"
-
-    with pytest.raises(TypeError, match=r"not JSON serializable"):
-        await func(threading.Lock(), 1)
-
-
-async def test_cached_ignore_non_serializable_self_raises_async() -> None:
-    class Loader:
-        @cached(ignore_non_serializable=True)
-        async def load(self, x: int) -> int:
-            return x
-
-    with pytest.raises(TypeError, match=r"not JSON serializable"):
-        await Loader().load(1)
-
-
-async def test_cached_same_qualname_different_modules_async() -> None:
-    def make_func(module: str) -> Callable[[int], Coroutine[None, None, str]]:
-        async def load(_x: int) -> str:
-            return module
-
-        load.__module__ = module
-        return cached()(load)
-
-    first = make_func("first")
-    second = make_func("second")
-    await first(1)
-    assert await second(1) == "second"
-
-
-######################################
-#     Tests for async_cached         #
-######################################
-
-
-async def test_async_cached_reflected_by_swapping_shared_cache() -> None:
-    calls = []
-
-    @async_cached()
-    async def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
-
-    await func(1)
-    assert calls == [1]
-
-    # Swapping the shared cache should make `func` start with a clean slate.
-    set_cache(_make_cache(default_ttl=300))
-    await func(1)
-    assert calls == [1, 1]
-
-
-async def test_async_cached_caches_result() -> None:
-    calls = []
-
-    @async_cached()
-    async def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
-
-    assert await func(1) == 2
-    assert await func(1) == 2
-    assert calls == [1]
-
-
-async def test_async_cached_different_args_not_shared() -> None:
-    calls = []
-
-    @async_cached()
-    async def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
-
-    await func(1)
-    await func(2)
-    assert calls == [1, 2]
-
-
-def test_async_cached_preserves_function_metadata() -> None:
-    @async_cached()
-    async def func(x: int) -> int:
-        """Double x."""
-        return x * 2
-
-    assert func.__name__ == "func"
-    assert func.__doc__ == "Double x."
-
-
-async def test_async_cached_strategy_json() -> None:
-    calls = []
-
-    @async_cached(strategy="json")
-    async def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
-
-    assert await func(1) == 2
-    assert await func(1) == 2
-    assert calls == [1]
-
-
-async def test_async_cached_strategy_json_rejects_non_serializable() -> None:
-    @async_cached(strategy="json")
-    async def func(x: object) -> object:
-        return x
-
-    with pytest.raises(TypeError):
-        await func(object())
-
-
-async def test_async_cached_default_strategy_rejects_non_serializable() -> None:
-    @async_cached()
-    async def func(x: object) -> object:
-        return x
-
-    with pytest.raises(TypeError):
-        await func(threading.Lock())
-
-
-async def test_async_cached_ignore_non_serializable() -> None:
-    calls = []
-
-    @async_cached(strategy="json", ignore_non_serializable=True)
-    async def func(x: int, _obj: object = None) -> int:
-        calls.append(x)
-        return x * 2
-
-    assert await func(1, _obj=object()) == 2
-    assert await func(1, _obj=object()) == 2  # different object, but shares the cache entry
-    assert calls == [1]
-
-
-async def test_async_cached_ignore_non_serializable_positional_argument_raises() -> None:
-    @async_cached(ignore_non_serializable=True)
-    async def func(first: object, second: object) -> str:
-        return f"{type(first).__name__}-{type(second).__name__}"
-
-    with pytest.raises(TypeError, match=r"not JSON serializable"):
-        await func(threading.Lock(), 1)
-
-
-async def test_async_cached_ignore_non_serializable_self_raises() -> None:
-    class Loader:
-        @async_cached(ignore_non_serializable=True)
-        async def load(self, x: int) -> int:
-            return x
-
-    with pytest.raises(TypeError, match=r"not JSON serializable"):
-        await Loader().load(1)
-
-
-async def test_async_cached_same_qualname_different_modules() -> None:
-    def make_func(module: str) -> Callable[[int], Coroutine[None, None, str]]:
-        async def load(_x: int) -> str:
-            return module
-
-        load.__module__ = module
-        return async_cached()(load)
-
-    first = make_func("first")
-    second = make_func("second")
-    await first(1)
-    assert await second(1) == "second"
-
-
-async def test_async_cached_uses_shared_default_cache() -> None:
-    @async_cached()
-    async def func(x: int) -> int:
-        return x * 2
-
-    await func(1)
-    key = make_key(f"{__name__}:{func.__qualname__}", (1,), {}, strategy="json")
-    assert await get_cache().acontains(key)
-
-
-async def test_async_cached_respects_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
-    clock = [1_000_000.0]
-    monkeypatch.setattr("persista.cache.cache.time.time", lambda: clock[0])
-    calls = []
-
-    @async_cached(ttl=10)
-    async def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
-
-    await func(1)
-    clock[0] += 11
-    await func(1)
-    assert calls == [1, 1]
-
-
-async def test_async_cached_ttl_zero_recomputes_every_call() -> None:
-    calls = []
-
-    @async_cached(ttl=0)
-    async def func(x: int) -> int:
-        calls.append(x)
-        return x * 2
-
-    await func(1)
-    await func(1)
-    assert calls == [1, 1]
+def test_cached_options_are_keyword_only() -> None:
+    with pytest.raises(TypeError, match=r"positional argument"):
+        cached(60)

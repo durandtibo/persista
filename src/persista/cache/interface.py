@@ -1,55 +1,61 @@
-r"""Provide module-level access to shared default caches."""
+r"""Provide module-level access to a shared default cache."""
 
 from __future__ import annotations
 
-__all__ = [
-    "async_cached",
-    "cached",
-    "get_cache",
-    "set_cache",
-]
+__all__ = ["cached", "get_cache", "set_cache"]
 
 
-import functools
-import inspect
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+import threading
+from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
-from persista.cache.cache import _UNSET, Cache
-from persista.cache.utils import make_call_key
+from persista.cache.cache import Cache
+from persista.cache.memoize import memoize_with
+from persista.cache.ttl import DEFAULT
+from persista.store.codec import PickleCodec
+from persista.store.in_memory import InMemoryStore
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable, Collection
 
-T = TypeVar("T")
+P = ParamSpec("P")
+R = TypeVar("R")
+
+# A dict, rather than a plain module-level variable, lets the functions
+# below assign the entry without a `global` statement. It is empty until
+# the default cache is needed.
+_state: dict[str, Cache] = {}
+# Held while the default cache is created or replaced, so that threads
+# share one default cache.
+_lock = threading.Lock()
 
 
 def _make_default_cache() -> Cache:
-    """Create and open the module's initial shared default cache."""
-    cache = Cache(default_ttl=300)
+    """Create and open the shared default cache.
+
+    Returns:
+        A new open cache that keeps its entries in memory for 300
+        seconds, with the :class:`~persista.store.PickleCodec`.
+    """
+    cache = Cache(InMemoryStore(codec=PickleCodec()), default_ttl=300)
     cache.open()
     return cache
-
-
-# A single-key dict, rather than a plain module-level variable, lets
-# `set_cache` reassign the entry without a `global` statement.
-_state: dict[str, Cache] = {"cache": _make_default_cache()}
 
 
 def get_cache() -> Cache:
     """Return the shared default cache.
 
-    Unless it was replaced with :func:`set_cache`, it keeps its entries
-    in memory with the :class:`~persista.store.PickleCodec`, so it
-    caches any value that can be pickled.
+    Unless it was replaced with :func:`set_cache`, the default cache is
+    created and opened by the first call. It keeps its entries in memory
+    for 300 seconds, with the :class:`~persista.store.PickleCodec`, so it
+    caches any value that can be pickled, with its type.
 
     Returns:
         The shared default :class:`~persista.cache.cache.Cache`
-        instance, used by :func:`cached` when no explicit cache is
-        given.
+        instance, used by :func:`cached`.
 
     Example:
         ```pycon
-        >>> from persista.cache.interface import get_cache
+        >>> from persista.cache import get_cache
         >>> cache = get_cache()
         >>> cache.set("greeting", "hello")
         >>> cache.get("greeting")
@@ -57,11 +63,21 @@ def get_cache() -> Cache:
 
         ```
     """
-    return _state["cache"]
+    cache = _state.get("cache")
+    if cache is None:
+        with _lock:
+            # Another thread may have set it while this one was waiting.
+            cache = _state.get("cache")
+            if cache is None:
+                cache = _state["cache"] = _make_default_cache()
+    return cache
 
 
 def set_cache(cache: Cache) -> None:
     """Replace the shared default cache.
+
+    The cache is not opened, and the cache that it replaces is not
+    closed.
 
     Args:
         cache: The :class:`~persista.cache.cache.Cache` instance to
@@ -70,8 +86,7 @@ def set_cache(cache: Cache) -> None:
 
     Example:
         ```pycon
-        >>> from persista.cache import Cache
-        >>> from persista.cache import get_cache, set_cache
+        >>> from persista.cache import Cache, get_cache, set_cache
         >>> previous = get_cache()
         >>> new_cache = Cache(default_ttl=60)
         >>> new_cache.open()
@@ -82,43 +97,42 @@ def set_cache(cache: Cache) -> None:
 
         ```
     """
-    _state["cache"] = cache
+    with _lock:
+        _state["cache"] = cache
 
 
 def cached(
-    ttl: float | None = _UNSET,
-    strategy: str = "json",
-    ignore_non_serializable: bool = False,
-) -> Callable[[Callable[..., T]], Callable[..., T]]:
+    *,
+    ttl: float | None = DEFAULT,
+    ignore: Collection[str] = (),
+    key: Callable[..., str] | None = None,
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Cache a function's return values in the shared default cache.
 
-    Works on both sync and async functions (``async def``), by
-    looking up :func:`get_cache` on every call, so replacing the
-    shared cache via :func:`set_cache` also changes where
-    already-decorated functions store their results.
-
-    The cache key is derived from the decorated function's module and
-    qualified name (``__module__`` and ``__qualname__``) and call
-    arguments, via :func:`~persista.cache.utils.make_call_key`.
+    This is :meth:`~persista.cache.cache.Cache.memoize` on the cache
+    returned by :func:`get_cache` at the time of each call, so replacing
+    the shared cache with :func:`set_cache` also changes where the
+    functions that are already decorated store their results. Works on
+    both sync and ``async def`` functions.
 
     Args:
-        ttl: The time-to-live, in seconds, applied to cached results.
-            Defaults to the cache's ``default_ttl`` when not given.
-            See :meth:`~persista.cache.cache.Cache.set`.
-        strategy: The serialization strategy used to compute the
-            cache key. Either ``"json"`` or ``"pickle"``. See
-            :func:`~persista.cache.utils.make_key`.
-        ignore_non_serializable: If ``True``, the values of keyword
-            arguments that are not serializable with ``strategy`` are
-            left out of the key, instead of raising an error.
-            Positional arguments are never left out. See
-            :func:`~persista.cache.utils.make_key`.
+        ttl: The time-to-live, in seconds, of the cached results.
+            Defaults to the ``default_ttl`` of the cache. See
+            :meth:`~persista.cache.cache.Cache.set`.
+        ignore: The names of the parameters to leave out of the key. See
+            :meth:`~persista.cache.cache.Cache.memoize`.
+        key: A function of the call that returns its key. See
+            :meth:`~persista.cache.cache.Cache.memoize`.
 
     Returns:
         A decorator that wraps a function with caching.
 
     Raises:
-        ValueError: If ``ttl`` is negative.
+        TypeError: If ``ignore`` is a ``str``. See
+            :meth:`~persista.cache.cache.Cache.memoize` for the errors of
+            the decorator.
+        ValueError: If ``ttl`` is negative or ``NaN``, or if ``ignore`` and
+            ``key`` are both given.
 
     Example:
         ```pycon
@@ -131,119 +145,11 @@ def cached(
         ...
         >>> square(4)
         16
-        >>> square(4)  # served from the cache, not re-computed
+        >>> square(x=4)  # the same call: served from the cache
         16
         >>> calls
         [4]
 
         ```
     """
-
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        if inspect.iscoroutinefunction(func):
-
-            @functools.wraps(func)
-            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                cache = get_cache()
-                key = make_call_key(
-                    func,
-                    args,
-                    kwargs,
-                    strategy=strategy,
-                    ignore_non_serializable=ignore_non_serializable,
-                )
-                return await cache.aget_or_compute(key, func, args, kwargs, ttl=ttl)
-
-            return cast("Callable[..., T]", async_wrapper)
-
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> T:
-            cache = get_cache()
-            key = make_call_key(
-                func,
-                args,
-                kwargs,
-                strategy=strategy,
-                ignore_non_serializable=ignore_non_serializable,
-            )
-            return cache.get_or_compute(key, func, args, kwargs, ttl=ttl)
-
-        return wrapper
-
-    return decorator
-
-
-def async_cached(
-    ttl: float | None = _UNSET,
-    strategy: str = "json",
-    ignore_non_serializable: bool = False,
-) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
-    """Cache an async function's return values in the shared default
-    cache.
-
-    Looks up :func:`get_cache` on every call, so replacing the
-    shared cache via :func:`set_cache` also changes where
-    already-decorated functions store their results.
-
-    The cache key is derived from the decorated function's module and
-    qualified name (``__module__`` and ``__qualname__``) and call
-    arguments, via :func:`~persista.cache.utils.make_call_key`.
-
-    Args:
-        ttl: The time-to-live, in seconds, applied to cached results.
-            Defaults to the cache's ``default_ttl`` when not given.
-            See :meth:`~persista.cache.cache.Cache.aset`.
-        strategy: The serialization strategy used to compute the
-            cache key. Either ``"json"`` or ``"pickle"``. See
-            :func:`~persista.cache.utils.make_key`.
-        ignore_non_serializable: If ``True``, the values of keyword
-            arguments that are not serializable with ``strategy`` are
-            left out of the key, instead of raising an error.
-            Positional arguments are never left out. See
-            :func:`~persista.cache.utils.make_key`.
-
-    Returns:
-        A decorator that wraps an async function with caching.
-
-    Raises:
-        ValueError: If ``ttl`` is negative.
-
-    Example:
-        ```pycon
-        >>> import asyncio
-        >>> from persista.cache import async_cached
-        >>> calls = []
-        >>> @async_cached(ttl=60)
-        ... async def cube(x):
-        ...     calls.append(x)
-        ...     return x * x * x
-        ...
-        >>> async def main():
-        ...     print(await cube(4))
-        ...     print(await cube(4))  # served from the cache, not re-computed
-        ...
-        >>> asyncio.run(main())
-        64
-        64
-        >>> calls
-        [4]
-
-        ```
-    """
-
-    def decorator(func: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
-        @functools.wraps(func)
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            cache = get_cache()
-            key = make_call_key(
-                func,
-                args,
-                kwargs,
-                strategy=strategy,
-                ignore_non_serializable=ignore_non_serializable,
-            )
-            return await cache.aget_or_compute(key, func, args, kwargs, ttl=ttl)
-
-        return wrapper
-
-    return decorator
+    return memoize_with(get_cache, ttl=ttl, ignore=ignore, key=key)

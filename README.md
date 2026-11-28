@@ -117,7 +117,7 @@ synchronous and `a`-prefixed asynchronous methods on every store:
 Time-to-live caching for functions and values, with sync and async variants:
 
 - `Cache`, with sync and async (`a`-prefixed) methods, for explicit cache instances
-- `cached` / `async_cached` decorators for caching function calls
+- One `memoize` decorator for sync and async functions, and `cached` for the shared default cache
 - A shared default cache via `get_cache`
 
 ### 🌐 **HTTP Utilities**
