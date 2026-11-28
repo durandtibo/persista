@@ -10,6 +10,7 @@ __all__ = [
     "check_psycopg",
     "check_redis",
     "check_requests",
+    "check_rich",
     "check_urllib3",
     "duckdb_available",
     "faker_available",
@@ -21,6 +22,7 @@ __all__ = [
     "is_psycopg_available",
     "is_redis_available",
     "is_requests_available",
+    "is_rich_available",
     "is_urllib3_available",
     "lmdb_available",
     "psycopg_available",
@@ -31,9 +33,11 @@ __all__ = [
     "raise_psycopg_missing_error",
     "raise_redis_missing_error",
     "raise_requests_missing_error",
+    "raise_rich_missing_error",
     "raise_urllib3_missing_error",
     "redis_available",
     "requests_available",
+    "rich_available",
     "urllib3_available",
 ]
 
@@ -78,6 +82,12 @@ from persista.utils.imports.requests import (
     is_requests_available,
     raise_requests_missing_error,
     requests_available,
+)
+from persista.utils.imports.rich import (
+    check_rich,
+    is_rich_available,
+    raise_rich_missing_error,
+    rich_available,
 )
 from persista.utils.imports.urllib3 import (
     check_urllib3,

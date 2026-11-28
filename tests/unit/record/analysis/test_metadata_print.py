@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import io
+from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
-from rich.console import Console
-from rich.table import Table
-from rich.text import Text
 
 from persista.record.analysis import print_metadata_stats_report
 from persista.record.analysis.metadata_print import (
@@ -16,6 +15,15 @@ from persista.record.analysis.metadata_print import (
     _build_summary_table,
     _format_count,
 )
+from persista.testing.fixtures import rich_available
+from persista.utils.imports import is_rich_available
+
+if TYPE_CHECKING or is_rich_available():
+    from rich.console import Console
+    from rich.table import Table
+    from rich.text import Text
+
+pytestmark = rich_available
 
 
 @pytest.fixture
@@ -227,6 +235,11 @@ def test_build_key_sample_empty_and_not_truncated() -> None:
     assert _build_key_sample(info) == ""
 
 
+def test_build_key_sample_escapes_markup() -> None:
+    info = {"unique_values_sample": ["[bold]x"], "unique_values_sample_truncated": False}
+    assert _build_key_sample(info) == "\\[bold]x"
+
+
 def test_build_key_sample_non_string_values_stringified() -> None:
     info = {"unique_values_sample": [1, True, None], "unique_values_sample_truncated": False}
     assert _build_key_sample(info) == "1, True, None"
@@ -337,3 +350,17 @@ def test_print_metadata_stats_report_does_not_mutate_input(stats: dict, console:
     original = dict(stats)
     print_metadata_stats_report(stats, console=console)
     assert stats == original
+
+
+def test_print_metadata_stats_report_prints_title(stats: dict) -> None:
+    output = io.StringIO()
+    print_metadata_stats_report(stats, title="Custom Title", console=Console(file=output))
+    assert "Custom Title" in output.getvalue()
+
+
+def test_print_metadata_stats_report_without_rich(stats: dict) -> None:
+    with (
+        patch("persista.utils.imports.rich.is_rich_available", lambda: False),
+        pytest.raises(RuntimeError, match=r"'rich' package is required but not installed."),
+    ):
+        print_metadata_stats_report(stats)

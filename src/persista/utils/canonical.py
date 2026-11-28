@@ -1,9 +1,9 @@
 r"""Provide a canonical encoding of Python values.
 
-Two values have the same encoding only if they are equal and have the
-same types, at every depth, and the encoding does not depend on the
-process that computes it. It is therefore a safe input of a hash that
-identifies a value, such as the key of a memoized call.
+By default, two values have the same encoding only if they are equal and
+have the same types, at every depth, and the encoding does not depend on
+the process that computes it. It is therefore a safe input of a hash
+that identifies a value, such as the key of a memoized call.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ _CONSTANTS: dict[bool | None, bytes] = {None: b"N", True: b"T", False: b"F"}
 _NAN = bytes.fromhex("7ff8000000000000")
 
 
-def encode_canonical(value: Any) -> bytes:
+def encode_canonical(value: Any, *, numbers_by_value: bool = False) -> bytes:
     r"""Encode a value in a canonical form.
 
     The encoding covers ``None``, ``bool``, ``int``, ``float``,
@@ -57,13 +57,21 @@ def encode_canonical(value: Any) -> bytes:
 
     Args:
         value: The value to encode.
+        numbers_by_value: If ``True``, a number is encoded by its value,
+            at any depth, as :func:`persista.store.predicate.values_equal`
+            compares it: a ``float`` with an integral value is encoded as
+            the ``int`` (``1.0`` as ``1``, and ``-0.0`` as ``0``), and
+            ``NaN``, which is equal to nothing, raises. ``True`` and ``1``
+            keep different encodings. :mod:`persista.record.equality`
+            uses it; the keys of the cache do not.
 
     Returns:
         The encoding.
 
     Raises:
         TypeError: If ``value`` is, or contains, an object of another type.
-        ValueError: If ``value`` contains itself.
+        ValueError: If ``value`` contains itself, or if it contains ``NaN``
+            and ``numbers_by_value`` is ``True``.
         RecursionError: If ``value`` is nested too deeply for the
             recursion limit of Python.
 
@@ -76,10 +84,12 @@ def encode_canonical(value: Any) -> bytes:
         True
         >>> encode_canonical((1, 2)) == encode_canonical([1, 2])
         False
+        >>> encode_canonical(1.0, numbers_by_value=True) == encode_canonical(1)
+        True
 
         ```
     """
-    return _encode(value, set())
+    return _encode(value, set(), numbers_by_value)
 
 
 def hash_canonical(value: Any) -> str:
@@ -112,13 +122,14 @@ def hash_canonical(value: Any) -> str:
     return hash_bytes(encode_canonical(value))
 
 
-def _encode(value: Any, parents: set[int]) -> bytes:
+def _encode(value: Any, parents: set[int], numbers_by_value: bool) -> bytes:
     r"""Encode a value that can be in a collection.
 
     Args:
         value: The value to encode.
         parents: The identifiers of the collections that contain
             ``value``. It is the same after a successful call.
+        numbers_by_value: Whether the numbers are encoded by their value.
 
     Returns:
         The encoding.
@@ -126,7 +137,8 @@ def _encode(value: Any, parents: set[int]) -> bytes:
     Raises:
         TypeError: If ``value`` is, or contains, an object that cannot be
             encoded.
-        ValueError: If ``value`` contains itself.
+        ValueError: If ``value`` contains itself, or if it contains ``NaN``
+            and ``numbers_by_value`` is ``True``.
     """
     # The exact type: a subclass is rejected.
     kind = type(value)
@@ -143,13 +155,37 @@ def _encode(value: Any, parents: set[int]) -> bytes:
     if value is None or kind is bool:
         return _CONSTANTS[value]
     if kind is float:
-        return b"f" + (_NAN if math.isnan(value) else _FLOAT.pack(value))
+        return _encode_float(value, numbers_by_value)
     if kind is bytes:
         return b"b%d:%s" % (len(value), value)
-    return _encode_collection(value, parents)
+    return _encode_collection(value, parents, numbers_by_value)
 
 
-def _encode_collection(value: Any, parents: set[int]) -> bytes:
+def _encode_float(value: float, numbers_by_value: bool) -> bytes:
+    r"""Encode a ``float``.
+
+    Args:
+        value: The number to encode.
+        numbers_by_value: Whether the number is encoded by its value.
+
+    Returns:
+        The encoding of the ``float``, or the encoding of the equal
+        ``int`` if there is one and ``numbers_by_value`` is ``True``.
+
+    Raises:
+        ValueError: If ``value`` is ``NaN`` and ``numbers_by_value`` is
+            ``True``.
+    """
+    if numbers_by_value:
+        if float(value).is_integer():
+            return _encode(int(value), set(), numbers_by_value)
+        if math.isnan(value):
+            msg = "Cannot encode NaN by value: it is not equal to anything, not even to itself"
+            raise ValueError(msg)
+    return b"f" + (_NAN if math.isnan(value) else _FLOAT.pack(value))
+
+
+def _encode_collection(value: Any, parents: set[int], numbers_by_value: bool) -> bytes:
     r"""Encode a ``list``, a ``tuple``, a ``dict``, a ``set`` or a
     ``frozenset``.
 
@@ -157,6 +193,7 @@ def _encode_collection(value: Any, parents: set[int]) -> bytes:
         value: The collection to encode.
         parents: The identifiers of the collections that contain
             ``value``. It is the same after a successful call.
+        numbers_by_value: Whether the numbers are encoded by their value.
 
     Returns:
         The encoding: the tag of the type, the number of items, and the
@@ -166,7 +203,8 @@ def _encode_collection(value: Any, parents: set[int]) -> bytes:
         TypeError: If ``value`` is of another type, or if an object in it
             cannot be encoded.
         ValueError: If ``value`` is, or contains, one of its parents or
-            itself.
+            itself, or if it contains ``NaN`` and ``numbers_by_value`` is
+            ``True``.
     """
     kind = type(value)
     tag = _TAGS.get(kind)
@@ -182,11 +220,15 @@ def _encode_collection(value: Any, parents: set[int]) -> bytes:
         # Sorted by the encoding of the key, then of the value: two
         # different NaN objects are two keys with the same encoding.
         pairs = sorted(
-            (_encode(key, parents), _encode(item, parents)) for key, item in value.items()
+            (
+                _encode(key, parents, numbers_by_value),
+                _encode(item, parents, numbers_by_value),
+            )
+            for key, item in value.items()
         )
         items = [key + item for key, item in pairs]
     else:
-        items = [_encode(item, parents) for item in value]
+        items = [_encode(item, parents, numbers_by_value) for item in value]
         if kind is set or kind is frozenset:
             items.sort()
     parents.remove(marker)

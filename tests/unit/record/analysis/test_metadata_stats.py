@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from persista.record import Record
-from persista.record.analysis import MetadataStats, compute_metadata_stats
+from persista.record.analysis import compute_metadata_stats
+from persista.record.analysis.metadata_stats import _MetadataStats
 
 
 @pytest.fixture
@@ -342,79 +345,89 @@ def test_compute_metadata_stats_repeated_value_does_not_count_against_cap() -> N
     }
 
 
-# --- Unhashable values ---
+# --- One equality ---
 
 
-def test_compute_metadata_stats_unhashable_container_value_marks_truncated() -> None:
-    records = [
-        Record(id="1", metadata={"tags": ["a", "b"]}),
-        Record(id="2", metadata={"tags": ["c"]}),
-    ]
-    assert compute_metadata_stats(records) == {
-        "count": 2,
-        "missing_metadata_count": 0,
-        "avg_keys": 1,
-        "min_keys": 1,
-        "max_keys": 1,
-        "distinct_keys_seen": 1,
-        "per_key": {
-            "tags": {
-                "present_in_records": 2,
-                "missing_in_records": 0,
-                "value_types": ["list"],
-                "none_or_empty_count": 0,
-                "unique_values_sample": [],
-                "unique_values_sample_truncated": True,
-            },
-        },
+def records_of(*values: object) -> list[Record]:
+    return [Record(id=str(i), metadata={"k": value}) for i, value in enumerate(values)]
+
+
+def test_compute_metadata_stats_samples_unhashable_values() -> None:
+    records = records_of(["a", "b"], ["c"], ["a", "b"])
+    assert compute_metadata_stats(records)["per_key"]["k"] == {
+        "present_in_records": 3,
+        "missing_in_records": 0,
+        "value_types": ["list"],
+        "none_or_empty_count": 0,
+        "unique_values_sample": [["a", "b"], ["c"]],
+        "unique_values_sample_truncated": False,
     }
 
 
-def test_compute_metadata_stats_unhashable_container_with_n_sample_values_none() -> None:
-    records = [Record(id="1", metadata={"tags": ["a", "b"]})]
-    assert compute_metadata_stats(records, n_sample_values=None) == {
-        "count": 1,
-        "missing_metadata_count": 0,
-        "avg_keys": 1,
-        "min_keys": 1,
-        "max_keys": 1,
-        "distinct_keys_seen": 1,
-        "per_key": {
-            "tags": {
-                "present_in_records": 1,
-                "missing_in_records": 0,
-                "value_types": ["list"],
-                "none_or_empty_count": 0,
-                "unique_values_sample": [],
-                "unique_values_sample_truncated": True,
-            },
-        },
+def test_compute_metadata_stats_unhashable_values_count_against_cap() -> None:
+    records = records_of(["a"], ["b"])
+    result = compute_metadata_stats(records, n_sample_values=1)
+    assert result["per_key"]["k"] == {
+        "present_in_records": 2,
+        "missing_in_records": 0,
+        "value_types": ["list"],
+        "none_or_empty_count": 0,
+        "unique_values_sample": [["a"]],
+        "unique_values_sample_truncated": True,
     }
 
 
-def test_compute_metadata_stats_unhashable_non_container_value_marks_truncated() -> None:
-    # bytearray is unhashable but isn't a list/dict/set, so it falls through
-    # to the `values.add(value)` / `value not in values` calls, which raise
-    # TypeError and are caught to mark the key as truncated.
-    records = [Record(id="1", metadata={"blob": bytearray(b"abc")})]
-    assert compute_metadata_stats(records) == {
-        "count": 1,
-        "missing_metadata_count": 0,
-        "avg_keys": 1,
-        "min_keys": 1,
-        "max_keys": 1,
-        "distinct_keys_seen": 1,
-        "per_key": {
-            "blob": {
-                "present_in_records": 1,
-                "missing_in_records": 0,
-                "value_types": ["bytearray"],
-                "none_or_empty_count": 0,
-                "unique_values_sample": [],
-                "unique_values_sample_truncated": True,
-            },
-        },
+def test_compute_metadata_stats_sample_keeps_types_apart() -> None:
+    result = compute_metadata_stats(records_of(1, True, "1"))
+    assert repr(result["per_key"]["k"]["unique_values_sample"]) == "[1, '1', True]"
+
+
+def test_compute_metadata_stats_sample_merges_equal_numbers() -> None:
+    result = compute_metadata_stats(records_of(1.0, 1), n_sample_values=1)
+    assert result["per_key"]["k"] == {
+        "present_in_records": 2,
+        "missing_in_records": 0,
+        "value_types": ["float", "int"],
+        "none_or_empty_count": 0,
+        "unique_values_sample": [1.0],
+        "unique_values_sample_truncated": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("value", "error", "message"),
+    [
+        pytest.param(object(), TypeError, r"Cannot encode an object of type", id="custom"),
+        pytest.param(
+            bytearray(b"a"), TypeError, r"Cannot encode an object of type", id="bytearray"
+        ),
+        pytest.param(math.nan, ValueError, r"Cannot encode NaN by value", id="nan"),
+    ],
+)
+def test_compute_metadata_stats_value_that_cannot_be_compared(
+    value: object, error: type[Exception], message: str
+) -> None:
+    with pytest.raises(error, match=message):
+        compute_metadata_stats(records_of(value))
+
+
+def test_compute_metadata_stats_value_checked_when_sample_is_full() -> None:
+    records = records_of(1, 2, object())
+    with pytest.raises(TypeError, match=r"Cannot encode an object of type builtins\.object"):
+        compute_metadata_stats(records, n_sample_values=1)
+
+
+def test_compute_metadata_stats_negative_n_sample_values() -> None:
+    records = iter(records_of(1))
+    with pytest.raises(ValueError, match=r"'n_sample_values' must be non-negative or None"):
+        compute_metadata_stats(records, n_sample_values=-1)
+    assert list(records) == records_of(1)
+
+
+def test_compute_metadata_stats_does_not_modify_values() -> None:
+    records = records_of([2.0, 1])
+    compute_metadata_stats(records)
+    assert repr(records) == "[Record(id='0', metadata={'k': [2.0, 1]})]"
 
 
 # --- Iterator / generator support ---
@@ -518,17 +531,17 @@ def test_compute_metadata_stats_thousand_records() -> None:
     }
 
 
-###################################
-#     Tests for MetadataStats     #
-###################################
+####################################
+#     Tests for _MetadataStats     #
+####################################
 
 
 def test_metadata_stats_starts_at_zero() -> None:
-    assert MetadataStats().to_dict() == compute_metadata_stats([])
+    assert _MetadataStats().to_dict() == compute_metadata_stats([])
 
 
 def test_metadata_stats_manual_update_calls() -> None:
-    stats = MetadataStats()
+    stats = _MetadataStats()
     stats.update(Record(id="1", metadata={"source": "a"}))
     stats.update(Record(id="2", metadata={"source": "b", "page": 1}))
     assert stats.to_dict() == {
@@ -560,13 +573,13 @@ def test_metadata_stats_manual_update_calls() -> None:
 
 
 def test_metadata_stats_to_dict_is_idempotent() -> None:
-    stats = MetadataStats()
+    stats = _MetadataStats()
     stats.update(Record(id="1", metadata={"source": "a"}))
     assert stats.to_dict() == stats.to_dict()
 
 
 def test_metadata_stats_custom_n_sample_values_constructor() -> None:
-    stats = MetadataStats(n_sample_values=1)
+    stats = _MetadataStats(n_sample_values=1)
     stats.update(Record(id="1", metadata={"source": "a"}))
     stats.update(Record(id="2", metadata={"source": "b"}))
     assert stats.to_dict() == {
@@ -587,3 +600,21 @@ def test_metadata_stats_custom_n_sample_values_constructor() -> None:
             },
         },
     }
+
+
+def test_metadata_stats_negative_n_sample_values() -> None:
+    with pytest.raises(ValueError, match=r"'n_sample_values' must be non-negative or None"):
+        _MetadataStats(n_sample_values=-1)
+
+
+def test_metadata_stats_update_value_that_cannot_be_compared() -> None:
+    stats = _MetadataStats()
+    with pytest.raises(TypeError, match=r"Cannot encode an object of type builtins\.object"):
+        stats.update(Record(id="1", metadata={"x": object()}))
+
+
+def test_metadata_stats_to_dict_returns_new_sample_list() -> None:
+    stats = _MetadataStats()
+    stats.update(Record(id="1", metadata={"x": 1}))
+    stats.to_dict()["per_key"]["x"]["unique_values_sample"].append(2)
+    assert stats.to_dict()["per_key"]["x"]["unique_values_sample"] == [1]

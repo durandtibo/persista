@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 from collections import OrderedDict, defaultdict
 from decimal import Decimal
@@ -11,6 +12,7 @@ import pytest
 from persista.utils.canonical import (
     _encode,
     _encode_collection,
+    _encode_float,
     encode_canonical,
     hash_canonical,
 )
@@ -292,18 +294,22 @@ def test_hash_canonical_cycle() -> None:
     ],
 )
 def test_encode(value: object, expected: bytes) -> None:
-    assert _encode(value, set()) == expected
+    assert _encode(value, set(), False) == expected
 
 
 def test_encode_keeps_parents() -> None:
     parents = {1}
-    _encode([[2], {"a": (3,)}], parents)
+    _encode([[2], {"a": (3,)}], parents, False)
     assert parents == {1}
 
 
 def test_encode_unsupported_type() -> None:
     with pytest.raises(TypeError, match=r"Cannot encode an object of type builtins\.object"):
-        _encode(object(), set())
+        _encode(object(), set(), False)
+
+
+def test_encode_numbers_by_value() -> None:
+    assert _encode(1.0, set(), True) == b"i1:\x01"
 
 
 ########################################
@@ -322,15 +328,116 @@ def test_encode_unsupported_type() -> None:
     ],
 )
 def test_encode_collection(value: object, expected: bytes) -> None:
-    assert _encode_collection(value, set()) == expected
+    assert _encode_collection(value, set(), False) == expected
 
 
 def test_encode_collection_value_in_parents() -> None:
     value = [1]
     with pytest.raises(ValueError, match=r"Cannot encode a list that contains itself"):
-        _encode_collection(value, {id(value)})
+        _encode_collection(value, {id(value)}, False)
 
 
 def test_encode_collection_unsupported_type() -> None:
     with pytest.raises(TypeError, match=r"Cannot encode an object of type builtins\.object"):
-        _encode_collection(object(), set())
+        _encode_collection(object(), set(), False)
+
+
+def test_encode_collection_numbers_by_value() -> None:
+    assert _encode_collection([1.0], set(), True) == b"l1:i1:\x01"
+
+
+###################################
+#     Tests for _encode_float     #
+###################################
+
+
+@pytest.mark.parametrize("numbers_by_value", [True, False])
+def test_encode_float_not_integral(numbers_by_value: bool) -> None:
+    assert _encode_float(1.5, numbers_by_value) == b"f?\xf8\x00\x00\x00\x00\x00\x00"
+
+
+def test_encode_float_integral() -> None:
+    assert _encode_float(1.0, False) == b"f?\xf0\x00\x00\x00\x00\x00\x00"
+
+
+def test_encode_float_integral_by_value() -> None:
+    assert _encode_float(1.0, True) == b"i1:\x01"
+
+
+def test_encode_float_nan() -> None:
+    assert _encode_float(math.nan, False) == b"f\x7f\xf8\x00\x00\x00\x00\x00\x00"
+
+
+def test_encode_float_nan_by_value() -> None:
+    with pytest.raises(ValueError, match=r"Cannot encode NaN by value"):
+        _encode_float(math.nan, True)
+
+
+############################################################
+#     Tests for encode_canonical with numbers_by_value     #
+############################################################
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        pytest.param(1.0, 1, id="integral-float"),
+        pytest.param(-0.0, 0.0, id="negative-zero"),
+        pytest.param(-0.0, 0, id="negative-zero-int"),
+        pytest.param(-2.0, -2, id="negative"),
+        pytest.param(float(2**53), 2**53, id="big"),
+        pytest.param([1.0, (2.0,)], [1, (2,)], id="nested"),
+        pytest.param({1.0: {2.0}}, {1: {2}}, id="keys-and-sets"),
+    ],
+)
+def test_encode_canonical_numbers_by_value_equal(first: object, second: object) -> None:
+    assert encode_canonical(first, numbers_by_value=True) == encode_canonical(
+        second, numbers_by_value=True
+    )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        pytest.param(1, True, id="bool"),
+        pytest.param(0.0, False, id="false"),
+        pytest.param(1, "1", id="str"),
+        pytest.param([1], (1,), id="list-tuple"),
+        pytest.param({1}, frozenset({1}), id="set-frozenset"),
+        pytest.param(1.5, 1, id="fraction"),
+        pytest.param(2**53 + 1, float(2**53), id="no-rounding"),
+        pytest.param(math.inf, -math.inf, id="infinities"),
+    ],
+)
+def test_encode_canonical_numbers_by_value_different(first: object, second: object) -> None:
+    assert encode_canonical(first, numbers_by_value=True) != encode_canonical(
+        second, numbers_by_value=True
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(math.nan, id="top-level"),
+        pytest.param([1, {"a": math.nan}], id="nested"),
+        pytest.param({math.nan: 1}, id="key"),
+        pytest.param({math.nan}, id="set"),
+    ],
+)
+def test_encode_canonical_numbers_by_value_nan(value: object) -> None:
+    with pytest.raises(ValueError, match=r"Cannot encode NaN by value"):
+        encode_canonical(value, numbers_by_value=True)
+
+
+def test_encode_canonical_numbers_by_value_cycle() -> None:
+    with pytest.raises(ValueError, match=r"Cannot encode a list that contains itself"):
+        encode_canonical(self_containing_list(), numbers_by_value=True)
+
+
+def test_encode_canonical_numbers_by_value_unsupported_type() -> None:
+    with pytest.raises(TypeError, match=r"Cannot encode an object of type .*Float"):
+        encode_canonical(Float(1.0), numbers_by_value=True)
+
+
+def test_encode_canonical_numbers_are_kept_apart_by_default() -> None:
+    assert encode_canonical(1.0) != encode_canonical(1)

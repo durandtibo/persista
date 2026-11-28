@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+import copy
+import math
+from collections import OrderedDict
+from dataclasses import FrozenInstanceError, asdict, astuple
+from datetime import UTC, datetime
+from decimal import Decimal
 from types import MappingProxyType
 
 import pytest
 
 from persista.record import Record
+from persista.store import PickleCodec
 
 #########################
 #     Tests for Record  #
@@ -65,7 +71,7 @@ def test_record_metadata_is_mapping_proxy() -> None:
 
 def test_record_metadata_assignment_raises_type_error() -> None:
     record = Record(id="abc", metadata={"source": "cats.txt"})
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match=r"does not support item assignment"):
         record.metadata["source"] = "dogs.txt"
 
 
@@ -143,3 +149,187 @@ def test_record_from_metadata_nested_dict_order_independent() -> None:
 
 def test_record_not_equal_to_non_record() -> None:
     assert Record(id="abc") != "abc"
+
+
+# --- from_metadata: equality of the metadata ---
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        pytest.param(1, "1", id="int-str"),
+        pytest.param(1, True, id="int-bool"),
+        pytest.param([1, 2], (1, 2), id="list-tuple"),
+        pytest.param({1}, frozenset({1}), id="set-frozenset"),
+    ],
+)
+def test_record_from_metadata_different_types_different_ids(first: object, second: object) -> None:
+    assert Record.from_metadata({"x": first}).id != Record.from_metadata({"x": second}).id
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [pytest.param(1, 1.0, id="int-float"), pytest.param(0.0, -0.0, id="zeros")],
+)
+def test_record_from_metadata_equal_numbers_same_id(first: object, second: object) -> None:
+    assert Record.from_metadata({"x": first}).id == Record.from_metadata({"x": second}).id
+
+
+def test_record_from_metadata_pinned_id() -> None:
+    # The ids are stored: they must not change between processes or releases.
+    assert (
+        Record.from_metadata({"source": "cats.txt", "page": 1}).id
+        == "65671470-bf89-5ffd-a51e-78e06c01fd41"
+    )
+
+
+def test_record_from_metadata_of_record_metadata() -> None:
+    record = Record.from_metadata({"source": "cats.txt"})
+    assert Record.from_metadata(record.metadata) == record
+
+
+def test_record_from_metadata_does_not_mutate_input() -> None:
+    metadata = {"b": 1.0, "a": 2}
+    Record.from_metadata(metadata)
+    assert repr(metadata) == "{'b': 1.0, 'a': 2}"
+
+
+def test_record_from_metadata_keeps_values() -> None:
+    assert repr(Record.from_metadata({"x": 1.0}).metadata["x"]) == "1.0"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(datetime(2024, 1, 1, tzinfo=UTC), id="datetime"),
+        pytest.param(Decimal(1), id="decimal"),
+        pytest.param(OrderedDict(), id="subclass"),
+        pytest.param(object(), id="custom"),
+    ],
+)
+def test_record_from_metadata_unsupported_type(value: object) -> None:
+    with pytest.raises(TypeError, match=r"Cannot encode an object of type"):
+        Record.from_metadata({"x": value})
+
+
+def test_record_from_metadata_nan() -> None:
+    with pytest.raises(ValueError, match=r"Cannot encode NaN by value"):
+        Record.from_metadata({"x": math.nan})
+
+
+def test_record_from_metadata_self_containing_value() -> None:
+    value: list[object] = []
+    value.append(value)
+    with pytest.raises(ValueError, match=r"Cannot encode a list that contains itself"):
+        Record.from_metadata({"x": value})
+
+
+# --- Hash ---
+
+
+def test_record_hash_is_hash_of_id() -> None:
+    assert hash(Record(id="abc", metadata={"tags": ["a"]})) == hash("abc")
+
+
+def test_record_set_removes_equal_records() -> None:
+    records = {Record(id="abc", metadata={"x": 1}), Record(id="abc", metadata={"x": 1})}
+    assert records == {Record(id="abc", metadata={"x": 1})}
+
+
+def test_record_set_keeps_records_with_different_metadata() -> None:
+    records = {Record(id="abc", metadata={"x": 1}), Record(id="abc", metadata={"x": 2})}
+    assert len(records) == 2
+
+
+def test_record_dict_key() -> None:
+    assert {Record(id="abc"): 1}[Record(id="abc")] == 1
+
+
+# --- Pickle and copy ---
+
+
+def nested_record() -> Record:
+    return Record(id="abc", metadata={"tags": ["a"], "info": {"year": 2024}, "at": (1, 2)})
+
+
+def pickle_round_trip(record: Record) -> Record:
+    r"""Pickle a record and load it again, with the codec of the
+    stores."""
+    codec = PickleCodec()
+    return codec.decode(codec.encode({"record": record}))["record"]
+
+
+def test_record_pickle() -> None:
+    record = nested_record()
+    assert pickle_round_trip(record) == record
+
+
+def test_record_pickle_returns_a_new_record() -> None:
+    record = nested_record()
+    assert pickle_round_trip(record) is not record
+
+
+def test_record_pickle_metadata_is_read_only() -> None:
+    assert isinstance(pickle_round_trip(nested_record()).metadata, MappingProxyType)
+
+
+def test_record_copy() -> None:
+    record = nested_record()
+    assert copy.copy(record) == record
+
+
+def test_record_copy_is_shallow() -> None:
+    record = nested_record()
+    assert copy.copy(record).metadata["tags"] is record.metadata["tags"]
+
+
+def test_record_copy_metadata_is_read_only() -> None:
+    assert isinstance(copy.copy(nested_record()).metadata, MappingProxyType)
+
+
+def test_record_deepcopy() -> None:
+    record = nested_record()
+    assert copy.deepcopy(record) == record
+
+
+def test_record_deepcopy_copies_nested_values() -> None:
+    record = nested_record()
+    copy.deepcopy(record).metadata["tags"].append("b")
+    assert record.metadata["tags"] == ["a"]
+
+
+def test_record_deepcopy_metadata_is_read_only() -> None:
+    assert isinstance(copy.deepcopy(nested_record()).metadata, MappingProxyType)
+
+
+def test_record_deepcopy_shared_values_stay_shared() -> None:
+    shared: list[int] = []
+    records = copy.deepcopy(
+        [Record(id="a", metadata={"x": shared}), Record(id="b", metadata={"x": shared})]
+    )
+    assert records[0].metadata["x"] is records[1].metadata["x"]
+
+
+def test_record_reduce() -> None:
+    assert Record(id="abc", metadata={"x": 1}).__reduce__() == (Record, ("abc", {"x": 1}))
+
+
+# --- Shallow immutability ---
+
+
+def test_record_nested_values_are_shared_with_the_caller() -> None:
+    tags = ["a"]
+    assert Record(id="abc", metadata={"tags": tags}).metadata["tags"] is tags
+
+
+# --- dataclasses ---
+
+
+def test_record_asdict_is_not_supported() -> None:
+    with pytest.raises(TypeError, match=r"cannot pickle 'mappingproxy' object"):
+        asdict(Record(id="abc"))
+
+
+def test_record_astuple_is_not_supported() -> None:
+    with pytest.raises(TypeError, match=r"cannot pickle 'mappingproxy' object"):
+        astuple(Record(id="abc"))

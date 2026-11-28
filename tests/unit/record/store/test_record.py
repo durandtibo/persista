@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from persista.record import Record
+from persista.record import Record, filter_by_metadata
 from persista.record.store import RecordStore
 from persista.store import BaseStore, InMemoryStore, NullStore, PickleCodec, SQLiteStore
 
@@ -137,6 +137,24 @@ def test_filter_any_field_name(store: RecordStore, field: str) -> None:
 def test_filter_compares_values_with_json_types(store: RecordStore) -> None:
     store.set_many([Record(id="1", metadata={"v": 1}), Record(id="2", metadata={"v": True})])
     assert store.filter(v=True) == [Record(id="2", metadata={"v": True})]
+
+
+def test_filter_equals_filter_by_metadata(store: RecordStore) -> None:
+    records = [
+        Record(id="int", metadata={"v": 1}),
+        Record(id="str", metadata={"v": "1"}),
+        Record(id="bool", metadata={"v": True}),
+        Record(id="float", metadata={"v": 1.0}),
+        Record(id="absent"),
+    ]
+    store.set_many(records)
+    assert store.filter(v=1) == filter_by_metadata(records, "v", 1)
+
+
+def test_filter_none_equals_filter_by_metadata(store: RecordStore) -> None:
+    records = [Record(id="none", metadata={"v": None}), Record(id="absent")]
+    store.set_many(records)
+    assert store.filter(v=None) == filter_by_metadata(records, "v", None)
 
 
 # --- afilter ---

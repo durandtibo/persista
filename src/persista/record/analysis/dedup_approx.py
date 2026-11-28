@@ -7,8 +7,9 @@ __all__ = ["count_approx_duplicate_records"]
 
 from typing import TYPE_CHECKING
 
-from coola.hashing import hash_object
 from coola.utils.bloom_filter import BloomFilter
+
+from persista.record.equality import hash_metadata
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -31,10 +32,11 @@ def count_approx_duplicate_records(
     from ``expected_record_count`` and does not grow with the number of
     records processed, at the cost of a tunable false-positive rate: a
     record may occasionally be counted as a duplicate when it is not,
-    but a true duplicate is never missed. The hash fed to the Bloom
-    filter is computed via :func:`coola.hashing.hash_object` with
-    ``ignore_unhashable=True``, so metadata containing values with no
-    registered hasher is tolerated rather than raising.
+    but a true duplicate is never missed. The Bloom filter is fed the
+    hash of :func:`persista.record.equality.hash_metadata`, so a record
+    is a duplicate if its metadata are equal, as defined by
+    :mod:`persista.record.equality`, to the metadata of an earlier one.
+    Use ``find_duplicate_record_ids`` for an exact result.
 
     Args:
         records: A list, generator, or other iterable of
@@ -43,19 +45,26 @@ def count_approx_duplicate_records(
             by this call.
         expected_record_count: Rough estimate of the total number of
             records (or, more precisely, unique metadata values) that
-            will be processed. Used to size the Bloom filter for the
+            will be processed. Must be positive. Used to size the Bloom filter for the
             requested ``fp_rate``. Safe to overestimate; underestimating
             causes the effective false-positive rate to rise above
             ``fp_rate`` as more records are processed than planned for.
         fp_rate: Target false-positive probability, once approximately
             ``expected_record_count`` unique metadata values have been
-            added.
+            added. Must be in ``(0, 1)``.
 
     Returns:
         The approximate number of records whose ``metadata`` duplicates
-        an earlier record's, as reported by the Bloom filter. Never
-        undercounts by much; may slightly overcount due to the
-        filter's false-positive rate.
+        an earlier record's, as reported by the Bloom filter. It never
+        undercounts, and may overcount because of the false positives of
+        the filter.
+
+    Raises:
+        TypeError: If the metadata of a record contains an object that
+            cannot be compared (see :mod:`persista.record.equality`).
+        ValueError: If ``expected_record_count`` is not positive, if
+            ``fp_rate`` is not in ``(0, 1)``, or if the metadata of a record
+            contains ``NaN`` or a value that contains itself.
 
     Example:
         ```pycon
@@ -76,10 +85,14 @@ def count_approx_duplicate_records(
         map to group duplicate ids, with memory usage that grows with
         corpus size but produces exact (non-approximate) results.
     """
+    if expected_record_count <= 0:
+        msg = f"'expected_record_count' must be positive, got {expected_record_count}"
+        raise ValueError(msg)
+    # BloomFilter checks fp_rate.
     bloom = BloomFilter(expected_items=expected_record_count, fp_rate=fp_rate)
     duplicate_count = 0
     for record in records:
-        metadata_hash = hash_object(dict(record.metadata), ignore_unhashable=True)
+        metadata_hash = hash_metadata(record.metadata)
         if bloom.add_and_check(metadata_hash.encode("ascii")):
             duplicate_count += 1
     return duplicate_count

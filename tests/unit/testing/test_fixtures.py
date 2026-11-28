@@ -13,6 +13,7 @@ from persista.utils.imports import (
     is_psycopg_available,
     is_redis_available,
     is_requests_available,
+    is_rich_available,
     is_urllib3_available,
 )
 
@@ -30,6 +31,7 @@ PAIRS = {
     "psycopg": is_psycopg_available,
     "redis": is_redis_available,
     "requests": is_requests_available,
+    "rich": is_rich_available,
     "urllib3": is_urllib3_available,
 }
 

@@ -7,17 +7,19 @@ __all__ = ["sort_by_metadata"]
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from persista.record.record import Record
 
 
 def sort_by_metadata(
-    records: list[Record],
+    records: Iterable[Record],
     metadata_key: str,
     *,
     keep_missing: bool = True,
     reverse: bool = False,
 ) -> list[Record]:
-    """Sort a list of records by the value of a metadata key.
+    """Sort records by the value of a metadata key.
 
     Records are sorted in ascending order by the value of
     ``metadata_key`` by default, or descending order if
@@ -26,7 +28,8 @@ def sort_by_metadata(
     or removed entirely if ``keep_missing=False``.
 
     Args:
-        records: The list of :class:`~persista.record.Record` instances to sort.
+        records: The :class:`~persista.record.Record` instances to sort.
+            Any iterable is accepted; it is consumed once.
         metadata_key: The metadata key to sort by.
         keep_missing: If ``True`` (the default), records without
             ``metadata_key`` in their metadata are kept and placed at
@@ -38,7 +41,7 @@ def sort_by_metadata(
 
     Returns:
         A new sorted list of :class:`~persista.record.Record` instances.  The
-        original list is not modified.
+        input is not modified.
 
     Raises:
         TypeError: If the metadata values for ``metadata_key`` are not
@@ -64,10 +67,9 @@ def sort_by_metadata(
 
         ```
     """
-    present = [r for r in records if metadata_key in r.metadata]
+    present: list[Record] = []
+    missing: list[Record] = []
+    for record in records:
+        (present if metadata_key in record.metadata else missing).append(record)
     present.sort(key=lambda r: r.metadata[metadata_key], reverse=reverse)
-    if not keep_missing:
-        return present
-
-    missing = [r for r in records if metadata_key not in r.metadata]
-    return present + missing
+    return present + missing if keep_missing else present

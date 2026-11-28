@@ -6,6 +6,8 @@ __all__ = ["diff_records"]
 
 from typing import TYPE_CHECKING, Any
 
+from persista.record.equality import hash_metadata
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -20,12 +22,15 @@ def diff_records(before: Iterable[Record], after: Iterable[Record]) -> dict[str,
     changed: which records were newly added, which disappeared, and
     which kept the same id but had their metadata altered.
 
-    Both ``before`` and ``after`` are consumed one at a time and fully
-    materialized internally (as ``id -> metadata`` maps), so this
-    works with generators or other iterables, but memory usage is
+    Both ``before`` and ``after`` are consumed one at a time, and one
+    hash of the metadata is kept per id (see
+    :func:`persista.record.equality.hash_metadata`), so this works with
+    generators or other iterables, but memory usage is
     O(number of records in each snapshot) - unlike the single-pass
     analyses elsewhere in this package, a diff inherently needs both
-    full snapshots available for comparison.
+    full snapshots available for comparison. If an id appears several
+    times in a snapshot, its last record is compared (see
+    ``find_id_collisions``).
 
     Args:
         before: A list, generator, or other iterable of
@@ -43,10 +48,18 @@ def diff_records(before: Iterable[Record], after: Iterable[Record]) -> dict[str,
         - ``removed``: ids present in ``before`` but not ``after``, in
           the order encountered in ``before``.
         - ``changed``: ids present in both snapshots whose metadata
-          differs between them, in the order encountered in ``after``.
+          differs between them, as defined by
+          :mod:`persista.record.equality`, in the order encountered in
+          ``after``.
 
-        Ids present in both snapshots with identical metadata are
+        Ids present in both snapshots with equal metadata are
         omitted entirely.
+
+    Raises:
+        TypeError: If the metadata of a record contains an object that
+            cannot be compared (see :mod:`persista.record.equality`).
+        ValueError: If the metadata of a record contains ``NaN``, or a
+            value that contains itself.
 
     Example:
         ```pycon
@@ -65,8 +78,8 @@ def diff_records(before: Iterable[Record], after: Iterable[Record]) -> dict[str,
 
         ```
     """
-    before_by_id = {record.id: record.metadata for record in before}
-    after_by_id = {record.id: record.metadata for record in after}
+    before_by_id = {record.id: hash_metadata(record.metadata) for record in before}
+    after_by_id = {record.id: hash_metadata(record.metadata) for record in after}
 
     added = [rid for rid in after_by_id if rid not in before_by_id]
     removed = [rid for rid in before_by_id if rid not in after_by_id]

@@ -1,87 +1,115 @@
 from __future__ import annotations
 
+import math
+
+import pytest
+
 from persista.record import Record
 from persista.record.analysis import compute_value_frequency
 
-########################################
+
+def records_of(*values: object) -> list[Record]:
+    return [Record(id=str(i), metadata={"x": value}) for i, value in enumerate(values)]
+
+
+#############################################
 #     Tests for compute_value_frequency     #
-########################################
+#############################################
 
 
-def test_compute_value_frequency_top_values_most_common_first() -> None:
-    records = [
-        Record(id="a", metadata={"lang": "en"}),
-        Record(id="b", metadata={"lang": "en"}),
-        Record(id="c", metadata={"lang": "fr"}),
-    ]
-    result = compute_value_frequency(records)
-    assert result["lang"]["top_values"] == [("en", 2), ("fr", 1)]
-
-
-def test_compute_value_frequency_top_k_limits_results() -> None:
-    records = [
-        Record(id="a", metadata={"lang": "en"}),
-        Record(id="b", metadata={"lang": "fr"}),
-        Record(id="c", metadata={"lang": "de"}),
-    ]
-    result = compute_value_frequency(records, top_k=2)
-    assert len(result["lang"]["top_values"]) == 2
-
-
-def test_compute_value_frequency_distinct_count_estimate() -> None:
-    records = [
-        Record(id="a", metadata={"lang": "en"}),
-        Record(id="b", metadata={"lang": "fr"}),
-        Record(id="c", metadata={"lang": "en"}),
-    ]
-    result = compute_value_frequency(records)
-    assert result["lang"]["distinct_count_estimate"] == 2
-
-
-def test_compute_value_frequency_multiple_keys() -> None:
+def test_compute_value_frequency() -> None:
     records = [
         Record(id="a", metadata={"lang": "en", "page": 1}),
         Record(id="b", metadata={"lang": "fr"}),
+        Record(id="c", metadata={"lang": "en"}),
     ]
-    result = compute_value_frequency(records)
-    assert set(result.keys()) == {"lang", "page"}
+    assert compute_value_frequency(records) == {
+        "lang": {"top_values": [("en", 2), ("fr", 1)], "distinct_count": 2},
+        "page": {"top_values": [(1, 1)], "distinct_count": 1},
+    }
 
 
 def test_compute_value_frequency_empty_input() -> None:
     assert compute_value_frequency([]) == {}
 
 
-def test_compute_value_frequency_unhashable_value() -> None:
-    records = [
-        Record(id="a", metadata={"tags": ["x", "y"]}),
-        Record(id="b", metadata={"tags": ["x", "y"]}),
-    ]
-    result = compute_value_frequency(records)
-    assert result["tags"]["top_values"] == [("['x', 'y']", 2)]
+def test_compute_value_frequency_empty_metadata() -> None:
+    assert compute_value_frequency([Record(id="a")]) == {}
 
 
-def test_compute_value_frequency_cardinality_estimate_beyond_small_range_correction() -> None:
-    # Enough distinct values relative to a small hll_precision (m=16) that
-    # every register gets touched, so the HyperLogLog "raw" estimate is
-    # used directly instead of falling back to the linear-counting
-    # small-range correction.
-    records = [Record(id=str(i), metadata={"uid": i}) for i in range(2000)]
-    result = compute_value_frequency(records, hll_precision=4)
-    assert result["uid"]["distinct_count_estimate"] > 0
+def test_compute_value_frequency_top_k_limits_values_not_count() -> None:
+    assert compute_value_frequency(records_of("en", "fr", "de"), top_k=2) == {
+        "x": {"top_values": [("en", 1), ("fr", 1)], "distinct_count": 3}
+    }
+
+
+def test_compute_value_frequency_top_k_zero() -> None:
+    assert compute_value_frequency(records_of("en"), top_k=0) == {
+        "x": {"top_values": [], "distinct_count": 1}
+    }
+
+
+def test_compute_value_frequency_negative_top_k() -> None:
+    with pytest.raises(ValueError, match=r"'top_k' must be non-negative, got -1"):
+        compute_value_frequency(records_of("en"), top_k=-1)
+
+
+def test_compute_value_frequency_default_top_k() -> None:
+    result = compute_value_frequency(records_of(*range(10)))
+    assert result["x"]["top_values"] == [(0, 1), (1, 1), (2, 1), (3, 1), (4, 1)]
+
+
+def test_compute_value_frequency_types_are_kept_apart() -> None:
+    assert compute_value_frequency(records_of(1, "1", True)) == {
+        "x": {"top_values": [(1, 1), ("1", 1), (True, 1)], "distinct_count": 3}
+    }
+
+
+def test_compute_value_frequency_equal_numbers_counted_together() -> None:
+    result = compute_value_frequency(records_of(1.0, 1))
+    assert repr(result) == "{'x': {'top_values': [(1.0, 2)], 'distinct_count': 1}}"
+
+
+def test_compute_value_frequency_unhashable_values() -> None:
+    records = records_of(["x", "y"], ["x", "y"], "['x', 'y']", ("x", "y"))
+    assert compute_value_frequency(records) == {
+        "x": {
+            "top_values": [(["x", "y"], 2), ("['x', 'y']", 1), (("x", "y"), 1)],
+            "distinct_count": 3,
+        }
+    }
+
+
+def test_compute_value_frequency_distinct_count_is_exact() -> None:
+    records = records_of(*range(500))
+    assert compute_value_frequency(records)["x"]["distinct_count"] == 500
+
+
+@pytest.mark.parametrize(
+    ("value", "error", "message"),
+    [
+        pytest.param(object(), TypeError, r"Cannot encode an object of type", id="custom"),
+        pytest.param(
+            bytearray(b"a"), TypeError, r"Cannot encode an object of type", id="bytearray"
+        ),
+        pytest.param(math.nan, ValueError, r"Cannot encode NaN by value", id="nan"),
+    ],
+)
+def test_compute_value_frequency_value_that_cannot_be_compared(
+    value: object, error: type[Exception], message: str
+) -> None:
+    with pytest.raises(error, match=message):
+        compute_value_frequency(records_of(value))
 
 
 def test_compute_value_frequency_generator_input() -> None:
-    def gen() -> object:
-        yield Record(id="a", metadata={"lang": "en"})
-        yield Record(id="b", metadata={"lang": "en"})
-
-    result = compute_value_frequency(gen())
-    assert result["lang"]["top_values"] == [("en", 2)]
+    records = (record for record in records_of("en", "en"))
+    assert compute_value_frequency(records)["x"]["top_values"] == [("en", 2)]
 
 
-def test_compute_value_frequency_cardinality_approximately_correct_for_larger_corpus() -> None:
-    records = [Record(id=str(i), metadata={"uid": i}) for i in range(500)]
-    result = compute_value_frequency(records)
-    estimate = result["uid"]["distinct_count_estimate"]
-    # HyperLogLog is approximate; allow a generous tolerance.
-    assert 500 * 0.9 <= estimate <= 500 * 1.1
+def test_compute_value_frequency_does_not_modify_input() -> None:
+    records = records_of([1.0], [1])
+    compute_value_frequency(records)
+    assert repr(records) == (
+        "[Record(id='0', metadata={'x': [1.0]}), Record(id='1', metadata={'x': [1]})]"
+    )
